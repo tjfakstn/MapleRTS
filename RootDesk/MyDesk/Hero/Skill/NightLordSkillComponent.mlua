@@ -1,0 +1,85 @@
+@Component
+script NightLordSkillComponent extends Component
+
+	method table GetThrowBlastingState()
+		    local state = self._T.throwBlasting
+		    if state == nil then return nil end
+		    if _UtilLogic.ElapsedSeconds >= (state.expiresAt or 0) then
+		        self._T.throwBlasting = nil
+		        return nil
+		    end
+		    return state
+	end
+
+	method boolean IsEnhancedSkill(string skillKey, table skill)
+		    -- 나이트로드가 선택된 상태에서 Q/W/R(또는 throwBlastingEnhanced 표시가 있는 스킬)이 강화 대상인지 판단한다.
+		    if skill == nil then return false end
+		    if skill.throwBlastingEnhanced == true then return true end
+		    return skillKey == "Q" or skillKey == "W" or skillKey == "R"
+	end
+
+	method number GetVisualScaleMultiplier(string skillKey, table skill)
+		    local state = self:GetThrowBlastingState()
+		    if state == nil then return 1 end
+		    if not self:IsEnhancedSkill(skillKey, skill) then return 1 end
+		    return state.rangeMultiplier or 1
+	end
+
+	@ExecSpace("ServerOnly")
+	method number ResolveCooldown(string skillKey, number baseCooldown)
+		    -- 합본에서는 버프 중 Q/W/R 무쿨. 시전 중복은 별도의 서버 시전 잠금이 차단한다.
+		    local state = self:GetThrowBlastingState()
+		    if state ~= nil and self.Entity:GetComponent("script.HeroUnitSkill") ~= nil
+		        and (skillKey == "Q" or skillKey == "W" or skillKey == "R") then return 0 end
+		    if state ~= nil and skillKey == "R" then
+		        return state.reducedCooldown or 1
+		    end
+		    return baseCooldown
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ActivateThrowBlasting(table skill)
+		    self._T.throwBlasting = {
+		        expiresAt = _UtilLogic.ElapsedSeconds + (skill.throwBlastingDuration or 15),
+		        rangeMultiplier = skill.throwBlastingRangeMultiplier or 1.2,
+		        bonusDamageMultiplier = skill.throwBlastingBonusDamageMultiplier or 0.5,
+		        explosionRadius = skill.throwBlastingExplosionRadius or 0.9,
+		        reducedCooldown = skill.throwBlastingReducedCooldown or 1,
+		    }
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TryApplyExplosion(string skillKey, table sourceSkill, table hitComponents)
+		    -- 강화 대상 스킬이 맞았고 버프가 살아 있을 때만 폭발 추가타를 넣는다.
+		    if self:IsEnhancedSkill(skillKey, sourceSkill) and self:GetThrowBlastingState() ~= nil then
+		        self:ApplyThrowBlastingExplosion(skillKey, sourceSkill, hitComponents)
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplyThrowBlastingExplosion(string skillKey, table sourceSkill, table hitComponents)
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local buffState = self:GetThrowBlastingState()
+		    if buffState == nil or hitComponents == nil or #hitComponents <= 0 then return end
+		
+		    local explosionDamage = math.max(1, math.floor((sourceSkill.damage or 0) * (buffState.bonusDamageMultiplier or 0.5)))
+		    local explosionRadius = buffState.explosionRadius or 0.9
+		
+		    for _, hitComp in ipairs(hitComponents) do
+		        local defender = hitComp.Entity
+		        if isvalid(defender) and defender.TransformComponent ~= nil then
+		            local pos3 = defender.TransformComponent.WorldPosition
+		            local blastPos = Vector2(pos3.x, pos3.y)
+		            local blastShape = CircleShape(blastPos, explosionRadius)
+		            core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		            local attackInfo = "T:" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(explosionDamage)
+		            core:BeginAttackTargetFilter(attackInfo, 1)
+		            core:PerformAttack(blastShape, attackInfo)
+		            core:EndAttackTargetFilter(attackInfo)
+		        end
+		    end
+		
+		    core:EmitThrowBlastBatchSync("T", hitComponents, #hitComponents)
+	end
+
+end

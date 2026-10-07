@@ -1,0 +1,463 @@
+@Component
+script UnitMoveComponent extends Component
+
+	property number MoveSpeed = 0
+
+	property boolean IsCheck = false
+
+	property Vector2 targetPos = Vector2(0,0)
+
+	@Sync
+	property boolean IsMove = false
+
+	property Vector2 CurrentPos = Vector2(0,0)
+
+	property number SeparationRadius = 0.7
+
+	property number SeparationStrength = 2.0
+
+	property boolean SpriteFacesLeft = true
+
+	property number FacingDeadzone = 0.05
+
+	@DisplayName("좌우 방향 전환 최소 간격(초)")
+	property number FacingFlipCooldown = 0.25
+
+	@DisplayName("목적지 근처에서 밀리면 도착 처리하는 거리")
+	property number ArriveSlack = 0.45
+
+	@HideFromInspector
+	property number _facing = 0
+
+	property number AvoidRadius = 0.1
+
+	property boolean IgnoreStructures = false
+
+	method boolean IsFlying()
+		local info = self.Entity.Unit_Info
+		return info ~= nil and info.IsAerial
+	end
+
+	method Vector2 ClampFlightPosition(Vector2 point)
+		-- 기존 경계 타일의 최외곽 줄을 유지한다. 내부 벽/건물만 공중 이동에서 무시한다.
+		local blocker = self:GetWallBlocker()
+		if blocker == nil then return self.CurrentPos end
+		local bounds = blocker._T.bounds
+		local tm = blocker.WallTileMap
+		if bounds == nil or not isvalid(tm) then return self.CurrentPos end
+		local a = blocker:CellCenter(bounds.minX + 1, bounds.minY + 1)
+		local b = blocker:CellCenter(bounds.maxX - 1, bounds.maxY - 1)
+		local half = tm.GridSize * 0.5
+		local radius = math.max(self.AvoidRadius, blocker.CheckRadius) + 0.001
+		local minX = math.min(a.x, b.x) - half.x + radius
+		local maxX = math.max(a.x, b.x) + half.x - radius
+		local minY = math.min(a.y, b.y) - half.y + radius
+		local maxY = math.max(a.y, b.y) + half.y - radius
+		if minX > maxX or minY > maxY then return self.CurrentPos end
+		return Vector2(math.min(math.max(point.x, minX), maxX), math.min(math.max(point.y, minY), maxY))
+	end
+
+	method WallTileBlocker GetWallBlocker()
+		-- 현재 맵의 경계 타일 컴포넌트(WallTileBlocker)를 찾는다. 맵이 바뀔 때만 다시 찾도록 캐시한다(없는 맵이면 nil).
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return nil end
+		if self._T.wallMap ~= map or not isvalid(self._T.wallBlocker) then
+			self._T.wallMap = map
+			local wall = map:GetChildByName("Wall")
+			self._T.wallBlocker = nil
+			if isvalid(wall) then
+				self._T.wallBlocker = wall:GetComponent("script.WallTileBlocker")
+			end
+			if not isvalid(self._T.wallBlocker) then
+				self._T.wallBlocker = map:GetFirstChildComponentByTypeName("script.WallTileBlocker", true)
+			end
+			if isvalid(self._T.wallBlocker) and not self._T.blockerFoundLogged then
+				self._T.blockerFoundLogged = true
+			end
+		end
+		local blocker = self._T.wallBlocker
+		if blocker ~= nil and isvalid(blocker) then return blocker end
+		return nil
+	end
+
+	method Vector2 AvoidWalls(Vector2 nextPos)
+		if self:IsFlying() then return self:ClampFlightPosition(nextPos) end
+		-- 이동 한 걸음(nextPos)이 경계 타일(벽)에 들어가면 벽을 따라 미끄러지거나 제자리에 머물게 보정한다.
+		local blocker = self:GetWallBlocker()
+		if blocker == nil then
+			if self.Entity.CurrentMap.Name == "map02" then return self.CurrentPos end
+			return nextPos
+		end
+		return blocker:ResolveStep(self.CurrentPos, nextPos)
+	end
+
+	method Vector2 AvoidStructures(Vector2 nextPos)
+		-- 이동 한 걸음(nextPos)이 건물과 겹치면 미끄러지거나 돌아가도록 보정한 위치를 돌려준다.
+		-- 건물 보정 뒤 경계 타일(벽) 보정을 한 번 더 적용한다 — 벽은 IgnoreStructures 와 무관하게 항상 막는다.
+		return self:AvoidWalls(self:AvoidStructuresOnly(nextPos))
+	end
+
+	method Vector2 AvoidStructuresOnly(Vector2 nextPos)
+		-- 건물 박스만 고려한 한 걸음 보정(_StructureObstacleLogic).
+		if self.IgnoreStructures or self:IsFlying() then return nextPos end
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return nextPos end
+		
+		-- 공격 대상 건물은 피하지 않는다(사거리까지 다가가야 하므로).
+		local info = self.Entity.Unit_Info
+		local exempt = nil
+		if info ~= nil then exempt = info.target end
+		
+		-- 건설 위치로 가는 일꾼은 반경 0으로 — 배치 검증이 이미 "건물과 안 겹침"을 보장하므로, 건물 가장자리 바로
+		-- 옆 부지에서도 도착 판정(BuildGhostComponent, 0.15)에 닿을 수 있어야 한다.
+		local r = self.AvoidRadius
+		---@type WorkerBuildState
+		local state = self.Entity:GetComponent("script.WorkerBuildState")
+		if state ~= nil and state.BuildOrdered then r = 0 end
+		
+		return _StructureObstacleLogic:ResolveStep(map, self.CurrentPos, nextPos, self.targetPos, r, exempt)
+	end
+
+	method Vector2 ComputeSeparation(Vector2 myPos)
+		-- 같은 그룹(MyUnits)의 다른 "아군" 유닛들로부터 밀려나는 벡터를 계산해 겹침을 방지한다.
+		-- ⚠ 적(다른 PlayerID)과는 밀어내지 않는다 — 겹침 방지의 목적은 "내 편끼리 뭉치지 않게"이지
+		-- 교전을 막으려는 게 아니다. 이 그룹(MyUnits)에는 모든 진영의 유닛이 함께 들어있어, 적까지
+		-- 밀어내면 사거리(특히 근접, 0.4~0.55)가 SeparationRadius(기본 0.7)보다 작은 유닛은 아무리
+		-- 접근을 시도해도 물리적으로 사거리 안에 들어갈 수 없어 근접 전투가 성립하지 않는 문제가 있었다.
+		local push = Vector2(0, 0)
+		local parent = self.Entity.Parent
+		if not isvalid(parent) then
+			return push
+		end
+		
+		local myInfo = self.Entity.Unit_Info
+		local myOwner = (myInfo ~= nil) and myInfo.PlayerID or ""
+		
+		for _, other in pairs(parent.Children) do
+			if other == self.Entity then
+				continue
+			end
+			if not other.UnitMoveComponent then
+				continue
+			end
+		
+			local otherInfo = other.Unit_Info
+			if otherInfo == nil or otherInfo.IsDead then continue end
+			if myInfo ~= nil and myInfo.IsAerial ~= otherInfo.IsAerial then continue end
+			local otherOwner = (otherInfo ~= nil) and otherInfo.PlayerID or ""
+			if myOwner ~= otherOwner then
+				continue
+			end
+		
+			local op = other.TransformComponent.WorldPosition
+			local diff = myPos - Vector2(op.x, op.y)
+			local d = diff:Magnitude()
+			if d < self.SeparationRadius then
+				if d > 0.0001 then
+					push = push + diff:Normalize() * (self.SeparationRadius - d)
+				else
+					--완전히 겹친 경우: 임의 방향으로 밀어 스택을 푼다--
+					push = push + Vector2(_UtilLogic:RandomDouble() - 0.5, _UtilLogic:RandomDouble() - 0.5):Normalize() * self.SeparationRadius
+				end
+			end
+		end
+		
+		return push * self.SeparationStrength
+	end
+
+	method void Check()
+		self.IsCheck = true
+		self.targetPos = Vector2.zero
+	end
+
+	method boolean IsBuildingStructure()
+		-- 일꾼이 건물을 짓는 중이라 이동이 막혀야 하면(WorkerBuildState.IsBuildLocked) true.
+		-- 건설을 시작한 뒤에도 자유롭게 움직이는 일꾼(FreeWhileBuilding, 시그너스)은 false.
+		local buildState = self.Entity:GetComponent("script.WorkerBuildState")
+		if buildState == nil then return false end
+		---@type WorkerBuildState
+		local state = buildState
+		return state:IsBuildLocked()
+	end
+
+	method void FindTarget(Vector2 MovePoint)
+		local info = self.Entity.Unit_Info
+		if info ~= nil and info.IsDead then return end
+		if self:IsBuildingStructure() then return end
+		--Drag안에 들어오면 해당 Unit이 선택되었는지 확인--
+		--IsMove를 이용해서 다른 unit을 Drag해도 움직임 명령을 완전히 수행하도록 함--
+		--targetPos는 Player가 명령한 위치를 의미--
+		--목표가 경계 타일(벽) 안이면 가장 가까운 빈 칸으로 옮긴다(벽 앞에서 계속 걷지 않도록)--
+		local blocker = self:GetWallBlocker()
+		if self:IsFlying() then
+			MovePoint = self:ClampFlightPosition(MovePoint)
+		elseif blocker ~= nil then
+			local pushed = blocker:PushOut(MovePoint)
+			if pushed ~= MovePoint then
+			end
+			MovePoint = pushed
+		end
+		self.targetPos = MovePoint
+		self.IsMove = true
+		self._T.replans = 0
+		self:PlanPath()
+	end
+
+	method void PlanPath()
+		-- 현재 위치 → targetPos 사이에 벽이 있으면 우회 경유지 목록을 만든다(WallTileBlocker.FindPath).
+		-- 곧장 갈 수 있거나 경로를 못 찾으면 경유지 없이 targetPos로 직진한다(기존 벽 미끄러짐/정지 동작).
+		self._T.path = nil
+		self._T.pathIndex = 1
+		if self:IsFlying() then return end
+		local blocker = self:GetWallBlocker()
+		if blocker == nil then return end
+		local wp = self.Entity.TransformComponent.WorldPosition
+		local path = blocker:FindPath(Vector2(wp.x, wp.y), self.targetPos)
+		if path ~= nil and #path > 1 then
+			self._T.path = path
+		end
+	end
+
+	method Vector2 GetMoveGoal()
+		-- 지금 향해야 할 지점: 우회 경로가 있으면 현재 경유지, 없으면 최종 목표(targetPos).
+		local path = self._T.path
+		if path ~= nil then
+			local idx = self._T.pathIndex or 1
+			if idx <= #path then return path[idx] end
+		end
+		return self.targetPos
+	end
+
+	method boolean IsFinalGoal()
+		-- 현재 향하는 지점이 마지막 목표인지(경유지가 더 남아 있지 않은지).
+		local path = self._T.path
+		if path == nil then return true end
+		return (self._T.pathIndex or 1) >= #path
+	end
+
+	method void Stop()
+		self._T.path = nil
+		self.targetPos = self.CurrentPos
+		self.Entity.MovementComponent:Stop()
+		self.IsMove = false
+		return
+	end
+
+	method boolean IsOwnedBy(string userId)
+		-- 이 유닛의 소유자(Unit_Info.PlayerID)가 userId인지 확인한다(클라이언트 명령 RPC의 권한 검사용).
+		local info = self.Entity.Unit_Info
+		return info ~= nil and not info.IsDead and info.PlayerID ~= "" and info.PlayerID == userId
+	end
+
+	method void ClearCombatOrders()
+		-- 일반 이동/정지 명령은 어택땅(_T.amDest)과 위치 고수(_T.hold)를 끝낸다(서버 Weapon.AutoAcquire가 보는 값).
+		-- 힐러의 치유 대상 지정(PriorityHealTarget)도 푼다(2026-10-07 — 예전엔 지정하면 다른 명령으로 취소가 안 됐다).
+		local info = self.Entity.Unit_Info
+		if info ~= nil then
+			info._T.amDest = nil
+			info._T.hold = false
+			info.PriorityHealTarget = nil
+		end
+	end
+
+	@ExecSpace("Server")
+	method void RequestMove(Vector2 point)
+		-- 소유 클라이언트(Mouse_Command)의 이동 명령. 이동은 서버에서만 계산해야 위치(Transform)가
+		-- 모든 클라이언트에 동기화된다 — 예전엔 클라이언트 로컬에서만 움직여 다른 플레이어에겐 유닛이
+		-- 스폰 위치에 멈춰 있거나 보이지 않았다.
+		if not self:IsOwnedBy(senderUserId) then
+			return
+		end
+		if _BuildModeLogic:IsWorkerBusy(self.Entity) then return end
+		local sinfo = self.Entity.Unit_Info
+		if sinfo ~= nil and sinfo._T.siege ~= nil then
+			-- 시즈모드(UnitAbilityLogic) 중에는 움직이지 않는다 — 다시 O를 눌러 풀어야 한다.
+			_UIToast_:ShowMessage("시즈모드 중에는 이동할 수 없습니다", senderUserId)
+			return
+		end
+		_BuildModeLogic:CancelBuildOrder(self.Entity)
+		self:ClearCombatOrders()
+		local adapter = self.Entity:GetComponent("script.HeroUnitSkill")
+		if adapter ~= nil and adapter:QueueMove(point) then return end
+		local gather = self.Entity:GetComponent("script.WorkerGatherComponent")
+		if gather ~= nil then gather:CancelByCommand() end
+		local info = self.Entity.Unit_Info
+		if info ~= nil then
+			info:Stop()
+			info.target = nil
+		end
+		self:FindTarget(point)
+	end
+
+	@ExecSpace("Server")
+	method void RequestStop()
+		-- 소유 클라이언트(Keyboard_Command S키)의 정지 명령. 이동 정지 + 전투(공격/추격) 취소를 서버에서 처리한다.
+		if not self:IsOwnedBy(senderUserId) then return end
+		self:ClearCombatOrders()
+		local adapter = self.Entity:GetComponent("script.HeroUnitSkill")
+		if adapter ~= nil then adapter:ClearQueuedMove() end
+		if _BuildModeLogic:IsWorkerBusy(self.Entity) then return end
+		_BuildModeLogic:CancelBuildOrder(self.Entity)
+		local gather = self.Entity:GetComponent("script.WorkerGatherComponent")
+		if gather ~= nil then gather:CancelByCommand() end
+		self:Stop()
+		local info = self.Entity.Unit_Info
+		if info ~= nil then info:Stop() end
+	end
+
+	method void UpdateFacing(number dx)
+		-- 이동하는 좌우 방향으로 스프라이트가 바라보도록 FlipX 를 조정한다.
+		if math.abs(dx) < self.FacingDeadzone then
+			return
+		end
+		
+		local dir = dx > 0 and 1 or -1
+		if dir == self._facing then
+			return
+		end
+		-- 2026-10-07 깜빡임 피드백: 뭉친 유닛이 서로 밀며 좌우로 떨면 매 프레임 FlipX가 뒤집혀 깜빡여 보였다.
+		-- 방향 전환 사이에 최소 간격을 둔다(처음 방향을 정할 때는 바로).
+		local now = _UtilLogic.ElapsedSeconds
+		if self._facing ~= 0 and now - (self._T.lastFlipAt or -10) < self.FacingFlipCooldown then
+			return
+		end
+		self._T.lastFlipAt = now
+		self._facing = dir
+		
+		local renderer = self.Entity.SpriteRendererComponent
+		if not isvalid(renderer) then
+			return
+		end
+		-- 기본이 왼쪽을 볼 때: 오른쪽(dir>0)으로 가면 FlipX = true
+		renderer.FlipX = (dir > 0) == self.SpriteFacesLeft
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SetWorldPos(number x, number y)
+		-- 넉백/스킬 등 다른 호출자도 지상 유닛을 빈 타일 너머로 옮길 수 없게 한다.
+		if not self:IsFlying() then
+			local blocker = self:GetWallBlocker()
+			if blocker == nil and self.Entity.CurrentMap.Name == "map02" then
+				if not self._T.blockerMissingLogged then
+					self._T.blockerMissingLogged = true
+				end
+				return
+			end
+			if blocker ~= nil then
+				local wp = self.Entity.TransformComponent.WorldPosition
+				local safe = blocker:ResolveStep(Vector2(wp.x, wp.y), Vector2(x, y))
+				x = safe.x
+				y = safe.y
+			end
+		end
+		-- 유닛 위치를 월드 좌표로 옮긴다. 유닛에는 KinematicbodyComponent(RectTile Body)가 있어 서버에서
+		-- TransformComponent.WorldPosition을 직접 쓰면 Body가 다음 프레임에 덮어써 움직이지 않는다(실측 확인) —
+		-- Body가 있으면 Body로 옮긴다. 단, SetWorldPosition은 서버 값은 맞지만 클라이언트로 동기화될 때 부모(MyUnits)
+		-- 기준 로컬 좌표로 해석돼 부모 위치만큼 어긋나 보였다(실측 확인) — 부모 기준 로컬 좌표로 변환해 SetPosition을 쓴다.
+		local kb = self.Entity.KinematicbodyComponent
+		if isvalid(kb) and kb.Enable then
+			local px = 0
+			local py = 0
+			local parent = self.Entity.Parent
+			if isvalid(parent) and isvalid(parent.TransformComponent) then
+				local pp = parent.TransformComponent.WorldPosition
+				px = pp.x
+				py = pp.y
+			end
+			kb:SetPosition(Vector2(x - px, y - py))
+		else
+			local transform = self.Entity.TransformComponent
+			transform.WorldPosition = Vector3(x, y, transform.WorldPosition.z)
+		end
+		self.CurrentPos = Vector2(x, y)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnUpdate(number delta)
+		--Move: 서버에서만 위치를 갱신한다(TransformComponent.Position은 @Sync라 모든 클라이언트에 전파됨)--
+		if _CombatTeamLogic:IsMovementLocked(self.Entity) then return end
+		local transform = self.Entity.TransformComponent
+		self.CurrentPos = Vector2(transform.WorldPosition.x, transform.WorldPosition.y)
+		
+		--죽은 유닛은 움직이지 않는다--
+		local myInfo = self.Entity.Unit_Info
+		if myInfo ~= nil and myInfo.IsDead then
+			if self.IsMove then self.IsMove = false end
+			return
+		end
+		
+		--건설 중에는 이동/밀림 모두 막고 정지 상태로 고정한다--
+		if self:IsBuildingStructure() then
+			self.IsMove = false
+			self.targetPos = self.CurrentPos
+			return
+		end
+		
+		--0. 겹침 방지: 이동 여부와 무관하게 근처 유닛에서 밀어낸다--
+		local sep = self:ComputeSeparation(self.CurrentPos)
+		if sep:Magnitude() > 0.0001 then
+			local sepStep = sep * delta
+			local sepPos = self:AvoidStructures(self.CurrentPos + sepStep)
+			self:SetWorldPos(sepPos.x, sepPos.y)
+			self.CurrentPos = sepPos
+			-- 목적지 바로 근처에서 다른 아군에게 밀리고 있으면 도착한 것으로 친다(스타처럼). 예전엔 목적지 자리를 다른 유닛이
+			-- 차지하고 있으면 밀려났다 다시 걸어가기를 끝없이 반복해, 제자리에서 좌우로 떨며 깜빡이고 이동 모션이 계속 재생됐다.
+			if self.IsMove and self:IsFinalGoal() and Vector2.Distance(self:GetMoveGoal(), self.CurrentPos) <= self.ArriveSlack then
+				self._T.path = nil
+				self.IsMove = false
+				self.targetPos = self.CurrentPos
+				return
+			end
+		end
+		
+		--자신이 선택되었는가 || 계속 움직이고 있는가?--
+		if self.IsCheck or self.IsMove then
+			--3. Stop이 아니라면 이번에 향할 지점(우회 경유지 또는 최종 목표)까지 거리를 계산--
+			--   경유지에 도착하면 다음 경유지로 넘어가고, 최종 목표에 도착하면 이동을 끝낸다--
+			local goal = self:GetMoveGoal()
+			local distance = Vector2.Distance(goal, self.CurrentPos)
+			self.MoveSpeed = self.Entity.Unit_Info.MoveSpeed
+			local moveDistance = self.MoveSpeed * delta
+		
+			if distance <= 0.1 or moveDistance >= distance then
+				local safeGoal = self:AvoidStructures(goal)
+				self:SetWorldPos(safeGoal.x, safeGoal.y)
+				if Vector2.Distance(safeGoal, goal) > 0.0001 then
+					self:Stop()
+					return
+				end
+				if self:IsFinalGoal() then
+					self._T.path = nil
+					self.IsMove = false
+				else
+					self._T.pathIndex = (self._T.pathIndex or 1) + 1
+				end
+				return
+			end
+		
+			--이동 중이면 이동 방향(좌우)으로 스프라이트가 바라보도록 한다--
+			if self.IsMove then
+				self:UpdateFacing(goal.x - self.CurrentPos.x)
+			end
+		
+			--4. 방향과 움직일 위치를 계산해 WorldPos변경 (건물 → 벽 순으로 한 걸음 보정)--
+			local direction = (goal - self.CurrentPos):Normalize()
+			local stepPos = self:AvoidStructuresOnly(self.CurrentPos + direction * moveDistance)
+			local movePos = self:AvoidWalls(stepPos)
+			--벽(경계 타일)에 정면으로 막혀 한 걸음도 못 가면: 경로를 두 번까지 다시 짜 보고, 그래도 막히면 멈춘다--
+			if Vector2.Distance(movePos, self.CurrentPos) < 0.0001 and Vector2.Distance(stepPos, self.CurrentPos) >= 0.0001 then
+				self._T.replans = (self._T.replans or 0) + 1
+				if self._T.replans <= 2 then
+					self:PlanPath()
+					return
+				end
+				self._T.path = nil
+				self.IsMove = false
+				self.targetPos = self.CurrentPos
+				return
+			end
+			self:SetWorldPos(movePos.x, movePos.y)
+		end
+	end
+
+end

@@ -1,0 +1,27 @@
+@Component
+script BishopHeroDataComponent extends Component
+
+	method table BuildKit()
+		    return {
+		        name = "비숍",
+		        role = "중거리 성속 지원/진입로 제어 — 주력 성속 공격으로 견제하고 파운틴과 엔젤레이로 전선을 오래 버틴다.",
+		        passive = "자애의 잔광: 지원 정체성은 유지하되, 현재 구조에서는 파운틴과 엔젤레이 회복이 시전자 기준으로 먼저 동작한다.",
+		        Q = { name = "홀리 애로우", skillClass = "holy_burst", targetIntent = "few", projectileCount = 0, hitCount = 1, burstCount = 0, tickCount = 0, shape = "front", length = 5.6, width = 1.8, telegraphShape = "front", telegraphLength = 5.6, telegraphWidth = 1.8, hitShape = "front", hitLength = 3.808, hitWidth = 1.224, visualVsHitDelta = 0, damage = 42, cooldown = 1.4, projectile = false, castWindup = 0.07, telegraph = false, telegraphTime = 0.07, effectScaleMultiplier = 0.549, hitBoundsScaleMultiplier = 0.7555555555555556, impactScaleMultiplier = 0.86, useCurrentFacing = true, maxTargets = 5, maxImpactFxCount = 5, emitImpactPerTarget = true },
+		        W = { name = "홀리 파운틴", skillClass = "install_zone", targetIntent = "ally_zone", projectileCount = 0, hitCount = 0, burstCount = 0, tickCount = 0, shape = "self", length = 3.8, width = 3.8, telegraphShape = "self", telegraphRadius = 1.9, hitShape = "self", hitRadius = 1.9, visualVsHitDelta = 0, damage = 0, cooldown = 10, heal = true, healMode = "fountain_aura", healAmount = 88, healCooldownPerTarget = 3, installDuration = 10, installTickInterval = 0.2, healAreaWidth = 3.8, healAreaHeight = 3.8, castWindup = 0.24, telegraph = true, telegraphTime = 0.24, effectScaleMultiplier = 0.94, anchorAtCaster = true },
+		        E = { name = "엔젤레이", skillClass = "line_pierce", targetIntent = "single", projectileCount = 1, hitCount = 1, burstCount = 0, tickCount = 0, shape = "front", length = 7.9, width = 1.25, telegraphShape = "front", telegraphLength = 7.9, telegraphWidth = 1.25, hitShape = "front", hitLength = 7.9, hitWidth = 1.25, visualVsHitDelta = 0, damage = 176, cooldown = 7.2, projectile = true, castWindup = 0.22, projectileSpeed = 11.8, projectileStartForwardOffset = 0.68, healOnHit = true, healOnHitAmount = 42, telegraph = false, telegraphTime = 0.22, effectScaleMultiplier = 0.92, projectileScaleMultiplier = 0.92, impactScaleMultiplier = 0.9 },
+		        R = { name = "제네시스", skillClass = "holy_column_burst", targetIntent = "many", projectileCount = 0, hitCount = 1, burstCount = 0, tickCount = 1, shape = "front", length = 6.2, width = 3.8, telegraphShape = "front", telegraphLength = 6.2, telegraphWidth = 3.8, hitShape = "front", hitLength = 6.2, hitWidth = 3.8, visualVsHitDelta = 0.12, damage = 204, cooldown = 12, castWindup = 0.18, telegraph = false, telegraphTime = 0.18, effectScaleMultiplier = 0.96, impactScaleMultiplier = 0.9, useCurrentFacing = true, maxTargets = 12, maxImpactFxCount = 12, emitImpactPerTarget = true },
+		        T = { name = "피스메이커", skillClass = "peace_maker", targetIntent = "hybrid", projectileCount = 1, hitCount = 1, burstCount = 0, tickCount = 0, shape = "front", length = 8.2, width = 1.2, telegraphShape = "front", telegraphLength = 8.2, telegraphWidth = 1.2, hitShape = "front", hitLength = 3.6, hitWidth = 3.6, impactHitLength = 3.6, impactHitWidth = 3.6, visualVsHitDelta = 0.1, damage = 162, cooldown = 22, projectile = true, castWindup = 0.16, projectileSpeed = 10.5, projectileStartForwardOffset = 0.46, projectileSearchWidth = 1.2, maxTargets = 12, maxImpactFxCount = 12, supportMaxTargets = 12, supportDuration = 6, impactFollowupDelay = 0.06, effectScaleMultiplier = 0.94, projectileScaleMultiplier = 0.94, impactScaleMultiplier = 0.96 },
+		    }
+	end
+
+	method table BuildVfx()
+		    return {
+		        Q = { effect = "0c55f9decaee4966b0b22f2ec11d3ca9", effect2 = "69af12bc1bec41eabbcd6d74c4069313", sound = "c2ca06323f67485e9355ff4d097ae77b", playCastEffectOnInput = true, skipDefaultEffect2 = true, multiImpactEffect = "69af12bc1bec41eabbcd6d74c4069313" },
+		        W = { effect = "f0ae3ac26a83422795c25931d58da17e", tickEffect = "ec3d24ba83b747abb6c71f99e6616f0c", effect2 = "6867a44ded694a5b847073b4c6ef49ba", telegraph = "280d255d900646b180a302ed10979568", visualTickCount = 11, visualTickInterval = 0.95, tickEffectDelay = 0.08, persistentTelegraphDuration = 10.0, persistentTelegraphInterval = 0.95, persistentTelegraphDelay = 0.0, endEffectDelay = 10.0 },
+		        E = { effect = "e86eef7f960146fea646300653347c2e", effect0 = "77bc39d2bd9e455b8b2ce07555a90455", ball = "77bc39d2bd9e455b8b2ce07555a90455", impact = "341a2fd02d0343cfa64da45970aa7cf2", sound = "541157a5688c4eaabd442882716500a6", playCastEffectOnInput = true },
+		        R = { effect = "1c434f7cecf94e1cb16b68ee0079b01d", effect2 = "befa4d153d36410ba30ba5ec09c88611", impact = "3b5b69dd36944c94bfe5652f7c60543a", sound = "6f972ab4e14841398281f3fc2a8f376e", playCastEffectOnInput = true, skipDefaultEffect2 = true, multiImpactEffect = "befa4d153d36410ba30ba5ec09c88611", multiImpactSecondaryEffect = "3b5b69dd36944c94bfe5652f7c60543a" },
+		        T = { effect = "9942752e5db445f7a923f17ff17a3871", effect0 = "38becdc7ae334111a3c702a3b5194512", ball = "38becdc7ae334111a3c702a3b5194512", impact = "4e3ec129a2f3473085441c95a7399521", multiImpactEffect = "5316c034c4124c4882c7705d8621dc11", friendlyImpactEffect = "7a8f9ddcd3114a83bf47afffa2fdc2f0", sound = "6f972ab4e14841398281f3fc2a8f376e", playCastEffectOnInput = true },
+		    }
+	end
+
+end

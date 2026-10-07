@@ -1,0 +1,33 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "codeblock://9e2f30c9-4f8a-4a3a-a3a0-ed72613ee090",
+  "ContentType": "x-mod/codeblock",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "CoreVersion": {
+        "Major": 0,
+        "Minor": 2
+      },
+      "ScriptVersion": {
+        "Major": 1,
+        "Minor": 1
+      },
+      "Description": "",
+      "Id": "9e2f30c9-4f8a-4a3a-a3a0-ed72613ee090",
+      "Language": 1,
+      "Name": "WorkerAction",
+      "Type": 1,
+      "Source": 0,
+      "Target": "codeblock://7ebb4172-6fa7-4f4e-8b45-4d8df7dfc6f5"
+    }
+  }
+}

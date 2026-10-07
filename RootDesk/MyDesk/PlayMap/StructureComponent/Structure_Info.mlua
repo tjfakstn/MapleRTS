@@ -1,0 +1,322 @@
+@Component
+script Structure_Info extends Component
+
+	@Sync
+	property boolean IsDestroyed = false
+
+	@Sync
+	property integer Hp = 0
+
+	@Sync
+	property integer MaxHp = 0
+
+	@Sync
+	property number defense = 0
+
+	@Sync
+	property number damage = 0
+
+	@Sync
+	property string PlayerID = ""
+
+	@Sync
+	property number BuildTime = 5
+
+	@Sync
+	property boolean IsUnderConstruction = false
+
+	@Sync
+	property number ConstructionEndTime = 0
+
+	@Sync
+	property boolean NeedsBuilder = false
+
+	@Sync
+	property boolean ConstructionPaused = false
+
+	@Sync
+	property number ConstructionRemaining = 0
+
+	@Sync
+	property number Meso = 0
+
+	@Sync
+	property number Erda = 0
+
+	@Sync
+	property integer PopulationProvide = 0
+
+	@DisplayName("변환 전 건물에서 물려받은 인구(변환 건설 중에도 최대 인구에 포함)")
+	@Sync
+	property integer PopulationCarry = 0
+
+	@Sync
+	property number BuildRadius = 0
+
+	@Sync
+	property string BuildingKey = ""
+
+	@Sync
+	property string StructureName = ""
+
+	@Sync
+	property number Vision = 4.5
+
+	@Sync
+	property boolean IsDetector = false
+
+	@DisplayName("목표 크기(월드, 0=자동 크기 끔)")
+	property number TargetSize = 0
+
+	@DisplayName("충돌 박스를 스프라이트에 자동 맞춤")
+	property boolean AutoFitCollider = false
+
+	@Sync
+	@HideFromInspector
+	property boolean AutoSized = false
+
+	method void GetDamage(integer damage)
+		-- 피해를 방어력만큼 경감해 적용한다. 이미 파괴된 건물은 무시한다.
+		if self.IsDestroyed then return end
+		
+		local reduced = damage - math.floor(self.defense)
+		if reduced < 1 then reduced = 1 end
+		
+		self.Hp = self.Hp - reduced
+		
+		if self.Hp <= 0 then
+			self.Hp = 0
+			if not self.IsDestroyed then
+				self.IsDestroyed = true
+				-- 결과표: 소유자 "잃은 건물" +1, 지금 피해를 준 플레이어 "파괴" +1.
+				if self:IsServer() then _MatchStatsLogic:OnStructureDestroyed(self.PlayerID) end
+				self:OnDestroyed()
+			end
+		end
+	end
+
+	method void Heal(number amount)
+		-- 체력을 amount만큼 회복시킨다. MaxHp(0이면 무제한)를 넘지 않고, 파괴된 건물은 회복하지 않는다.
+		if self.IsDestroyed or amount <= 0 then return end
+		local newHp = self.Hp + math.floor(amount)
+		if self.MaxHp > 0 and newHp > self.MaxHp then
+			newHp = self.MaxHp
+		end
+		self.Hp = newHp
+	end
+
+	method void OnDestroyed()
+		-- 파괴 연출/후처리 지점. StructureEffectComponent(있으면)에 파괴 애니메이션 재생을 즉시 위임한다.
+		-- (StructureEffectComponent.OnUpdate가 IsDestroyed를 폴링하는 것과 병행되는 즉시 반영용 — UnitStateComponent.NotifyDead와 동일한 패턴.)
+		
+		---@type StructureEffectComponent
+		local fx = self.Entity:GetComponent("script.StructureEffectComponent")
+		if fx ~= nil then fx:PlayDestroyAnimation() end
+		
+		-- 서버: 파괴 애니메이션이 끝난 뒤 엔티티를 실제로 제거한다(예전엔 파괴된 건물이 영구 잔존해 그 자리에 재건설이 막히고
+		-- 오라/채집 타이머가 계속 돌았다). 대기 중 생산도 전액 환불하고 큐를 비운다.
+		if self:IsServer() then
+			self:CleanupAfterDestroy()
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CleanupAfterDestroy()
+		-- 파괴 후처리(서버): ① 소유자의 SpawnUnit에 이 건물의 대기 생산을 전액 환불·큐 정리 ② 파괴 연출 시간 뒤 Entity:Destroy().
+		-- (취소 경로 SpawnUnit.RequestCancelEntity는 자체적으로 같은 처리를 하므로 여기를 거치지 않는다.)
+		-- 테란식 건설 중 파괴: 짓던 일꾼의 작업 표시·대상을 푼다.
+		if self._T.builder ~= nil then
+			self:SetRepairing(self._T.builder, false)
+			self._T.builder = nil
+		end
+		if self.PlayerID ~= "" then
+			local owner = _UserService:GetUserEntityByUserId(self.PlayerID)
+			if isvalid(owner) then
+				---@type SpawnUnit
+				local spawner = owner:GetComponent("script.SpawnUnit")
+				if spawner ~= nil then spawner:AbortProductionFor(self.Entity) end
+			end
+		end
+		
+		local delay = 1.5
+		---@type StructureEffectComponent
+		local fx = self.Entity:GetComponent("script.StructureEffectComponent")
+		if fx ~= nil and fx.DestroyAnimationDuration ~= nil and fx.DestroyAnimationDuration > 0 then
+			delay = fx.DestroyAnimationDuration
+		end
+		local entity = self.Entity
+		_TimerService:SetTimerOnce(function()
+			if isvalid(entity) then entity:Destroy() end
+		end, delay)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnUpdate(number delta)
+		if self.NeedsBuilder and self.IsUnderConstruction and not self.IsDestroyed then
+			self:TickConstruction(delta)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TickConstruction(number delta)
+		-- 테란식 건설 1프레임: 일꾼(BuildTarget이 이 건물이고 곁에 있는 살아 있는 일꾼)이 있으면 진행 + 체력 증가,
+		-- 없으면 멈춤(완공 시각을 delta만큼 뒤로 밀어 남은 시간 유지). 남은 시간이 0이 되면 완공.
+		local builder = self._T.builder
+		if not self:IsBuilderValid(builder) then
+			builder = self:FindBuilder()
+			if self._T.builder ~= nil and self._T.builder ~= builder then self:SetRepairing(self._T.builder, false) end
+			self._T.builder = builder
+		end
+		local now = _UtilLogic.ServerElapsedSeconds
+		if builder == nil then
+			if not self.ConstructionPaused then
+				self.ConstructionRemaining = math.max(0, self.ConstructionEndTime - now)
+				self.ConstructionPaused = true
+			end
+			return
+		end
+		if self.ConstructionPaused then
+			self.ConstructionEndTime = now + self.ConstructionRemaining
+			self.ConstructionPaused = false
+		end
+		self:SetRepairing(builder, true)
+		-- 체력: 10 %에서 시작해 진행만큼 차오른다(테란 건물처럼).
+		if self.BuildTime > 0 and self.MaxHp > 0 then
+			self._T.hpAcc = (self._T.hpAcc or 0) + self.MaxHp * 0.9 * delta / self.BuildTime
+			if self._T.hpAcc >= 1 then
+				local add = math.floor(self._T.hpAcc)
+				self._T.hpAcc = self._T.hpAcc - add
+				self.Hp = math.min(self.MaxHp, self.Hp + add)
+			end
+		end
+		if now >= self.ConstructionEndTime then
+			self.IsUnderConstruction = false
+			self.ConstructionPaused = false
+			self:SetRepairing(builder, false)
+			---@type WorkerBuildState
+			local ws = builder:GetComponent("script.WorkerBuildState")
+			if ws ~= nil and ws.BuildTarget == self.Entity then ws.BuildTarget = nil end
+			self._T.builder = nil
+		end
+	end
+
+	method number RemainingBuildTime()
+		-- 건설 남은 시간(초). 멈춘 동안은 멈출 때 저장한 값. 서버·클라 공통(정보창이 쓴다).
+		if not self.IsUnderConstruction then return 0 end
+		if self.ConstructionPaused then return self.ConstructionRemaining end
+		return math.max(0, self.ConstructionEndTime - _UtilLogic.ServerElapsedSeconds)
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean IsBuilderValid(any builder)
+		-- builder가 이 건물을 짓는 중인 살아 있는 내 일꾼이고 곁(BuilderReach 안)에 있는지.
+		if builder == nil or not isvalid(builder) then return false end
+		local uinfo = builder.Unit_Info
+		if uinfo == nil or uinfo.IsDead or uinfo.PlayerID ~= self.PlayerID then return false end
+		---@type WorkerBuildState
+		local ws = builder:GetComponent("script.WorkerBuildState")
+		if ws == nil or ws.BuildTarget ~= self.Entity then return false end
+		local a = builder.TransformComponent.WorldPosition
+		local b = self.Entity.TransformComponent.WorldPosition
+		local dx, dy = a.x - b.x, a.y - b.y
+		local reach = self:BuilderReach()
+		return dx * dx + dy * dy <= reach * reach
+	end
+
+	@ExecSpace("ServerOnly")
+	method number BuilderReach()
+		-- 일꾼이 "곁에 있다"고 보는 거리: 건물 충돌 박스 반 변 중 긴 쪽 + 0.8.
+		local trig = self.Entity.TriggerComponent
+		local sc = self.Entity.TransformComponent.Scale
+		if trig ~= nil then
+			local hw = math.abs(trig.BoxSize.x * sc.x) / 2
+			local hh = math.abs(trig.BoxSize.y * sc.y) / 2
+			return math.max(hw, hh) + 0.8
+		end
+		return 1.6
+	end
+
+	@ExecSpace("ServerOnly")
+	method any FindBuilder()
+		-- 이 건물을 BuildTarget으로 삼고 곁에 와 있는 내 일꾼을 찾는다(이어 짓기). 없으면 nil.
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return nil end
+		local group = map:GetChildByName("MyUnits")
+		if not isvalid(group) then return nil end
+		for _, e in ipairs(group.Children:ToTable()) do
+			if self:IsBuilderValid(e) then return e end
+		end
+		return nil
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SetRepairing(any builder, boolean on)
+		if builder == nil or not isvalid(builder) then return end
+		---@type WorkerBuildState
+		local ws = builder:GetComponent("script.WorkerBuildState")
+		if ws ~= nil and ws.IsRepairing ~= on then ws.IsRepairing = on end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SetOwner(string userId)
+		-- 이 건물의 소유자를 지정한다(점령/건설 로직에서 호출).
+		self.PlayerID = userId
+	end
+
+	method void OnBeginPlay()
+		-- 서버: 스프라이트 실제 크기로 Scale·충돌 박스·오버레이 자식을 맞춘다(StructureSizeLogic, TargetSize > 0인 건물만).
+		-- 클라: 체력바/선택 테두리 자식(SelectRing/HpBarBg/HpBarFill)을 UnitOverlayLogic에 등록하고,
+		--       서버가 스프라이트를 읽지 못했을 때를 대비해 대신 측정해 보내는 예비 경로를 건다.
+		if self:IsServer() then
+			_StructureSizeLogic:ApplyServer(self.Entity, nil)
+			return
+		end
+		_UnitOverlayLogic:Register(self.Entity)
+		if self.TargetSize > 0 and not self.AutoSized then
+			local entity = self.Entity
+			_TimerService:SetTimerOnce(function()
+				if isvalid(entity) then self:ReportSizeIfNeeded() end
+			end, 1.0)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ReportSizeIfNeeded()
+		-- 1초가 지나도 서버가 자동 크기를 확정하지 못했으면(서버에서 스프라이트 로드 실패) 이 클라가 측정한 값을 보낸다.
+		-- 소유자 클라만 보낸다(중립 건물은 누구든). 클라 로컬 프로브는 이미 지워져 여기까지 오지 않는다.
+		if self.AutoSized or self.IsDestroyed then return end
+		local lp = _UserService.LocalPlayer
+		local me = (isvalid(lp) and isvalid(lp.PlayerComponent)) and lp.PlayerComponent.UserId or ""
+		if self.PlayerID ~= "" and self.PlayerID ~= me then return end
+		local m = _StructureSizeLogic:MeasureSprite(_StructureSizeLogic:IdleSpriteRuid(self.Entity))
+		if m == nil then return end
+		self:ReportSpriteBounds(m.w, m.h, m.cx, m.cy)
+	end
+
+	@ExecSpace("Server")
+	method void ReportSpriteBounds(number w, number h, number cx, number cy)
+		-- 클라가 대신 측정한 스프라이트 사각형(Scale 1 월드 유닛)으로 자동 크기를 확정한다. 이미 확정됐으면 무시.
+		if self.AutoSized then return end
+		if w < 0.05 or h < 0.05 or w > 100 or h > 100 then return end
+		_StructureSizeLogic:ApplyServer(self.Entity, { w = w, h = h, cx = cx, cy = cy })
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSyncProperty(string name, any value)
+		-- 자동 크기가 확정되면 체력바 기준값(폭·위치)을 새 배치로 다시 읽는다(자식 Transform 동기화를 잠깐 기다림).
+		if name == "AutoSized" and value == true then
+			local entity = self.Entity
+			_TimerService:SetTimerOnce(function()
+				if isvalid(entity) then _UnitOverlayLogic:TryRegister(entity) end
+			end, 0.3)
+			return
+		end
+		-- 내 건물이 완공되거나 파괴되면 선행 건물 조건이 바뀌므로, 열려 있는 커맨드카드의 잠금을 다시 계산한다.
+		if name ~= "IsUnderConstruction" and name ~= "IsDestroyed" then return end
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) or not isvalid(lp.PlayerComponent) then return end
+		if self.PlayerID == "" or self.PlayerID ~= lp.PlayerComponent.UserId then return end
+		_CommandCardLogic:RefreshCard()
+	end
+
+end

@@ -1,0 +1,33 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "codeblock://b3b4074f-b3d0-4cf3-b322-3d0f181bbc1a",
+  "ContentType": "x-mod/codeblock",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "CoreVersion": {
+        "Major": 0,
+        "Minor": 2
+      },
+      "ScriptVersion": {
+        "Major": 1,
+        "Minor": 1
+      },
+      "Description": "",
+      "Id": "b3b4074f-b3d0-4cf3-b322-3d0f181bbc1a",
+      "Language": 1,
+      "Name": "HeroRespawnLogic",
+      "Type": 5,
+      "Source": 0,
+      "Target": null
+    }
+  }
+}

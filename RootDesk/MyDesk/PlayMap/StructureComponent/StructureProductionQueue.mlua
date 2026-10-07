@@ -1,0 +1,160 @@
+@Component
+script StructureProductionQueue extends Component
+
+	@DisplayName("최대 생산 대기열")
+	property integer MaxQueue = 5
+
+	@Sync
+	property string Slot1Ruid = ""
+
+	@Sync
+	property number Slot1Total = 0
+
+	@Sync
+	property string Slot2Ruid = ""
+
+	@Sync
+	property number Slot2Total = 0
+
+	@Sync
+	property string Slot3Ruid = ""
+
+	@Sync
+	property number Slot3Total = 0
+
+	@Sync
+	property string Slot4Ruid = ""
+
+	@Sync
+	property number Slot4Total = 0
+
+	@Sync
+	property string Slot5Ruid = ""
+
+	@Sync
+	property number Slot5Total = 0
+
+	@Sync
+	property number HeadEndTime = 0
+
+	@ExecSpace("ServerOnly")
+	method integer Count()
+		-- 대기열에 든 생산 수(만드는 중 1 + 대기).
+		if self._T.items == nil then return 0 end
+		return #self._T.items
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean IsFull()
+		return self:Count() >= self.MaxQueue
+	end
+
+	@ExecSpace("ServerOnly")
+	method integer Enqueue(string ruid, number total, any onDone)
+		-- 생산 하나를 대기열 끝에 넣고 그 위치(1~MaxQueue)를 돌려준다. 가득 찼으면 0. 맨 앞이 되면 total초 뒤 onDone()을 부른다.
+		if self._T.items == nil then self._T.items = {} end
+		if #self._T.items >= self.MaxQueue then return 0 end
+		table.insert(self._T.items, { ruid = ruid, total = math.max(0, total or 0), onDone = onDone })
+		local pos = #self._T.items
+		self:SyncSlots()
+		if pos == 1 then self:StartHead() end
+		return pos
+	end
+
+	@ExecSpace("ServerOnly")
+	method void StartHead()
+		-- 맨 앞 생산의 타이머를 건다.
+		local items = self._T.items
+		if items == nil or #items == 0 then
+			self.HeadEndTime = 0
+			return
+		end
+		local head = items[1]
+		self.HeadEndTime = _UtilLogic.ServerElapsedSeconds + head.total
+		self._T.timerId = _TimerService:SetTimerOnce(function() self:FinishHead() end, head.total)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void FinishHead()
+		-- 맨 앞 생산 완료: 대기열에서 빼고 다음 생산을 시작한 뒤 완료 콜백(유닛 스폰)을 부른다.
+		self._T.timerId = nil
+		local items = self._T.items
+		if items == nil or #items == 0 then return end
+		local head = table.remove(items, 1)
+		self:SyncSlots()
+		self:StartHead()
+		if head.onDone ~= nil then head.onDone() end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ClearAll()
+		-- 건물 파괴/취소/변환: 대기열 전체를 비운다(환불은 SpawnUnit.AbortProductionFor가 한다).
+		if self._T.timerId ~= nil then
+			_TimerService:ClearTimer(self._T.timerId)
+			self._T.timerId = nil
+		end
+		self._T.items = {}
+		self.HeadEndTime = 0
+		self:SyncSlots()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SyncSlots()
+		-- _T.items 순서대로 Slot1~5 RUID/시간을 채운다(빈 칸은 "").
+		local items = self._T.items or {}
+		for i = 1, 5 do
+			local it = items[i]
+			local ruid = (it ~= nil) and it.ruid or ""
+			local total = (it ~= nil) and it.total or 0
+			if i == 1 then
+				self.Slot1Ruid = ruid
+				self.Slot1Total = total
+			elseif i == 2 then
+				self.Slot2Ruid = ruid
+				self.Slot2Total = total
+			elseif i == 3 then
+				self.Slot3Ruid = ruid
+				self.Slot3Total = total
+			elseif i == 4 then
+				self.Slot4Ruid = ruid
+				self.Slot4Total = total
+			else
+				self.Slot5Ruid = ruid
+				self.Slot5Total = total
+			end
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnEndPlay()
+		if self._T.timerId ~= nil then
+			_TimerService:ClearTimer(self._T.timerId)
+			self._T.timerId = nil
+		end
+	end
+
+	method string GetSlotRuid(integer idx)
+		if idx == 1 then return self.Slot1Ruid end
+		if idx == 2 then return self.Slot2Ruid end
+		if idx == 3 then return self.Slot3Ruid end
+		if idx == 4 then return self.Slot4Ruid end
+		if idx == 5 then return self.Slot5Ruid end
+		return ""
+	end
+
+	method number GetSlotTotal(integer idx)
+		if idx == 1 then return self.Slot1Total end
+		if idx == 2 then return self.Slot2Total end
+		if idx == 3 then return self.Slot3Total end
+		if idx == 4 then return self.Slot4Total end
+		if idx == 5 then return self.Slot5Total end
+		return 0
+	end
+
+	method number HeadRemaining()
+		-- 지금 만드는 유닛의 남은 시간(초). 대기열이 비면 0.
+		if self.HeadEndTime <= 0 then return 0 end
+		return math.max(0, self.HeadEndTime - _UtilLogic.ServerElapsedSeconds)
+	end
+
+end

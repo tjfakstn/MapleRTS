@@ -1,0 +1,1829 @@
+@Component
+script HeroSkillComponent extends AttackComponent
+
+	@Sync
+	property integer heroIndex = 1
+
+	@Sync
+	property string heroId = "dark_knight"
+
+	property boolean heroSelectionOpen = false
+
+	@Sync
+	property string lastCast = ""
+
+	@Sync
+	property string lastImpact = ""
+
+	@Sync
+	property string lastImpactBatch = ""
+
+	@Sync
+	property string lastFriendlyImpactBatch = ""
+
+	@Sync
+	property string lastMarkedBatch = ""
+
+	@Sync
+	property string lastThrowBlastBatch = ""
+
+	@Sync
+	property string lastDominionBatch = ""
+
+	@Sync
+	property string lastGaleTravel = ""
+
+	@Sync
+	property string lastNightWalkerBatFlight = ""
+
+	@Sync
+	property string lastBattleMageDeathStrike = ""
+
+	property boolean designNoCooldown = false
+
+	property integer nightWalkerBatUnlockTier = 4
+
+	property integer maxTrainingDummiesPerPlayer = 8
+
+	property number minimumEffectHitPadding = 0
+
+	property number projectileSpeed = 10
+
+	property number rangeScale = 0.5
+
+	property number minimumCastMotionTime = 0
+
+	property number castWindup = 0.15
+
+	@ExecSpace("ServerOnly")
+	method void OnInitialize()
+		    -- 모험가 5명 데이터는 별도 HeroData 컴포넌트로 분리했다. 서버 시작 시 미리 붙여 두면
+		    -- heroIndex sync 이후 클라이언트/UI도 같은 데이터를 그대로 읽을 수 있다.
+		    self:EnsureHeroSkillAttackLogicComponent()
+		    self:EnsureHeroSkillEffectComponent()
+		    if self.Entity:GetComponent("script.HeroUnit") == nil then self:EnsureHeroSkillInputComponent() end
+		    self:EnsureHeroSkillStatusComponent()
+		    self:EnsureAdventureHeroDataComponents()
+		    self:EnsureDamageSkinSettingComponent()
+		    self:EnsureHeroSelectionState()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EnsureHeroSkillInputComponent()
+		    -- 입력은 별도 ClientOnly 컴포넌트가 담당한다. 이미 붙어 있으면 재추가하지 않는다.
+		    if self.Entity:GetComponent("script.HeroSkillInputComponent") ~= nil then return end
+		    local added = self.Entity:AddComponent("script.HeroSkillInputComponent")
+		    if added == nil then
+		        return
+		    end
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean IsLocalMovementLocked()
+		    -- 선택창의 로컬 입력 제한은 스킬 제한과 독립적으로 해제한다.
+		    if self.heroSelectionOpen then return true end
+		    -- 다크나이트 T의 제한은 다른 스킬의 제한 시간과 독립적으로 소유한다.
+		    local darkKnight = self:GetHeroSkillComponent(1)
+		    if darkKnight ~= nil and darkKnight:IsDarkCycleMovementLocked() then return true end
+		    if _CombatTeamLogic:IsDead(self.Entity) or self._T.lockMap ~= self.Entity.CurrentMap or self._T.lockHero ~= self:GetSelectedHeroIndex() then
+		        self._T.localMoveLockUntil = 0
+		    end
+		    local xenon = self.Entity:GetComponent("script.XenonSkillComponent")
+		    if xenon ~= nil and xenon:IsMovementLocked() then return true end
+		    local mechanic = self.Entity:GetComponent("script.MechanicSkillComponent")
+		    if mechanic ~= nil and mechanic.casting then return true end
+		    return (_UtilLogic.ElapsedSeconds or 0) < (self._T.localMoveLockUntil or 0)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void LockLocalMovement(number duration)
+		    local lockUntil = (_UtilLogic.ElapsedSeconds or 0) + math.max(duration or 0, 0)
+		    if lockUntil <= (self._T.localMoveLockUntil or 0) then return end
+		    self._T.localMoveLockUntil = lockUntil
+		    self._T.lockMap = self.Entity.CurrentMap
+		    self._T.lockHero = self:GetSelectedHeroIndex()
+		
+		    ---@type ClickToMoveComponent
+		    local moveComp = self.Entity:GetComponent("script.ClickToMoveComponent")
+		    if moveComp ~= nil then
+		        moveComp:StopMovement()
+		    end
+	end
+
+	method void OnEndPlay()
+		    -- 서버와 클라이언트가 각각 소유한 시전 제한을 종료한다.
+		    if self:IsServer() then return end
+		    self._T.localMoveLockUntil = 0
+		    -- 실제 연출 정리는 EffectComponent.OnEndPlay가 담당한다.
+		    self._T.pendingEffectSync = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		    -- 원격 플레이어도 초기 Sync 대기열을 전달해야 한다.
+		    self:FlushPendingEffectSync()
+		    if self:IsLocalMovementLocked() and self.Entity == _UserService.LocalPlayer then
+		        local movement = self.Entity.MovementComponent
+		        if movement ~= nil then movement:Stop() end
+		    end
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean IsChargedSkillKey(string skillKey)
+		    -- 현재 선택된 히어로의 해당 슬롯이 "누른 시간"을 쓰는 스킬인지 확인한다.
+		    local kit = self:BuildHeroKit(self:GetSelectedHeroIndex())
+		    if kit == nil then return false end
+		    local skill = kit[skillKey]
+		    if skill == nil then return false end
+		    return false
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayChargeMotionEffect(string skillKey)
+		    -- 기존 InputComponent 호출 경로를 유지하며 등록된 연출 컴포넌트로 전달한다.
+		    ---@type HeroSkillEffectComponent
+		    local effectComp = self.Entity:GetComponent("script.HeroSkillEffectComponent")
+		    if effectComp ~= nil then effectComp:PlayChargeMotionEffect(skillKey) end
+	end
+
+	@ExecSpace("Server")
+	method void RequestSpawnTrainingDummy(Vector2 spawnPosition)
+		    -- F6 테스트 전용. 커서 위치에 허수아비를 계속 누적 배치해 범위/관통/다중 타격을 한 번에 확인한다.
+		    if self.Entity.PlayerComponent == nil or senderUserId ~= self.Entity.PlayerComponent.UserId then
+		        return
+		    end
+		    self:EnsureTrainingDummyState()
+		    self:PruneTrainingDummies()
+		
+		    while #self._T.trainingDummies >= math.max(self.maxTrainingDummiesPerPlayer or 1, 1) do
+		        local oldestDummy = table.remove(self._T.trainingDummies, 1)
+		        if oldestDummy ~= nil and isvalid(oldestDummy) then
+		            oldestDummy:Destroy()
+		        end
+		    end
+		
+		    local spawnName = "TrainingDummy_" .. tostring(math.floor((_UtilLogic.ElapsedSeconds or 0) * 1000))
+		    local dummy = _SpawnService:SpawnByModelId("trainingdummy", spawnName, Vector3(spawnPosition.x, spawnPosition.y, 0), self.Entity.CurrentMap)
+		    if dummy == nil then
+		        return
+		    end
+		
+		    table.insert(self._T.trainingDummies, dummy)
+		    self._T.trainingDummy = dummy
+	end
+
+	@ExecSpace("Server")
+	method void RequestClearTrainingDummies()
+		    if self.Entity.PlayerComponent == nil or senderUserId ~= self.Entity.PlayerComponent.UserId then
+		        return
+		    end
+		
+		    self:DestroyAllTrainingDummies()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EnsureTrainingDummyState()
+		    if self._T.trainingDummies == nil then
+		        self._T.trainingDummies = {}
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void PruneTrainingDummies()
+		    self:EnsureTrainingDummyState()
+		
+		    local aliveDummies = {}
+		    for _, dummy in ipairs(self._T.trainingDummies) do
+		        if dummy ~= nil and isvalid(dummy) then
+		            table.insert(aliveDummies, dummy)
+		        end
+		    end
+		    self._T.trainingDummies = aliveDummies
+	end
+
+	@ExecSpace("ServerOnly")
+	method void DestroyAllTrainingDummies()
+		    self:EnsureTrainingDummyState()
+		
+		    for _, dummy in ipairs(self._T.trainingDummies) do
+		        if dummy ~= nil and isvalid(dummy) then
+		            dummy:Destroy()
+		        end
+		    end
+		
+		    self._T.trainingDummies = {}
+		    self._T.trainingDummy = nil
+	end
+
+	method table GetNightWalkerDominionState()
+		    -- 도미니언 상태는 NightWalkerSkillComponent가 소유한다. 공통 히트 컨텍스트와 클라이언트 연출이 조회하는 얇은 위임이다.
+		    local nightWalker = self:GetHeroSkillComponent(8)
+		    if nightWalker == nil then return nil end
+		    return nightWalker:GetNightWalkerDominionState()
+	end
+
+	method boolean IsNightWalkerDominionEnhancedSkill(integer selectedIndex, string skillKey, table skill)
+		    -- 나이트워커가 선택된 경우에만 강화 대상이 된다. 판정 자체는 NightWalkerSkillComponent가 소유한다.
+		    if selectedIndex ~= 8 then return false end
+		    local nightWalker = self:GetHeroSkillComponent(8)
+		    if nightWalker == nil then return false end
+		    return nightWalker:IsNightWalkerDominionEnhancedSkill(selectedIndex, skillKey, skill)
+	end
+
+	method table GetHeroCatalog()
+		    -- heroId <-> 인덱스 <-> 데이터 컴포넌트(dataType) <-> 전용 실행 컴포넌트(skillType)의 유일한 대응표.
+		    -- skillType이 없는 영웅은 공통 판정 흐름만 쓰는 데이터 전용 영웅이다.
+		    return {
+		        { index = 1, id = "dark_knight", name = "다크나이트", dataType = "script.DarkKnightHeroDataComponent", skillType = "script.DarkKnightSkillComponent" },
+		        { index = 2, id = "bishop", name = "비숍", dataType = "script.BishopHeroDataComponent", skillType = "script.BishopSkillComponent" },
+		        { index = 3, id = "bowmaster", name = "보우마스터", dataType = "script.BowmasterHeroDataComponent" },
+		        { index = 4, id = "night_lord", name = "나이트로드", dataType = "script.NightLordHeroDataComponent", skillType = "script.NightLordSkillComponent" },
+		        { index = 5, id = "captain", name = "캡틴", dataType = "script.CaptainHeroDataComponent" },
+		        { index = 6, id = "soul_master", name = "소울마스터", dataType = "script.SoulMasterHeroDataComponent", skillType = "script.SoulMasterSkillComponent" },
+		        { index = 7, id = "flame_wizard", name = "플레임위자드", dataType = "script.FlameWizardHeroDataComponent" },
+		        { index = 8, id = "night_walker", name = "나이트워커", dataType = "script.NightWalkerHeroDataComponent", skillType = "script.NightWalkerSkillComponent" },
+		        { index = 9, id = "striker", name = "스트라이커", dataType = "script.StrikerHeroDataComponent", skillType = "script.StrikerSkillComponent" },
+		        { index = 10, id = "wind_breaker", name = "윈드브레이커", dataType = "script.WindBreakerHeroDataComponent", skillType = "script.WindBreakerSkillComponent" },
+		        { index = 11, id = "mechanic", name = "메카닉", dataType = "script.MechanicHeroDataComponent", skillType = "script.MechanicSkillComponent" },
+		        { index = 12, id = "wild_hunter", name = "와일드헌터", dataType = "script.WildHunterHeroDataComponent", skillType = "script.WildHunterSkillComponent" },
+		        { index = 13, id = "battle_mage", name = "배틀메이지", dataType = "script.BattleMageHeroDataComponent", skillType = "script.BattleMageSkillComponent" },
+		        { index = 14, id = "xenon", name = "제논", dataType = "script.XenonHeroDataComponent", skillType = "script.XenonSkillComponent" },
+		        { index = 15, id = "blaster", name = "블래스터", dataType = "script.BlasterHeroDataComponent", skillType = "script.BlasterSkillComponent" },
+		    }
+	end
+
+	method integer GetHeroCatalogCount()
+		    return #self:GetHeroCatalog()
+	end
+
+	method table GetHeroEntryByIndex(integer idx)
+		    for _, entry in ipairs(self:GetHeroCatalog()) do
+		        if entry.index == idx then return entry end
+		    end
+		    return nil
+	end
+
+	method table GetHeroEntryById(string id)
+		    for _, entry in ipairs(self:GetHeroCatalog()) do
+		        if entry.id == id then return entry end
+		    end
+		    return nil
+	end
+
+	method string GetAdventureHeroDataTypeName(integer idx)
+		    local entry = self:GetHeroEntryByIndex(idx)
+		    if entry ~= nil and entry.dataType ~= nil then
+		        return entry.dataType
+		    end
+		    return ""
+	end
+
+	method Component GetHeroSkillComponent(integer idx)
+		    -- 카탈로그의 skillType으로 해당 영웅의 전용 실행 컴포넌트를 조회한다. 없으면 nil.
+		    local typeName = self:GetHeroSkillTypeName(idx)
+		    if typeName == "" then return nil end
+		    return self.Entity:GetComponent(typeName)
+	end
+
+	method Component GetSelectedHeroSkill(integer idx)
+		    -- idx가 현재 선택된 영웅일 때만 전용 실행 컴포넌트를 돌려준다. 선택되지 않은 영웅의 로직은 호출되지 않는다.
+		    if self:GetSelectedHeroIndex() ~= idx then return nil end
+		    return self:GetHeroSkillComponent(idx)
+	end
+
+	method string GetHeroSkillTypeName(integer idx)
+		    local entry = self:GetHeroEntryByIndex(idx)
+		    if entry ~= nil and entry.skillType ~= nil then
+		        return entry.skillType
+		    end
+		    return ""
+	end
+
+	method integer GetSelectedHeroIndex()
+		    local unit = self.Entity:GetComponent("script.HeroUnit")
+		    if unit ~= nil then
+		        local entry = self:GetHeroEntryById(unit.HeroId)
+		        if entry ~= nil then return entry.index end
+		    end
+		    local entryById = self:GetHeroEntryById(self.heroId)
+		    if entryById ~= nil then return entryById.index end
+		    local entryByIndex = self:GetHeroEntryByIndex(self.heroIndex)
+		    if entryByIndex ~= nil then return entryByIndex.index end
+		    return 1
+	end
+
+	method string GetSelectedHeroId()
+		    local entryById = self:GetHeroEntryById(self.heroId)
+		    if entryById ~= nil then return entryById.id end
+		    local entryByIndex = self:GetHeroEntryByIndex(self.heroIndex)
+		    if entryByIndex ~= nil then return entryByIndex.id end
+		    return "dark_knight"
+	end
+
+	method string GetHeroDisplayText()
+		    local selectedIndex = self:GetSelectedHeroIndex()
+		    local entry = self:GetHeroEntryByIndex(selectedIndex)
+		    if entry ~= nil then
+		        return tostring(entry.index) .. ". " .. entry.name
+		    end
+		    local kit = self:BuildHeroKit(selectedIndex)
+		    return tostring(selectedIndex) .. ". " .. tostring(kit.name or "영웅")
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SetSelectedHeroByIndex(integer idx)
+		    local entry = self:GetHeroEntryByIndex(idx)
+		    if entry == nil then
+		        entry = self:GetHeroEntryByIndex(1)
+		    end
+		    if entry == nil then return end
+		    self.heroIndex = entry.index
+		    self.heroId = entry.id
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean SetSelectedHeroById(string requestedHeroId)
+		    local entry = self:GetHeroEntryById(requestedHeroId)
+		    if entry == nil then return false end
+		    self.heroIndex = entry.index
+		    self.heroId = entry.id
+		    return true
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EnsureHeroSelectionState()
+		    local selectedIndex = self:GetSelectedHeroIndex()
+		    local selectedId = self:GetSelectedHeroId()
+		    if self.heroIndex ~= selectedIndex then
+		        self.heroIndex = selectedIndex
+		    end
+		    if self.heroId ~= selectedId then
+		        self.heroId = selectedId
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EnsureAdventureHeroDataComponents()
+		    -- 직업별 수치/VFX는 HeroData 컴포넌트가 소유한다. 전용 실행 컴포넌트(skillType)는 데이터 컴포넌트 뒤에 붙인다.
+		    -- 컴포넌트가 붙어 있다는 사실이 활성화를 뜻하지는 않는다. 각 실행 컴포넌트는 선택된 영웅일 때만 동작한다.
+		    for idx = 1, 15 do
+		        if self.Entity:GetComponent("script.HeroUnit") ~= nil and idx ~= self:GetSelectedHeroIndex() then continue end
+		        local typeName = self:GetAdventureHeroDataTypeName(idx)
+		        if typeName ~= "" and self.Entity:GetComponent(typeName) == nil then
+		            local added = self.Entity:AddComponent(typeName)
+		            if added ~= nil then
+		            else
+		            end
+		        end
+		        local skillTypeName = self:GetHeroSkillTypeName(idx)
+		        if skillTypeName ~= "" and self.Entity:GetComponent(skillTypeName) == nil then
+		            local added = self.Entity:AddComponent(skillTypeName)
+		            if added ~= nil then
+		            else
+		            end
+		        end
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EnsureDamageSkinSettingComponent()
+		    -- 허수아비 같은 HitComponent 대상 위에 데미지 숫자가 뜨려면 공격자 쪽에도 DamageSkinSettingComponent가 필요하다.
+		    local damageSkinSetting = self.Entity.DamageSkinSettingComponent
+		    if damageSkinSetting == nil then
+		        local added = self.Entity:AddComponent("MOD.Core.DamageSkinSettingComponent")
+		        if added == nil then
+		            return
+		        end
+		        damageSkinSetting = self.Entity.DamageSkinSettingComponent
+		    end
+		    if damageSkinSetting ~= nil then
+		        damageSkinSetting.DamageSkinScale = Vector2(0.85, 0.85)
+		        damageSkinSetting.DelayPerAttack = 0.04
+		    end
+	end
+
+	method Component GetAdventureHeroDataComponent(integer idx)
+		    local typeName = self:GetAdventureHeroDataTypeName(idx)
+		    if typeName == "" then return nil end
+		    return self.Entity:GetComponent(typeName)
+	end
+
+	method table BuildHeroKit(integer idx)
+		    -- 히어로 인덱스(1~15)에 해당하는 이름과 Q/W/E/R/T 스킬 데이터 테이블을 반환. 수치는 각 HeroData 컴포넌트가 단일 출처다.
+		    local dataComp = self:GetAdventureHeroDataComponent(idx)
+		    if dataComp ~= nil then
+		        local kit = dataComp:BuildKit()
+		        local adapter = self.Entity:GetComponent("script.HeroUnitSkill")
+		        if adapter ~= nil then return adapter:PrepareKit(kit, idx) end
+		        return kit
+		    end
+		    return { name = "영웅 " .. tostring(idx) }
+	end
+
+	method table BuildHeroVfx(integer idx)
+		    -- msw-search로 실제 리소스가 확인된 히어로/스킬만 반환. 스킬 키가 테이블에 없으면 아직 VFX가
+		    -- 없다는 뜻(OnSyncProperty에서 로그만 남기고 재생은 스킵). 리소스와 배율은 각 HeroData 컴포넌트가 단일 출처다.
+		    local dataComp = self:GetAdventureHeroDataComponent(idx)
+		    if dataComp ~= nil then
+		        return dataComp:BuildVfx()
+		    end
+		    return {}
+	end
+
+	method table GetChainSpec(string chainId)
+		    -- 첫 입력이 후속 입력 창을 여는 연계 스킬(소울마스터 W/E/R, 스트라이커 Q/E/R)의 고정 설정을 돌려준다.
+		    -- stateKey: self._T.chainStates 안의 상태 키 / cooldownKey: self._T.cooldownEndAt 안의 공유 쿨다운 키
+		    -- awaitPhase: 후속 입력 대기 단계명 / openKey: 첫 입력 스킬키 / followKey: 후속 입력 스킬키
+		    -- fallbackSharedCooldown: 상태에 sharedCooldown이 없을 때 쓰는 값(소울마스터 1초, 스트라이커 0초)
+		    local specs = {
+		        soulMasterW = {
+		            label = "SoulMaster W", stateKey = "soulMasterWChain", cooldownKey = "6:WCHAIN",
+		            awaitPhase = "await_trace_cut", openKey = "WB", followKey = "WC", fallbackSharedCooldown = 1,
+		        },
+		        soulMasterE = {
+		            label = "SoulMaster E", stateKey = "soulMasterEChain", cooldownKey = "6:ECHAIN",
+		            awaitPhase = "await_moon_shadow", openKey = "EB", followKey = "EC", fallbackSharedCooldown = 1,
+		        },
+		        soulMasterR = {
+		            label = "SoulMaster R", stateKey = "soulMasterRChain", cooldownKey = "6:RCHAIN",
+		            awaitPhase = "await_crescent_divide", openKey = "RB", followKey = "RC", fallbackSharedCooldown = 1,
+		        },
+		        strikerQ = {
+		            label = "Striker Q", stateKey = "strikerQChain", cooldownKey = "9:QCHAIN",
+		            awaitPhase = "await_chung_a", openKey = "QB", followKey = "QC", fallbackSharedCooldown = 0,
+		        },
+		        strikerE = {
+		            label = "Striker E", stateKey = "strikerEChain", cooldownKey = "9:ECHAIN",
+		            awaitPhase = "await_thunder", openKey = "EB", followKey = "EC", fallbackSharedCooldown = 0,
+		        },
+		        strikerR = {
+		            label = "Striker R", stateKey = "strikerRChain", cooldownKey = "9:RCHAIN",
+		            awaitPhase = "await_byuk", openKey = "RB", followKey = "RC", fallbackSharedCooldown = 0,
+		        },
+		    }
+		    return specs[chainId]
+	end
+
+	method table GetChainState(table spec)
+		    -- 연계 상태를 조회한다. 후속 입력 창이 만료되면 남은 공유 쿨다운으로 넘기고, 쿨다운이 끝나면 상태를 지운다.
+		    local states = self._T.chainStates
+		    if states == nil then return nil end
+		    local state = states[spec.stateKey]
+		    if state == nil then return nil end
+		
+		    local now = _UtilLogic.ElapsedSeconds
+		    if state.phase == spec.awaitPhase and now > (state.expiresAt or 0) then
+		        if self._T.cooldownEndAt == nil then self._T.cooldownEndAt = {} end
+		        local cooldownUntil = (state.expiresAt or 0) + (state.sharedCooldown or spec.fallbackSharedCooldown)
+		        local currentReadyAt = self._T.cooldownEndAt[spec.cooldownKey] or 0
+		        if cooldownUntil > currentReadyAt then
+		            self._T.cooldownEndAt[spec.cooldownKey] = cooldownUntil
+		        end
+		        states[spec.stateKey] = nil
+		        return nil
+		    end
+		
+		    if state.phase == "cooldown" and now >= (state.cooldownEndAt or 0) then
+		        states[spec.stateKey] = nil
+		        return nil
+		    end
+		
+		    return state
+	end
+
+	method void ClearChainState(table spec)
+		    -- 연계 상태만 지운다(공유 쿨다운 값은 호출한 쪽에서 따로 다룬다).
+		    local states = self._T.chainStates
+		    if states == nil then return end
+		    states[spec.stateKey] = nil
+	end
+
+	method string ResolveChainCastKey(table spec)
+		    -- 첫 입력은 openKey, 후속 입력 창 안의 다음 입력은 followKey로 해석한다. 시전 잠금/공유 쿨다운 중이면 nil.
+		    local now = _UtilLogic.ElapsedSeconds
+		    local state = self:GetChainState(spec)
+		    if state ~= nil and now < (state.castUnlockAt or 0) then
+		        return nil
+		    end
+		
+		    if self._T.cooldownEndAt == nil then self._T.cooldownEndAt = {} end
+		    local sharedReadyAt = self._T.cooldownEndAt[spec.cooldownKey] or 0
+		    if now < sharedReadyAt then
+		        return nil
+		    end
+		
+		    if state ~= nil and state.phase == spec.awaitPhase and now <= (state.expiresAt or 0) then
+		        return spec.followKey
+		    end
+		
+		    return spec.openKey
+	end
+
+	method void CommitChainCast(table spec, string actualSkillKey, number castLock, number followupWindow, number sharedCooldown)
+		    -- 첫 입력이 나가면 followupWindow초짜리 후속 창을 열고, 후속 입력이 나가면 공유 쿨다운 상태로 전환한다.
+		    local now = _UtilLogic.ElapsedSeconds
+		    if self._T.chainStates == nil then self._T.chainStates = {} end
+		
+		    if actualSkillKey == spec.openKey then
+		        self._T.chainStates[spec.stateKey] = {
+		            phase = spec.awaitPhase,
+		            expiresAt = now + followupWindow,
+		            castUnlockAt = now + castLock,
+		            sharedCooldown = sharedCooldown,
+		        }
+		        return
+		    end
+		
+		    if self._T.cooldownEndAt == nil then self._T.cooldownEndAt = {} end
+		    local cooldownEndAt = now + castLock + sharedCooldown
+		    self._T.cooldownEndAt[spec.cooldownKey] = cooldownEndAt
+		    self._T.chainStates[spec.stateKey] = {
+		        phase = "cooldown",
+		        cooldownEndAt = cooldownEndAt,
+		        castUnlockAt = now + castLock,
+		        sharedCooldown = sharedCooldown,
+		    }
+	end
+
+	@ExecSpace("Server")
+	method void RequestCastSkill(string skillKey, Vector2 aimWorldPos)
+		-- 원본 플레이어 입력만 허용한다. RTS 입력은 HeroUnitSkill에서 소유권을 검사한다.
+		if self.Entity.PlayerComponent == nil or senderUserId ~= self.Entity.PlayerComponent.UserId then return end
+		self:CastForActor(skillKey, aimWorldPos)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CastForActor(string skillKey, Vector2 aimWorldPos)
+		-- 소유권을 확인한 서버 진입점; 직업별 원본 실행기를 그대로 호출한다.
+		if _CombatTeamLogic:IsDead(self.Entity) then return end
+		if self.Entity:GetComponent("script.HeroUnitSkill") ~= nil and _CombatTeamLogic:IsActionLocked(self.Entity) then return end
+		if skillKey ~= "Q" and skillKey ~= "W" and skillKey ~= "E" and skillKey ~= "R" and skillKey ~= "T" then return end
+		self:EnsureAdventureHeroDataComponents()
+		self:EnsureHeroSelectionState()
+		local selectedIndex = self:GetSelectedHeroIndex()
+		    local kit = self:BuildHeroKit(selectedIndex)
+		    local requestedSkillKey = skillKey
+		    local darkKnightGate = self:GetHeroSkillComponent(1)
+		    if darkKnightGate ~= nil and darkKnightGate:IsCycleCasting() then return end
+		    ---@type XenonSkillComponent
+		    local xenon = self.Entity:GetComponent("script.XenonSkillComponent")
+		    if xenon ~= nil and xenon.casting then return end
+		    local wildHunter = self.Entity:GetComponent("script.WildHunterSkillComponent")
+		    local heroStatus = self.Entity:GetComponent("script.HeroSkillStatusComponent")
+		    if heroStatus ~= nil and _UtilLogic.ElapsedSeconds < heroStatus.stunnedUntil then return end
+		    if selectedIndex == 11 then
+		        local mechanic = self.Entity:GetComponent("script.MechanicSkillComponent")
+		        if mechanic ~= nil then mechanic:TryCast(skillKey, aimWorldPos) end
+		        return
+		    end
+		    if selectedIndex == 12 then
+		        if wildHunter ~= nil then wildHunter:TryCast(skillKey, aimWorldPos) end
+		        return
+		    end
+		    if selectedIndex == 15 then
+		        -- 다른 HeroData와 동일한 script 타입명으로 등록된 컴포넌트를 조회한다.
+		        local blaster = self.Entity:GetComponent("script.BlasterSkillComponent")
+		        if blaster ~= nil then blaster:TryCast(skillKey, aimWorldPos) end
+		        return
+		    end
+		    local resolvedSkillKey = skillKey
+		    -- 2단 연계/충전 입력을 가진 영웅(소울마스터, 스트라이커)은 선택된 영웅의 전용 컴포넌트가 실제 시전 키를 정한다.
+		    local chainHero = self:GetSelectedHeroSkill(6) or self:GetSelectedHeroSkill(9)
+		    if chainHero ~= nil then
+		        resolvedSkillKey = chainHero:ResolveCastKey(requestedSkillKey, kit)
+		        if resolvedSkillKey == nil then return end
+		    end
+		
+		    local skill = kit[resolvedSkillKey]
+		    if skill == nil then
+		        return
+		    end
+		
+		    if self._T.cooldownEndAt == nil then self._T.cooldownEndAt = {} end
+		    local cdKey = tostring(selectedIndex) .. ":" .. resolvedSkillKey
+		    local chainCooldownKey = chainHero ~= nil and chainHero:GetCooldownKey(requestedSkillKey) or nil
+		    if chainCooldownKey ~= nil then
+		        cdKey = chainCooldownKey
+		    end
+		    local effectiveCooldown = self.designNoCooldown and 0 or (skill.cooldown or 0)
+		    local nightLord = self:GetSelectedHeroSkill(4)
+		    if nightLord ~= nil then effectiveCooldown = nightLord:ResolveCooldown(resolvedSkillKey, effectiveCooldown) end
+		    local nightWalker = self:GetSelectedHeroSkill(8)
+		    if nightWalker ~= nil then effectiveCooldown = nightWalker:ResolveCooldown(resolvedSkillKey, skill, effectiveCooldown) end
+		    local now = _UtilLogic.ElapsedSeconds
+		    local readyAt = self._T.cooldownEndAt[cdKey] or 0
+		    if effectiveCooldown > 0 and now < readyAt then
+		        return
+		    end
+		
+		    local casterPos3 = self.Entity.TransformComponent.WorldPosition
+		    local casterPos = Vector2(casterPos3.x, casterPos3.y)
+		    local rawAimDir = self:GetAimDirection(casterPos, aimWorldPos)
+		    local aimDir = self:GetResolvedSkillDirection(skill, rawAimDir)
+		
+		    if selectedIndex == 14 and (resolvedSkillKey == "R" or resolvedSkillKey == "T") then
+		        if xenon == nil or _CombatTeamLogic:IsDead(self.Entity) then return end
+		        self:AcceptActorCast(resolvedSkillKey, skill)
+		        xenon:BeginCast(resolvedSkillKey, skill, aimDir, aimWorldPos)
+		        if resolvedSkillKey == "R" then
+		            self:CastGeneric(kit.name, resolvedSkillKey, skill, aimDir, aimWorldPos)
+		        end
+		    else
+		        self:AcceptActorCast(resolvedSkillKey, skill)
+		        self:CastGeneric(kit.name, resolvedSkillKey, skill, aimDir, aimWorldPos)
+		    end
+		    -- 연계/충전 영웅은 자기 상태와 공유 쿨다운을 직접 커밋한다. 그렇지 않은 키만 기본 쿨다운을 쓴다.
+		    if chainHero == nil or not chainHero:CommitCast(requestedSkillKey, resolvedSkillKey, skill) then
+		        self._T.cooldownEndAt[cdKey] = now + effectiveCooldown
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void AcceptActorCast(string key, table skill)
+		-- RTS 연결이 있는 경우에만 승인된 시전의 이동 정책을 적용한다.
+		local adapter = self.Entity:GetComponent("script.HeroUnitSkill")
+		if adapter ~= nil then adapter:AcceptCast(key, skill) end
+	end
+
+	method Vector2 GetAimDirection(Vector2 casterPos, Vector2 aimWorldPos)
+		    -- 캐스터에서 조준 지점을 향하는 단위 방향 벡터. 캐스터 위치를 클릭하면 +X로 대체.
+		    local offset = aimWorldPos - casterPos
+		    if offset:Magnitude() < 0.01 then return Vector2(1, 0) end
+		    return offset:Normalize()
+	end
+
+	method Vector2 GetResolvedSkillDirection(table skill, Vector2 rawAimDir)
+		    -- 투사체가 아닌 전방 스킬은 마우스 각도를 그대로 따라가지 않고,
+		    -- 캐릭터 몸 기준의 좌/우 고정 방향만 사용한다.
+		    if skill == nil then return rawAimDir end
+		
+		    local skillClass = tostring(skill.skillClass or "")
+		    if skill.forceHorizontalAim == true then
+		        if rawAimDir.x >= 0 then
+		            return Vector2(1, 0)
+		        end
+		        return Vector2(-1, 0)
+		    end
+		    if skill.maxAimAngleDeg ~= nil then
+		        local maxAngleRad = math.rad(skill.maxAimAngleDeg)
+		        local facingSign = rawAimDir.x >= 0 and 1 or -1
+		        local horizontalAngle = math.atan(math.abs(rawAimDir.y), math.max(0.0001, math.abs(rawAimDir.x)))
+		        local clampedAngle = math.min(horizontalAngle, maxAngleRad)
+		        local dirX = math.cos(clampedAngle) * facingSign
+		        local dirY = math.sin(clampedAngle) * (rawAimDir.y >= 0 and 1 or -1)
+		        return Vector2(dirX, dirY):Normalize()
+		    end
+		    if skill.useRawAimDirection == true then
+		        return rawAimDir
+		    end
+		    if skill.useCurrentFacing == true then
+		        return self:GetCurrentFacingDirection(rawAimDir)
+		    end
+		    if skill.projectile == true then
+		        return rawAimDir
+		    end
+		    if skillClass == "ground_aoe" or skillClass == "install_zone" then
+		        return rawAimDir
+		    end
+		
+		    if rawAimDir.x >= 0 then
+		        return Vector2(1, 0)
+		    end
+		    return Vector2(-1, 0)
+	end
+
+	method Vector2 GetSkillAnchorPosition(table skill, Vector2 casterPos, Vector2 aimWorldPos, Vector2 aimDir)
+		    -- 자기중심 근접기/버프는 캐스터 기준, 장판/설치형은 조준 지점 기준으로 고정한다.
+		    if skill.anchorAtCaster == true then
+		        return casterPos
+		    end
+		    local skillClass = tostring(skill.skillClass or "")
+		    if skillClass == "ground_aoe" or skillClass == "install_zone" then
+		        local fixedPlacementDistance = tonumber(skill.fixedPlacementDistance or 0) or 0
+		        if fixedPlacementDistance > 0 then
+		            return casterPos + aimDir * (fixedPlacementDistance * self.rangeScale)
+		        end
+		        local adapter = self.Entity:GetComponent("script.HeroUnitSkill")
+		        if adapter ~= nil then
+		            local offset = aimWorldPos - casterPos
+		            if offset:Magnitude() > adapter.MaxGroundCastDistance then
+		                return casterPos + offset:Normalize() * adapter.MaxGroundCastDistance
+		            end
+		        end
+		        return aimWorldPos
+		    end
+		    return casterPos
+	end
+
+	method number ResolveCastMotionDelay(table skill)
+		    -- 판정이 시작되는 시점(초). "시전 모션이 다 재생된 뒤에 맞아야 한다"는 규칙을 여기 한 곳에서 관리한다.
+		    --
+		    -- castWindup은 원래 "캐스트~투사체 발사 사이 선딜"이라 이펙트 클립 길이와 아무 관계가 없다.
+		    -- 그래서 모션이 castWindup보다 길면 모션이 재생되는 도중에 피격 이펙트가 겹쳐서 떴다.
+		    -- castMotionDuration(시전 모션 재생 시간)을 적어두면 그만큼 기다렸다가 판정이 들어간다.
+		    -- 안 적은 스킬은 예전과 완전히 동일하게 동작한다(회귀 없음).
+		    if skill == nil then return self.castWindup end
+		
+		    local windup = skill.castWindup or self.castWindup
+		    local motionDuration = tonumber(skill.castMotionDuration or 0) or 0
+		    local floorTime = tonumber(self.minimumCastMotionTime or 0) or 0
+		
+		    local resolved = math.max(windup, motionDuration, floorTime)
+		    if resolved > windup then
+		    end
+		    return resolved
+	end
+
+	method integer ResolveRepeatCount(table skill)
+		    -- Lua에서는 0도 truthy라서, 단순히 "burstCount or tickCount"를 쓰면
+		    -- burstCount=0인 연사 스킬이 tickCount를 못 보고 1회만 발동하는 문제가 생긴다.
+		    if skill == nil then return 1 end
+		
+		    local burstCount = tonumber(skill.burstCount or 0) or 0
+		    if burstCount > 0 then
+		        return math.floor(burstCount)
+		    end
+		
+		    local tickCount = tonumber(skill.tickCount or 0) or 0
+		    if tickCount > 0 then
+		        return math.floor(tickCount)
+		    end
+		
+		    return 1
+	end
+
+	method boolean UseSimultaneousProjectileVolley(table skill)
+		    -- 나이트로드 표창처럼 "한 번 시전했을 때 여러 발이 동시에 보여야 하는" 스킬 전용 플래그.
+		    -- 보우마스터 속사류처럼 시간차 연사가 맞는 스킬은 false로 두고 기존 타이머를 그대로 탄다.
+		    if skill == nil then return false end
+		    return skill.projectile == true and skill.simultaneousVolley == true
+	end
+
+	method integer ResolveSimultaneousVolleyCount(table skill)
+		    if skill == nil then return 1 end
+		
+		    local projectileCount = tonumber(skill.projectileCount or 0) or 0
+		    if projectileCount > 1 then
+		        return math.floor(projectileCount)
+		    end
+		
+		    return self:ResolveRepeatCount(skill)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void StopSustainedAttachedEffect()
+		    -- 기존 InputComponent 호출 경로를 유지하며 등록된 연출 컴포넌트로 전달한다.
+		    ---@type HeroSkillEffectComponent
+		    local effectComp = self.Entity:GetComponent("script.HeroSkillEffectComponent")
+		    if effectComp ~= nil then effectComp:StopSustainedAttachedEffect() end
+	end
+
+	method integer ResolveShotDamage(table skill, integer shotNumber, integer totalShots)
+		    if skill == nil then return 0 end
+		
+		    local resolvedDamage = tonumber(skill.damage or 0) or 0
+		    local finalShotIndex = tonumber(skill.finalShotIndex or totalShots) or totalShots
+		    if shotNumber == finalShotIndex then
+		        if skill.finalShotDamage ~= nil then
+		            resolvedDamage = tonumber(skill.finalShotDamage) or resolvedDamage
+		        else
+		            local multiplier = tonumber(skill.finalShotDamageMultiplier or 1) or 1
+		            resolvedDamage = resolvedDamage * multiplier
+		        end
+		    end
+		    local dominionState = self:GetNightWalkerDominionState()
+		    if dominionState ~= nil and self:IsNightWalkerDominionEnhancedSkill(self:GetSelectedHeroIndex(), "", skill) then
+		        resolvedDamage = resolvedDamage * (dominionState.damageMultiplier or 1.5)
+		    end
+		    return math.max(1, math.floor(resolvedDamage))
+	end
+
+	method number GetProjectileLateralOffset(table skill, integer shotIndex)
+		    -- 같은 방향으로 여러 발을 쏘는 표창/총알 스킬은 각 발을 살짝 평행 이동시켜
+		    -- 실제로 2발/3발/4발이 눈에 구분되게 만든다.
+		    if skill == nil then return 0 end
+		    local totalShots = tonumber(skill.projectileCount or 0) or 0
+		    if totalShots <= 1 then
+		        totalShots = self:ResolveRepeatCount(skill)
+		    end
+		    if totalShots <= 1 then return 0 end
+		
+		    local lateralStep = tonumber(skill.projectileLateralStep or 0) or 0
+		    if lateralStep <= 0 then return 0 end
+		
+		    local centeredIndex = shotIndex - ((totalShots - 1) * 0.5)
+		    return centeredIndex * lateralStep
+	end
+
+	method Vector2 GetFallbackImpactPoint(table skill, Vector2 casterPos, Vector2 anchorPos, Vector2 aimDir, number scaledLength)
+		    -- 실제 명중 대상을 못 잡았을 때를 위한 보조 위치.
+		    local skillClass = tostring(skill.skillClass or "")
+		    if skillClass == "ground_aoe" or skillClass == "install_zone" then
+		        return anchorPos
+		    end
+		    if skill.hitShape == "self" or skill.shape == "self" then
+		        return casterPos
+		    end
+		    return casterPos + aimDir * math.max(0.3, scaledLength * 0.75)
+	end
+
+	method Vector2 GetImpactPointFromHits(table hitComponents, Vector2 fallbackPos)
+		    -- 피격 이펙트는 실제로 맞은 첫 대상 위치를 우선 사용한다.
+		    for _, hitComp in ipairs(hitComponents) do
+		        local defender = hitComp.Entity
+		        if isvalid(defender) and defender.TransformComponent ~= nil then
+		            local pos3 = defender.TransformComponent.WorldPosition
+		            return Vector2(pos3.x, pos3.y)
+		        end
+		    end
+		    return fallbackPos
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EmitImpactSync(string skillKey, Vector2 impactPos)
+		    -- 단일 대상 피격 이펙트 동기화.
+		    self.lastImpact = skillKey .. ":" .. tostring(impactPos.x) .. ":" .. tostring(impactPos.y) .. ":" .. tostring(_UtilLogic.ElapsedSeconds)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EmitImpactBatchSync(string skillKey, table hitComponents, integer maxEffects)
+		    -- 다수 대상이 동시에 맞을 때는 대상별 월드 좌표를 한 번에 보내 개별 피격 이펙트를 재생한다.
+		    local segments = { skillKey, tostring(_UtilLogic.ElapsedSeconds) }
+		    local emitted = 0
+		    local limit = maxEffects or #hitComponents
+		    for _, hitComp in ipairs(hitComponents) do
+		        if emitted >= limit then break end
+		        local defender = hitComp.Entity
+		        if isvalid(defender) and defender.TransformComponent ~= nil then
+		            local pos3 = defender.TransformComponent.WorldPosition
+		            table.insert(segments, tostring(pos3.x) .. "," .. tostring(pos3.y))
+		            emitted = emitted + 1
+		        end
+		    end
+		    if emitted <= 0 then return end
+		    self.lastImpactBatch = table.concat(segments, "#")
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EmitFriendlyImpactBatchSync(string skillKey, table entities, integer maxEffects)
+		    -- 아군 지원 스킬은 적 타격과 별개로, 버프/회복 이펙트 좌표를 따로 동기화한다.
+		    local segments = { skillKey, tostring(_UtilLogic.ElapsedSeconds) }
+		    local emitted = 0
+		    local limit = maxEffects or #entities
+		    for _, entity in ipairs(entities) do
+		        if emitted >= limit then break end
+		        if isvalid(entity) and entity.TransformComponent ~= nil then
+		            local pos3 = entity.TransformComponent.WorldPosition
+		            table.insert(segments, tostring(pos3.x) .. "," .. tostring(pos3.y))
+		            emitted = emitted + 1
+		        end
+		    end
+		    if emitted <= 0 then return end
+		    self.lastFriendlyImpactBatch = table.concat(segments, "#")
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EmitMarkedBatchSync(string skillKey, table hitComponents, number duration, integer maxEffects)
+		    -- 표식 유지 이펙트는 맞은 적들의 좌표와 지속시간을 함께 보내 클라이언트에서 반복 재생한다.
+		    local segments = { skillKey, tostring(duration or 0), tostring(_UtilLogic.ElapsedSeconds) }
+		    local emitted = 0
+		    local limit = maxEffects or #hitComponents
+		    for _, hitComp in ipairs(hitComponents) do
+		        if emitted >= limit then break end
+		        local defender = hitComp.Entity
+		        if isvalid(defender) and defender.TransformComponent ~= nil then
+		            local pos3 = defender.TransformComponent.WorldPosition
+		            table.insert(segments, tostring(pos3.x) .. "," .. tostring(pos3.y))
+		            emitted = emitted + 1
+		        end
+		    end
+		    if emitted <= 0 then return end
+		    self.lastMarkedBatch = table.concat(segments, "#")
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EmitThrowBlastBatchSync(string skillKey, table hitComponents, integer maxEffects)
+		    -- 스로우 블래스팅 추가 폭발 이펙트는 적중한 적 위치마다 순차 재생한다.
+		    local segments = { skillKey, tostring(_UtilLogic.ElapsedSeconds) }
+		    local emitted = 0
+		    local limit = maxEffects or #hitComponents
+		    for _, hitComp in ipairs(hitComponents) do
+		        if emitted >= limit then break end
+		        local defender = hitComp.Entity
+		        if isvalid(defender) and defender.TransformComponent ~= nil then
+		            local pos3 = defender.TransformComponent.WorldPosition
+		            table.insert(segments, tostring(pos3.x) .. "," .. tostring(pos3.y))
+		            emitted = emitted + 1
+		        end
+		    end
+		    if emitted <= 0 then return end
+		    self.lastThrowBlastBatch = table.concat(segments, "#")
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EmitNightWalkerBatFlightSync(integer slotIndex, table points)
+		    if points == nil or #points < 3 then return end
+		
+		    local segments = { tostring(slotIndex or 0), tostring(_UtilLogic.ElapsedSeconds) }
+		    for _, point in ipairs(points) do
+		        table.insert(segments, tostring(point.x) .. "," .. tostring(point.y))
+		    end
+		    self.lastNightWalkerBatFlight = table.concat(segments, "#")
+	end
+
+	method table GetImpactBatchTokens(string rawValue)
+		    local tokens = {}
+		    for token in string.gmatch(tostring(rawValue or ""), "([^#]+)") do
+		        table.insert(tokens, token)
+		    end
+		    return tokens
+	end
+
+	method integer ResolveNightWalkerBatUnlockTier()
+		    -- 해금 단계 기준:
+		    -- W 해금 = 1, E 해금 = 2, R 해금 = 3, T 해금 = 4
+		    return math.max(0, math.min(4, tonumber(self.nightWalkerBatUnlockTier or 0) or 0))
+	end
+
+	method table GetNightWalkerBatConfig()
+		    -- 박쥐 수치는 NightWalkerHeroDataComponent가 소유한다. 해금 단계(designer property)만 여기서 읽어 넘긴다.
+		    -- 서버 판정과 클라이언트 연출이 같은 값을 읽는다.
+		    local dataComp = self:GetAdventureHeroDataComponent(8)
+		    return dataComp:BuildBatConfig(self:ResolveNightWalkerBatUnlockTier())
+	end
+
+	method Vector2 GetGalePosition(Vector2 startPos, number dirX, number travelDistance, number travelSpeed, number elapsed)
+		    -- 회오리는 시전 방향으로 나아갔다가 되돌아오기를 반복한다(삼각파 왕복).
+		    -- 서버 판정과 클라이언트 이펙트가 같은 식을 써야 위치가 어긋나지 않는다.
+		    if travelDistance <= 0 or travelSpeed <= 0 then
+		        return startPos
+		    end
+		    local cycleLength = travelDistance * 2
+		    local traveled = (travelSpeed * math.max(elapsed, 0)) % cycleLength
+		    local offset = traveled
+		    if traveled > travelDistance then
+		        offset = cycleLength - traveled
+		    end
+		    return Vector2(startPos.x + dirX * offset, startPos.y)
+	end
+
+	method void BeginAttackTargetFilter(string attackInfo, integer maxTargets)
+		    -- 기존 호출과 실행 공간을 유지하고 공격 계산 컴포넌트에 위임한다.
+		    local attackLogic = self:GetAttackLogicComponent()
+		    if attackLogic == nil then return end
+		    attackLogic:BeginAttackTargetFilter(attackInfo, maxTargets)
+	end
+
+	method void EndAttackTargetFilter(string attackInfo)
+		    -- 기존 호출과 실행 공간을 유지하고 공격 계산 컴포넌트에 위임한다.
+		    local attackLogic = self:GetAttackLogicComponent()
+		    if attackLogic == nil then return end
+		    attackLogic:EndAttackTargetFilter(attackInfo)
+	end
+
+	method boolean IsAttackTarget(Entity defender, string attackInfo)
+		-- RTS HP 대상은 어댑터 한 경로로만 피해를 받는다.
+		if self.Entity:GetComponent("script.HeroUnitSkill") ~= nil and (defender:GetComponent("script.Unit_Info") ~= nil or defender:GetComponent("script.Structure_Info") ~= nil) then return false end
+		    -- 기존 호출과 실행 공간을 유지하고 공격 계산 컴포넌트에 위임한다.
+		    if __base:IsAttackTarget(defender, attackInfo) ~= true then return false end
+		    local attackLogic = self:GetAttackLogicComponent()
+		    if attackLogic == nil then return false end
+		    return attackLogic:AcceptAttackTarget(defender, attackInfo)
+	end
+
+	method any BuildFrontBox(Vector2 casterPos, Vector2 aimDir, number length, number width)
+		    -- 기존 호출과 실행 공간을 유지하고 공격 계산 컴포넌트에 위임한다.
+		    local attackLogic = self:GetAttackLogicComponent()
+		    if attackLogic == nil then return BoxShape(Vector2(0, 0), Vector2(0, 0), 0) end
+		    return attackLogic:BuildFrontBox(casterPos, aimDir, length, width)
+	end
+
+	method any BuildCenteredBox(Vector2 centerPos, Vector2 aimDir, number length, number width)
+		    -- 기존 호출과 실행 공간을 유지하고 공격 계산 컴포넌트에 위임한다.
+		    local attackLogic = self:GetAttackLogicComponent()
+		    if attackLogic == nil then return BoxShape(Vector2(0, 0), Vector2(0, 0), 0) end
+		    return attackLogic:BuildCenteredBox(centerPos, aimDir, length, width)
+	end
+
+	method number ResolveEffectScaleMultiplier(table skill)
+		    -- 기존 호출과 실행 공간을 유지하고 공격 계산 컴포넌트에 위임한다.
+		    local attackLogic = self:GetAttackLogicComponent()
+		    if attackLogic == nil then return 1 end
+		    return attackLogic:ResolveEffectScaleMultiplier(skill)
+	end
+
+	method number ResolveEffectBaseLength(table skill)
+		    -- 기존 호출과 실행 공간을 유지하고 공격 계산 컴포넌트에 위임한다.
+		    local attackLogic = self:GetAttackLogicComponent()
+		    if attackLogic == nil then return 0 end
+		    return attackLogic:ResolveEffectBaseLength(skill, self.rangeScale)
+	end
+
+	method number ResolveEffectBaseWidth(table skill)
+		    -- 기존 호출과 실행 공간을 유지하고 공격 계산 컴포넌트에 위임한다.
+		    local attackLogic = self:GetAttackLogicComponent()
+		    if attackLogic == nil then return 0 end
+		    return attackLogic:ResolveEffectBaseWidth(skill, self.rangeScale)
+	end
+
+	method table ResolveHitboxDimensions(table skill)
+		    -- 기존 호출과 실행 공간을 유지하고 공격 계산 컴포넌트에 위임한다.
+		    local attackLogic = self:GetAttackLogicComponent()
+		    if attackLogic == nil then return { shape = skill.hitShape or skill.shape, length = 0, width = 0 } end
+		    return attackLogic:ResolveHitboxDimensions(skill, self.rangeScale, self.minimumEffectHitPadding)
+	end
+
+	method table ResolveImpactHitboxDimensions(table skill)
+		    -- 기존 호출과 실행 공간을 유지하고 공격 계산 컴포넌트에 위임한다.
+		    local attackLogic = self:GetAttackLogicComponent()
+		    if attackLogic == nil then return { shape = skill.hitShape or skill.shape, length = 0, width = 0 } end
+		    return attackLogic:ResolveImpactHitboxDimensions(skill, self.rangeScale, self.minimumEffectHitPadding)
+	end
+
+	method Vector2 GetCurrentFacingDirection(Vector2 fallbackAimDir)
+		    -- 채널링 중 캐릭터에 붙어 따라다니는 스킬은 현재 좌우 방향을 다시 읽어 전방 판정을 갱신한다.
+		    local transform = self.Entity.TransformComponent
+		    if transform == nil then return fallbackAimDir end
+		    local facingRight = transform.Scale.x < 0
+		    local dirX = facingRight and 1 or -1
+		    return Vector2(dirX, 0)
+	end
+
+	method any ResolveSkillVisualShape(string skillKey, table skill, Vector2 origin, Vector2 aim, Vector2 direction, any fallback)
+		    local vfx = self:BuildHeroVfx(self:GetSelectedHeroIndex())[skillKey]
+		    if vfx == nil or vfx.effect == nil then return fallback end
+		    local position = origin + direction * (vfx.effectForwardOffset or skill.effectForwardOffset or 0)
+		        + Vector2(0, vfx.effectVerticalOffset or skill.effectVerticalOffset or 0)
+		    if vfx.effectUseAimWorldPos == true then position = aim
+		    elseif vfx.effectUsePathMidpoint == true then position = (origin + aim) * 0.5 end
+		    local scale = (skill.effectScaleMultiplier or 1) * (vfx.castVisualScaleMultiplier or 1)
+		    local scaleX = scale
+		    if vfx.effectScaleFromAimDistance == true then
+		        scaleX = scale * math.max(0.05, math.min(1, (aim - origin):Magnitude() / math.max(0.001, (skill.length or 1) * self.rangeScale)))
+		            * (vfx.effectDistanceScaleMultiplier or skill.effectDistanceScaleMultiplier or 1)
+		    end
+		    local angle = skill.allowEffectRotation == true and math.atan(direction.y, direction.x) or 0
+		    local measured = self:GetAttackLogicComponent():BuildMeasuredPathBox(vfx.effect, position, direction, scaleX, scale, angle)
+		    return measured or fallback
+	end
+
+	method void BindVisualHitBounds(string skillKey, table skill)
+		    local vfx = self:BuildHeroVfx(self:GetSelectedHeroIndex())[skillKey]
+		    if vfx == nil then return end
+		    skill.hitUsingCastVisual = skill.projectile == true and vfx.effect0 == nil and vfx.ball == nil
+		    skill.visualBoundsRuid = vfx.tickEffect or vfx.effect
+		    skill.visualBoundsScale = (skill.effectScaleMultiplier or 1) * (vfx.castVisualScaleMultiplier or 1)
+		        * self:GetEnhancedVisualScaleMultiplier(self:GetSelectedHeroIndex(), skillKey, skill)
+		    skill.visualBoundsOffset = vfx.tickEffectForwardOffset or vfx.effectForwardOffset or skill.effectForwardOffset or 0
+		    skill.visualBoundsY = vfx.effectVerticalOffset or skill.effectVerticalOffset or 0
+	end
+
+	method table BuildRuntimeHitContext(table skill, Vector2 fallbackAimWorldPos, Vector2 fallbackAimDir)
+		    -- 시전 순간 고정 스킬과, 채널링 동안 캐릭터를 따라다녀야 하는 스킬을 같은 파이프라인에서 처리한다.
+		    local currentPos3 = self.Entity.TransformComponent.WorldPosition
+		    local casterPos = Vector2(currentPos3.x, currentPos3.y)
+		    local aimDir = fallbackAimDir
+		    if skill.followCasterAimDuringChannel == true then
+		        aimDir = self:GetCurrentFacingDirection(fallbackAimDir)
+		    end
+		
+		    local resolvedHitbox = self:ResolveHitboxDimensions(skill)
+		    local scaledLength = resolvedHitbox.length * self.rangeScale
+		    local scaledWidth = resolvedHitbox.width * self.rangeScale
+		    local throwBlastingState = self:GetThrowBlastingState()
+		    if throwBlastingState ~= nil and self:IsThrowBlastingEnhancedSkill(self:GetSelectedHeroIndex(), "", skill) then
+		        scaledLength = scaledLength * (throwBlastingState.rangeMultiplier or 1.2)
+		        scaledWidth = scaledWidth * (throwBlastingState.rangeMultiplier or 1.2)
+		    end
+		    local dominionState = self:GetNightWalkerDominionState()
+		    if dominionState ~= nil and self:IsNightWalkerDominionEnhancedSkill(self:GetSelectedHeroIndex(), "", skill) then
+		        scaledLength = scaledLength * (dominionState.rangeMultiplier or 1.5)
+		        scaledWidth = scaledWidth * (dominionState.rangeMultiplier or 1.5)
+		    end
+		    local anchorPos = self:GetSkillAnchorPosition(skill, casterPos, fallbackAimWorldPos, aimDir)
+		    local skillClass = tostring(skill.skillClass or "")
+		
+		    local shape = nil
+		    if resolvedHitbox.shape == "self" then
+		        shape = CircleShape(anchorPos, math.max(scaledLength, scaledWidth))
+		    elseif skillClass == "ground_aoe" or skillClass == "install_zone" then
+		        shape = self:BuildCenteredBox(anchorPos, aimDir, scaledLength, scaledWidth)
+		    else
+		        shape = self:BuildFrontBox(anchorPos, aimDir, scaledLength, scaledWidth)
+		    end
+		
+		    if skill.visualBoundsRuid ~= nil and (skill.projectile ~= true or skill.hitUsingCastVisual == true) then
+		        local visualPosition = anchorPos + aimDir * (skill.visualBoundsOffset or 0) + Vector2(0, skill.visualBoundsY or 0)
+		        local visualShape = self:GetAttackLogicComponent():BuildMeasuredEffectBox(skill.visualBoundsRuid, visualPosition, aimDir, (skill.visualBoundsScale or 1) * (skill.hitBoundsScaleMultiplier or 1))
+		        if visualShape ~= nil then shape = visualShape end
+		    end
+		
+		    return {
+		        casterPos = casterPos,
+		        aimDir = aimDir,
+		        anchorPos = anchorPos,
+		        shape = shape,
+		        scaledLength = scaledLength,
+		        scaledWidth = scaledWidth,
+		    }
+	end
+
+	@ExecSpace("ServerOnly")
+	method void PullTargetsToFront(table hitComponents, Vector2 destination, number duration)
+		    local map = self.Entity.CurrentMap
+		    for _, hit in ipairs(hitComponents) do
+		        local target = hit.Entity
+		        if target:GetComponent("script.UnitMoveComponent") ~= nil then
+		            _CombatTeamLogic:ForceMove(target, destination, duration)
+		            continue
+		        end
+		        local body = target.KinematicbodyComponent
+		        if body ~= nil then
+		            local started = _UtilLogic.ElapsedSeconds
+		            local origin = target.TransformComponent.WorldPosition:ToVector2()
+		            local timerId = nil
+		            timerId = _TimerService:SetTimerRepeat(function()
+		                if not isvalid(target) or target.CurrentMap ~= map or not isvalid(self.Entity) then
+		                    if isvalid(body) then body.MoveVelocity = Vector2(0, 0) end
+		                    _TimerService:ClearTimer(timerId)
+		                    return
+		                end
+		                local progress = math.min(1, (_UtilLogic.ElapsedSeconds - started) / math.max(duration, 0.02))
+		                body.MoveVelocity = Vector2(0, 0)
+		                body:SetWorldPosition(origin + (destination - origin) * progress)
+		                if progress >= 1 then _TimerService:ClearTimer(timerId) end
+		            end, 0.02, 0.02)
+		        end
+		    end
+	end
+
+	method void ApplyPull(table hitComponents, Vector2 casterPos, number pullSpeed, number pullDuration)
+		    -- 다크나이트 W처럼 "끌어오기" 효과가 있는 스킬에서 맞은 대상들을 캐스터 쪽으로 잠깐 당김.
+		    for _, hitComp in ipairs(hitComponents) do
+		        local defender = hitComp.Entity
+		        if isvalid(defender) then
+		            local kinBody = defender.KinematicbodyComponent
+		            if kinBody ~= nil then
+		                local defenderPos3 = defender.TransformComponent.WorldPosition
+		                local defenderPos = Vector2(defenderPos3.x, defenderPos3.y)
+		                local pullOffset = casterPos - defenderPos
+		                local pullDir = Vector2(1, 0)
+		                if pullOffset:Magnitude() > 0.01 then pullDir = pullOffset:Normalize() end
+		                if defender:GetComponent("script.UnitMoveComponent") ~= nil then
+		                    _CombatTeamLogic:ForceMove(defender, defenderPos + pullDir * pullSpeed * pullDuration, pullDuration)
+		                    continue
+		                end
+		                kinBody.MoveVelocity = pullDir * pullSpeed
+		                _TimerService:SetTimerOnce(function()
+		                    if isvalid(kinBody) then kinBody.MoveVelocity = Vector2(0, 0) end
+		                end, pullDuration)
+		            end
+		        end
+		    end
+	end
+
+	method void ApplyKnockback(table hitComponents, Vector2 casterPos, number knockbackSpeed, number knockbackDuration)
+		    -- 페어리 턴처럼 "밀어내는 바람"인 스킬에서 맞은 대상들을 캐스터 반대쪽으로 잠깐 밀어낸다.
+		    -- ApplyPull과 방향만 반대다.
+		    for _, hitComp in ipairs(hitComponents) do
+		        local defender = hitComp.Entity
+		        if isvalid(defender) then
+		            local kinBody = defender.KinematicbodyComponent
+		            if kinBody ~= nil then
+		                local defenderPos3 = defender.TransformComponent.WorldPosition
+		                local defenderPos = Vector2(defenderPos3.x, defenderPos3.y)
+		                local pushOffset = defenderPos - casterPos
+		                local pushDir = Vector2(1, 0)
+		                if pushOffset:Magnitude() > 0.01 then pushDir = pushOffset:Normalize() end
+		                if defender:GetComponent("script.UnitMoveComponent") ~= nil then
+		                    _CombatTeamLogic:ForceMove(defender, defenderPos + pushDir * knockbackSpeed * knockbackDuration, knockbackDuration)
+		                    continue
+		                end
+		                kinBody.MoveVelocity = pushDir * knockbackSpeed
+		                _TimerService:SetTimerOnce(function()
+		                    if isvalid(kinBody) then kinBody.MoveVelocity = Vector2(0, 0) end
+		                end, knockbackDuration)
+		            else
+		            end
+		        end
+		    end
+	end
+
+	method string GetOwnerUserId(Entity target)
+		-- RTS 소유자와 원본 플레이어의 동일한 계정 식별자.
+		if not isvalid(target) then return "" end
+		local unit = target:GetComponent("script.Unit_Info")
+		if unit ~= nil then return unit.PlayerID end
+		return target.PlayerComponent ~= nil and target.PlayerComponent.UserId or ""
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean IsSameOwner(Entity a, Entity b)
+		    -- 진영 비교는 CombatTeamLogic으로 일원화한다. 여기는 호출부 호환용 얇은 래퍼로만 남긴다.
+		    if not isvalid(a) or not isvalid(b) then
+		        return false
+		    end
+		    return _CombatTeamLogic:IsAlly(a, b)
+	end
+
+	@ExecSpace("ServerOnly")
+	method Vector2 GetEntityWorldPos2(Entity target)
+		    local pos3 = target.TransformComponent.WorldPosition
+		    return Vector2(pos3.x, pos3.y)
+	end
+
+	@ExecSpace("ServerOnly")
+	method table CollectEnemyUnitCandidates()
+		-- 합본 몬스터/유닛과 원본 소환체 모두 같은 적아군 규칙을 사용한다.
+		local result = {}
+		for _, actor in ipairs(_CombatTeamLogic:GetCombatCandidates(self.Entity.CurrentMap)) do
+			if _CombatTeamLogic:IsEnemy(self.Entity, actor) then table.insert(result, actor) end
+		end
+		return result
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EmitGaleTravelSync(boolean isLarge, table plan)
+		    -- 회오리는 매 틱 좌표를 보내지 않고, 이동 계획을 한 번만 보낸다.
+		    -- 클라이언트는 GetGalePosition으로 같은 식을 돌려서 위치를 재현한다(sync 1회).
+		    self.lastGaleTravel = (isLarge and "L" or "S")
+		        .. "#" .. tostring(plan.duration)
+		        .. "#" .. tostring(_UtilLogic.ElapsedSeconds)
+		        .. "#" .. tostring(plan.startPos.x) .. "," .. tostring(plan.startPos.y)
+		        .. "#" .. tostring(plan.dirX)
+		        .. "#" .. tostring(plan.travelDistance)
+		        .. "#" .. tostring(plan.travelSpeed)
+	end
+
+	@ExecSpace("Server")
+	method void RequestCastWindGale(Vector2 aimWorldPos, number heldSeconds)
+		    -- 하울링 게일 전용 진입점. 일반 스킬과 달리 "얼마나 눌렀는지"를 같이 받아야 해서 따로 둔다.
+		    if self.Entity.PlayerComponent == nil or senderUserId ~= self.Entity.PlayerComponent.UserId then
+		        return
+		    end
+		
+		    local selectedIndex = self:GetSelectedHeroIndex()
+		    local kit = self:BuildHeroKit(selectedIndex)
+		    local skill = kit ~= nil and kit.T or nil
+		    if skill == nil or tostring(skill.skillClass or "") ~= "wind_gale" then
+		        return
+		    end
+		
+		    if self._T.cooldownEndAt == nil then self._T.cooldownEndAt = {} end
+		    local cdKey = tostring(selectedIndex) .. ":T"
+		    local now = _UtilLogic.ElapsedSeconds
+		    local readyAt = self._T.cooldownEndAt[cdKey] or 0
+		    if (not self.designNoCooldown) and now < readyAt then
+		        return
+		    end
+		    self._T.cooldownEndAt[cdKey] = now + (skill.cooldown or 90)
+		
+		    local casterPos3 = self.Entity.TransformComponent.WorldPosition
+		    local casterPos = Vector2(casterPos3.x, casterPos3.y)
+		    local aimDir = self:GetAimDirection(casterPos, aimWorldPos)
+		    local isLarge = true
+		
+		    local windBreaker = self:GetHeroSkillComponent(10)
+		    if windBreaker == nil then
+		        return
+		    end
+		    windBreaker:CastWindGale(kit.name, "T", skill, aimDir, aimWorldPos, isLarge)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplyMark(table hitComponents, number duration, number multiplier)
+		    -- 쇼다운 챌린지에 맞은 대상은 짧은 시간 동안 이 영웅의 후속 공격 피해를 더 받는다.
+		    if self._T.markedTargets == nil then self._T.markedTargets = {} end
+		    local expiresAt = _UtilLogic.ElapsedSeconds + duration
+		    for _, hitComp in ipairs(hitComponents) do
+		        local defender = hitComp.Entity
+		        if isvalid(defender) then
+		            self._T.markedTargets[defender.Id] = { expiresAt = expiresAt, multiplier = multiplier }
+		        end
+		    end
+	end
+
+	method number GetEnhancedVisualScaleMultiplier(integer selectedIndex, string skillKey, table skill)
+		    local scale = 1
+		    if selectedIndex == 4 then
+		        local nightLord = self:GetHeroSkillComponent(4)
+		        if nightLord ~= nil then scale = scale * nightLord:GetVisualScaleMultiplier(skillKey, skill) end
+		    end
+		    if selectedIndex == 8 then
+		        local nightWalker = self:GetHeroSkillComponent(8)
+		        if nightWalker ~= nil then scale = scale * nightWalker:GetNightWalkerDominionVisualScaleMultiplier(selectedIndex, skillKey, skill) end
+		    end
+		    return scale
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EmitDominionBatchSync(string skillKey, table hitComponents, integer maxFxCount)
+		    if hitComponents == nil or #hitComponents <= 0 then return end
+		    local parts = { skillKey, tostring(_UtilLogic.ElapsedSeconds) }
+		    local written = 0
+		    for _, hitComp in ipairs(hitComponents) do
+		        local defender = hitComp.Entity
+		        if isvalid(defender) and defender.TransformComponent ~= nil then
+		            local pos3 = defender.TransformComponent.WorldPosition
+		            table.insert(parts, tostring(pos3.x) .. "," .. tostring(pos3.y))
+		            written = written + 1
+		            if maxFxCount ~= nil and maxFxCount > 0 and written >= maxFxCount then
+		                break
+		            end
+		        end
+		    end
+		    if written > 0 then
+		        self.lastDominionBatch = table.concat(parts, "#")
+		    end
+	end
+
+	method table GetThrowBlastingState()
+		    -- 스로우 블래스팅 상태는 NightLordSkillComponent가 소유한다. 공통 히트 컨텍스트와 클라이언트 연출이 조회하는 얇은 위임이다.
+		    local nightLord = self:GetHeroSkillComponent(4)
+		    if nightLord == nil then return nil end
+		    return nightLord:GetThrowBlastingState()
+	end
+
+	method boolean IsThrowBlastingEnhancedSkill(integer selectedIndex, string skillKey, table skill)
+		    -- 나이트로드가 선택된 경우에만 강화 대상이 된다. 판정 자체는 NightLordSkillComponent가 소유한다.
+		    if selectedIndex ~= 4 or skill == nil then return false end
+		    local nightLord = self:GetHeroSkillComponent(4)
+		    if nightLord == nil then return false end
+		    return nightLord:IsEnhancedSkill(skillKey, skill)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CastGeneric(string heroName, string skillKey, table skill, Vector2 aimDir, Vector2 aimWorldPos)
+		    self:BindVisualHitBounds(skillKey, skill)
+		    self._T.rtsLockUntil = math.max(self._T.rtsLockUntil or 0, _UtilLogic.ElapsedSeconds + (skill.moveLockDuration or 0))
+		    local castMap = self.Entity.CurrentMap
+		    local castHero = self:GetSelectedHeroIndex()
+		    local darkCycleToken = nil
+		    local darkKnight = self:GetHeroSkillComponent(1)
+		    if castHero == 1 and skillKey == "T" and darkKnight ~= nil then
+		        darkCycleToken = darkKnight:BeginDarkCycle(castMap, skill)
+		    end
+		    -- 모든 히어로 공통 캐스팅 처리: 좌우 반전, 공격 모션, VFX 트리거(lastCast), 판정 실행(단발 또는 틱 반복).
+		    if math.abs(aimDir.x) > 0.01 then
+		        local transform = self.Entity.TransformComponent
+		        local scaleNow = transform.Scale
+		        -- 기본(안 뒤집은) 아바타 그림이 왼쪽을 보고 있어서, 오른쪽을 보려면 Scale.x가 음수여야 함.
+		        local sign = aimDir.x >= 0 and -1 or 1
+		        transform.Scale = Vector3(math.abs(scaleNow.x) * sign, scaleNow.y, scaleNow.z)
+		    end
+		
+		    -- 기본 아바타의 StateComponent는 로컬 클라이언트가 소유한다. 다크나이트처럼
+		    -- clientAttackMotion을 명시한 스킬은 lastCast 동기화 직후 클라이언트에서 ATTACK을
+		    -- 재생해, 모션보다 VFX/판정이 먼저 나가는 서버 권한 경합을 피한다.
+		    if skill.clientAttackMotion ~= true then
+		        local state = self.Entity.StateComponent
+		        if state ~= nil then
+		            state:ChangeState("ATTACK")
+		        elseif self.Entity:GetComponent("script.HeroUnitVisual") == nil then
+		        end
+		    end
+		
+		    local strikerSkillClass = tostring(skill.skillClass or "")
+		    if strikerSkillClass == "striker_flash" or strikerSkillClass == "striker_wave"
+		        or strikerSkillClass == "striker_ascend" or strikerSkillClass == "striker_thunder" then
+		        local striker = self:GetHeroSkillComponent(9)
+		        if striker ~= nil then
+		            striker:CastSkillClass(strikerSkillClass, heroName, skillKey, skill, aimDir, aimWorldPos)
+		        else
+		        end
+		        return
+		    end
+		
+		    if tostring(skill.skillClass or "") == "wind_gale" then
+		        -- 차징 없이 일반 경로로 들어온 경우(예외)는 작은 회오리로 처리한다.
+		        local windBreaker = self:GetHeroSkillComponent(10)
+		        if windBreaker ~= nil then windBreaker:CastWindGale(heroName, skillKey, skill, aimDir, aimWorldPos, true) end
+		        return
+		    end
+		
+		    if skill.deathEnhanceTier ~= nil then
+		        local battleMage = self:GetSelectedHeroSkill(13)
+		        if battleMage ~= nil then battleMage:UnlockDeath(skill.deathEnhanceTier, skillKey) end
+		    end
+		
+		    local aimAngle = math.atan(aimDir.y, aimDir.x)
+		    local castPosition = self.Entity.TransformComponent.WorldPosition
+		    self.lastCast = skillKey .. ":" .. tostring(aimAngle) .. ":" .. tostring(aimWorldPos.x) .. ":" .. tostring(aimWorldPos.y) .. ":" .. tostring(castPosition.x) .. ":" .. tostring(castPosition.y) .. ":" .. tostring(_UtilLogic.ElapsedSeconds)
+		
+		    if skill.heal then
+		        local healWindup = skill.castWindup or self.castWindup
+		        local bishop = self:GetHeroSkillComponent(2)
+		        if bishop == nil then
+		            return
+		        end
+		        _TimerService:SetTimerOnce(function()
+		            if skill.healMode == "fountain_aura" then
+		                local livePos3 = self.Entity.TransformComponent.WorldPosition
+		                local installPos = Vector2(livePos3.x, livePos3.y)
+		                bishop:CastFountainAura(skill, skill.name or skillKey, installPos)
+		            else
+		                bishop:CastHealTicks(skill, skill.name or skillKey)
+		            end
+		        end, healWindup)
+		        return
+		    end
+		
+		    if skill.throwBlastingBuff == true then
+		        local buffWindup = skill.castWindup or self.castWindup
+		        _TimerService:SetTimerOnce(function()
+		            if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		            local nightLord = self:GetHeroSkillComponent(4)
+		            if nightLord ~= nil then nightLord:ActivateThrowBlasting(skill) end
+		        end, buffWindup)
+		        return
+		    end
+		
+		    if skill.dominionBuff == true then
+		        local buffWindup = skill.castWindup or self.castWindup
+		        _TimerService:SetTimerOnce(function()
+		            if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		            local nightWalker = self:GetHeroSkillComponent(8)
+		            if nightWalker ~= nil then nightWalker:ActivateNightWalkerDominion(skill) end
+		        end, buffWindup)
+		        return
+		    end
+		
+		    if tostring(skill.skillClass or "") == "peace_maker" then
+		        local bishop = self:GetHeroSkillComponent(2)
+		        if bishop ~= nil then bishop:CastPeaceMaker(heroName, skillKey, skill, aimDir, aimWorldPos) end
+		        return
+		    end
+		
+		    local casterPos3 = self.Entity.TransformComponent.WorldPosition
+		    local casterPos = Vector2(casterPos3.x, casterPos3.y)
+		    local initialHitContext = self:BuildRuntimeHitContext(skill, aimWorldPos, aimDir)
+		
+		    -- burst는 고정 발수 연사, tick은 장판/채널링이다. 두 형식은 같은 공통 판정 루프를 쓰되 데이터 의미를 섞지 않는다.
+		    local repeatCount = self:ResolveRepeatCount(skill)
+		    local repeatInterval = skill.shotInterval or skill.tickInterval or 1
+		    -- 시전 모션이 다 나온 뒤에 판정이 들어가도록 한다.
+		    local windup = self:ResolveCastMotionDelay(skill)
+		
+		    -- 판정 1회 실행. projectile 스킬이면 "스킬별 선딜(공격 모션) + 비행 시간"만큼 지연시켜서, 캐릭터 위치에서
+		    -- 투사체가 실제로 발사되고 사거리 끝까지 날아간 뒤에 맞는 느낌을 줌(클라이언트 투사체 비주얼과 동일 타이밍).
+		    local healedThisCast = false
+		    local resolveHit = function(damageOverride, activationIndex, phaseSkill, phaseSkillKey, contextOverride, infoOverride)
+		        if not isvalid(self.Entity) or self.Entity.CurrentMap ~= castMap or self:GetSelectedHeroIndex() ~= castHero or _CombatTeamLogic:IsDead(self.Entity) then return end
+		        if darkCycleToken ~= nil and not darkKnight:IsCycleActive(darkCycleToken) then return end
+		        local activeSkill = phaseSkill or skill
+		        local activeSkillKey = phaseSkillKey or skillKey
+		        local hitContext = contextOverride or initialHitContext
+		        if contextOverride == nil and (activeSkill.followCasterDuringChannel == true or phaseSkill ~= nil) then
+		            hitContext = self:BuildRuntimeHitContext(activeSkill, aimWorldPos, aimDir)
+		        end
+		        local attackDamage = damageOverride or activeSkill.damage
+		        self._T.attackSerialCounter = (self._T.attackSerialCounter or 0) + 1
+		        local attackInfo = infoOverride or (activeSkillKey .. ":" .. tostring(self._T.attackSerialCounter) .. ":" .. tostring(attackDamage))
+		        local attackShape = hitContext.shape
+		        local impactAnchorPos = hitContext.casterPos + hitContext.aimDir * hitContext.scaledLength
+		        if activeSkill.hitAtImpact == true then
+		            local impactHitbox = self:ResolveImpactHitboxDimensions(activeSkill)
+		            attackShape = self:BuildCenteredBox(
+		                impactAnchorPos,
+		                hitContext.aimDir,
+		                impactHitbox.length * self.rangeScale,
+		                impactHitbox.width * self.rangeScale
+		            )
+		            local impactVfx = self:BuildHeroVfx(castHero)[skillKey]
+		            if impactVfx ~= nil and impactVfx.impact ~= nil then
+		                local measured = self:GetAttackLogicComponent():BuildMeasuredEffectBox(impactVfx.impact, impactAnchorPos, hitContext.aimDir,
+		                    impactVfx.impactScaleMultiplier or activeSkill.impactScaleMultiplier or activeSkill.effectScaleMultiplier or 1)
+		                if measured ~= nil then attackShape = measured end
+		            end
+		        end
+		
+		        if infoOverride == nil then self:BeginAttackTargetFilter(attackInfo, activeSkill.maxTargets or 0) end
+		        local hitComponents = self:PerformAttack(attackShape, attackInfo)
+		        if infoOverride == nil then self:EndAttackTargetFilter(attackInfo) end
+		        if infoOverride == nil or #hitComponents > 0 then  end
+		        if activeSkill.pull then
+		            if activeSkill.pullToFront == true then
+		                self:PullTargetsToFront(hitComponents, hitContext.casterPos + hitContext.aimDir * 0.8, activeSkill.pullDuration or 0.42)
+		            else
+		                self:ApplyPull(hitComponents, hitContext.anchorPos, activeSkill.pullSpeed or 6, activeSkill.pullDuration or 0.3)
+		            end
+		        end
+		        if activeSkill.knockback then
+		            self:ApplyKnockback(hitComponents, hitContext.anchorPos, activeSkill.knockbackSpeed or 4.6, activeSkill.knockbackDuration or 0.16)
+		        end
+		        if (activeSkill.stunDuration or 0) > 0 then
+		            local stunOwner = self.Entity:GetComponent("script.HeroSkillStatusComponent")
+		            if stunOwner ~= nil then
+		                for _, hit in ipairs(hitComponents) do
+		                    stunOwner:StunTarget(hit.Entity, activeSkill.stunDuration, (self:BuildHeroVfx(castHero)[skillKey] or {}).stunEffect)
+		                end
+		            end
+		        end
+		        local shouldApplyMark = activeSkill.mark == true
+		        if shouldApplyMark and activeSkill.markOnlyOnFirstHit == true then
+		            shouldApplyMark = (activationIndex or 1) == 1
+		        end
+		        if shouldApplyMark then
+		            self:ApplyMark(hitComponents, activeSkill.markDuration or 5, activeSkill.markMultiplier or 1.15)
+		            self:EmitMarkedBatchSync(activeSkillKey, hitComponents, activeSkill.markDuration or 5, activeSkill.maxMarkFxCount or activeSkill.maxTargets or #hitComponents)
+		        end
+		        local nightLordHit = self:GetSelectedHeroSkill(4)
+		        if nightLordHit ~= nil then nightLordHit:TryApplyExplosion(activeSkillKey, activeSkill, hitComponents) end
+		        local nightWalkerHit = self:GetSelectedHeroSkill(8)
+		        if nightWalkerHit ~= nil then nightWalkerHit:TryApplyDominionExtraHit(activeSkillKey, activeSkill, hitComponents) end
+		        if activeSkill.healOnHit and not healedThisCast and #hitComponents > 0 then
+		            local bishop = self:GetHeroSkillComponent(2)
+		            if bishop ~= nil then
+		                healedThisCast = true
+		                bishop:ApplyHealOnHit(activeSkill, activeSkill.name or activeSkillKey, #hitComponents)
+		            end
+		        end
+		        if #hitComponents > 0 then
+		            local battleMage = self:GetSelectedHeroSkill(13)
+		            if battleMage ~= nil then battleMage:ProcessKills(hitComponents) end
+		            if nightWalkerHit ~= nil then nightWalkerHit:TryTriggerNightWalkerShadowBat(activeSkillKey, activeSkill, hitComponents) end
+		            if activeSkill.emitImpactPerTarget == true or infoOverride ~= nil then
+		                local syncKey = skillKey .. "@" .. tostring(activationIndex or 1)
+		                self:EmitImpactBatchSync(syncKey, hitComponents, activeSkill.maxImpactFxCount or activeSkill.maxTargets or #hitComponents)
+		            else
+		                local fallbackImpactPos = impactAnchorPos
+		                if activeSkill.hitAtImpact ~= true then
+		                    fallbackImpactPos = self:GetFallbackImpactPoint(activeSkill, hitContext.casterPos, hitContext.anchorPos, hitContext.aimDir, hitContext.scaledLength)
+		                end
+		                local impactPos = self:GetImpactPointFromHits(hitComponents, fallbackImpactPos)
+		                self:EmitImpactSync(skillKey, impactPos)
+		            end
+		        end
+		    end
+		    if (skill.castLeadHitCount or 0) > 0 and (skill.projectileHitCount or 0) > 0 and skill.projectile == true then
+		        local castLeadSkill = {
+		            shape = skill.shape,
+		            hitShape = skill.hitShape,
+		            length = skill.castLeadLength or skill.hitLength or skill.length,
+		            width = skill.castLeadWidth or skill.hitWidth or skill.width,
+		            hitLength = skill.castLeadLength or skill.hitLength or skill.length,
+		            hitWidth = skill.castLeadWidth or skill.hitWidth or skill.width,
+		            visualVsHitDelta = skill.visualVsHitDelta,
+		            damage = skill.damage,
+		            maxTargets = skill.maxTargets,
+		            maxImpactFxCount = skill.maxImpactFxCount,
+		            emitImpactPerTarget = true,
+		        }
+		        local castLeadCount = math.max(0, math.floor(skill.castLeadHitCount or 0))
+		        local castLeadInterval = skill.castLeadTickInterval or 0.08
+		        for castIndex = 1, castLeadCount do
+		            _TimerService:SetTimerOnce(function()
+		                if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		                resolveHit(nil, castIndex, castLeadSkill, skillKey .. ":CAST", nil, nil)
+		            end, windup + ((castIndex - 1) * castLeadInterval))
+		        end
+		
+		        local projectileSpeed = skill.projectileSpeed or self.projectileSpeed
+		        local travelTime = initialHitContext.scaledLength / projectileSpeed
+		        local projectileFireDelay = skill.projectileFireDelay or 0
+		        local sharkHitCount = math.max(0, math.floor(skill.projectileHitCount or 0))
+		        local sharkHitInterval = skill.projectileHitInterval or 0.08
+		        for sharkIndex = 1, sharkHitCount do
+		            _TimerService:SetTimerOnce(function()
+		                if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		                resolveHit(nil, castLeadCount + sharkIndex, skill, skillKey, nil, nil)
+		            end, windup + projectileFireDelay + travelTime + ((sharkIndex - 1) * sharkHitInterval))
+		        end
+		        return
+		    end
+		    local fireOnce = function(shotNumber)
+		        local resolvedShotNumber = shotNumber or 1
+		        local shotDamage = self:ResolveShotDamage(skill, resolvedShotNumber, repeatCount)
+		        if skill.projectile then
+		            local projectileSpeed = skill.projectileSpeed or self.projectileSpeed
+		            local travelTime = initialHitContext.scaledLength / projectileSpeed
+		            -- 시전 모션(effect/tickEffect)이 먼저 보이고, 실제 투사체는 그 직후 발사되게 맞춘다.
+		            local projectileFireDelay = skill.projectileFireDelay or 0
+		            _TimerService:SetTimerOnce(function()
+		                if not isvalid(self.Entity) or self.Entity.CurrentMap ~= castMap or self:GetSelectedHeroIndex() ~= castHero then return end
+		                local context = {}
+		                for key, value in pairs(initialHitContext) do context[key] = value end
+		                if skill.followCasterDuringChannel == true then context = self:BuildRuntimeHitContext(skill, aimWorldPos, aimDir) end
+		                local vfx = self:BuildHeroVfx(castHero)[skillKey] or {}
+		                local ruid = vfx.effect0 or vfx.ball
+		                if resolvedShotNumber == repeatCount then ruid = vfx.finalProjectileRuid or vfx.finalBall or ruid end
+		                local bounds = ruid ~= nil and self:GetAttackLogicComponent():GetMeasuredEffectBounds(ruid) or nil
+		                if bounds == nil or skill.hitAtImpact == true then
+		                    _TimerService:SetTimerOnce(function() resolveHit(shotDamage, resolvedShotNumber, nil, nil, context, nil) end, travelTime)
+		                    return
+		                end
+		                local direction = context.aimDir
+		                local startOffset = vfx.effectForwardOffset or skill.projectileStartForwardOffset or skill.effectForwardOffset or 0
+		                local vertical = vfx.projectileVerticalOffset or skill.projectileVerticalOffset or 0
+		                local lateral = self:GetProjectileLateralOffset(skill, resolvedShotNumber - 1)
+		                local base = context.casterPos + Vector2(0, vertical) + Vector2(-direction.y, direction.x) * lateral
+		                local start = base + direction * startOffset
+		                local finish = base + direction * context.scaledLength
+		                local scale = (skill.projectileScaleMultiplier or 1) * self:GetEnhancedVisualScaleMultiplier(castHero, skillKey, skill)
+		                local sign = direction.x >= 0 and -1 or 1
+		                local offset = Vector2((bounds[1] + bounds[3]) * 0.5 * scale * sign, (bounds[2] + bounds[4]) * 0.5 * scale)
+		                local width = (bounds[3] - bounds[1]) * scale
+		                local height = (bounds[4] - bounds[2]) * scale
+		                self._T.attackSerialCounter = (self._T.attackSerialCounter or 0) + 1
+		                local info = skillKey .. ":" .. tostring(self._T.attackSerialCounter) .. ":" .. tostring(shotDamage)
+		                self:BeginAttackTargetFilter(info, skill.maxTargets or 0)
+		                local started = _UtilLogic.ElapsedSeconds
+		                local previous = start
+		                local timerId = nil
+		                local sweep = function()
+		                    if not isvalid(self.Entity) or self.Entity.CurrentMap ~= castMap or self:GetSelectedHeroIndex() ~= castHero or _CombatTeamLogic:IsDead(self.Entity) then
+		                        self:EndAttackTargetFilter(info)
+		                        if timerId ~= nil then _TimerService:ClearTimer(timerId) end
+		                        return
+		                    end
+		                    local fraction = math.min(1, (_UtilLogic.ElapsedSeconds - started) / math.max(travelTime, 0.02))
+		                    local point = start + (finish - start) * fraction
+		                    local displacement = point - previous
+		                    local center = (point + previous) * 0.5 + offset
+		                    context.shape = BoxShape(center, Vector2(width + math.abs(displacement.x), height + math.abs(displacement.y)), 0)
+		                    resolveHit(shotDamage, resolvedShotNumber, nil, nil, context, info)
+		                    previous = point
+		                    if fraction >= 1 then
+		                        self:EndAttackTargetFilter(info)
+		                        if timerId ~= nil then _TimerService:ClearTimer(timerId) end
+		                    end
+		                end
+		                sweep()
+		                timerId = _TimerService:SetTimerRepeat(sweep, 0.02, 0.02)
+		            end, windup + projectileFireDelay)
+		        else
+		            _TimerService:SetTimerOnce(function()
+		                resolveHit(shotDamage, resolvedShotNumber, nil, nil, nil, nil)
+		            end, windup)
+		        end
+		    end
+		
+		    -- 즉시 첫 틱을 실행한다. SetTimerRepeat만 쓰면 모든 다단 스킬이 첫 타격까지 tickInterval만큼
+		    -- 멈춰 있어 조작 반응과 투사체/VFX 타이밍이 어긋난다. 설치형도 casterPos/shape를 지금 고정하므로
+		    -- 시전자가 이동해도 원래 위치를 지키는 지대로 남는다.
+		    local firedShotCount = 1
+		    fireOnce(firedShotCount)
+		    if self:UseSimultaneousProjectileVolley(skill) then
+		        -- 이미 첫 발은 예약했고, 나머지도 같은 시점에 함께 예약해서 2/3/4발이 실제로 동시에 보이게 한다.
+		        for volleyIndex = 2, repeatCount do
+		            firedShotCount = firedShotCount + 1
+		            fireOnce(firedShotCount)
+		        end
+		    elseif repeatCount > 1 then
+		        local repeatsLeft = repeatCount - 1
+		        local timerId = nil
+		        local fireRepeat = function()
+		            firedShotCount = firedShotCount + 1
+		            fireOnce(firedShotCount)
+		            repeatsLeft = repeatsLeft - 1
+		            if repeatsLeft <= 0 and timerId ~= nil then
+		                _TimerService:ClearTimer(timerId)
+		            end
+		        end
+		        timerId = _TimerService:SetTimerRepeat(fireRepeat, repeatInterval, skill.repeatStartDelay or repeatInterval)
+		    end
+		
+		    if skill.finalBurstDamage ~= nil then
+		        local finalDelay = skill.finalBurstDelay
+		        if finalDelay == nil then
+		            finalDelay = (math.max(repeatCount, 1) - 1) * repeatInterval
+		        end
+		        _TimerService:SetTimerOnce(function()
+		            local finalSkill = {}
+		            for key, value in pairs(skill) do finalSkill[key] = value end
+		            local finalVfx = self:BuildHeroVfx(castHero)[skillKey]
+		            if finalVfx ~= nil and finalVfx.effect2 ~= nil then
+		                finalSkill.visualBoundsRuid = finalVfx.effect2
+		                finalSkill.visualBoundsOffset = finalVfx.effect2ForwardOffset or skill.effectForwardOffset or 0
+		            end
+		            resolveHit(skill.finalBurstDamage, nil, finalSkill, nil, nil, nil)
+		        end, windup + finalDelay)
+		    end
+	end
+
+	@ExecSpace("Server")
+	method void RequestSelectHeroById(string requestedHeroId)
+		    self:EnsureAdventureHeroDataComponents()
+		    self:EnsureHeroSelectionState()
+		    if self.Entity.PlayerComponent == nil or senderUserId ~= self.Entity.PlayerComponent.UserId then
+		        return
+		    end
+		    if self:SetSelectedHeroById(requestedHeroId) then
+		    else
+		    end
+	end
+
+	@ExecSpace("Server")
+	method void RequestSwitchHero(integer delta)
+		    -- 좌상단 이전/다음 버튼에서 호출. 내부적으로는 "현재 선택된 heroId 기준 다음/이전 영웅 선택"이다.
+		    self:EnsureAdventureHeroDataComponents()
+		    self:EnsureHeroSelectionState()
+		    if self.Entity.PlayerComponent == nil or senderUserId ~= self.Entity.PlayerComponent.UserId then
+		        return
+		    end
+		    local catalogCount = self:GetHeroCatalogCount()
+		    local currentIndex = self:GetSelectedHeroIndex()
+		    local newIndex = currentIndex + delta
+		    if newIndex < 1 then newIndex = catalogCount end
+		    if newIndex > catalogCount then newIndex = 1 end
+		    self:SetSelectedHeroByIndex(newIndex)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshHeroNameText()
+		    local nameTextEntity = _EntityService:GetEntityByPath("/ui/HeroSwitchUI/Panel/HeroNameText")
+		    if isvalid(nameTextEntity) then
+		        nameTextEntity.TextGUIRendererComponent.Text = self:GetHeroDisplayText()
+		    end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSyncProperty(string name, any value)
+		    -- Sync 소유권은 이 컴포넌트에 유지한다. 먼저 도착한 알림도 순서대로 전달한다.
+		    if self._T.pendingEffectSync == nil then self._T.pendingEffectSync = {} end
+		    table.insert(self._T.pendingEffectSync, { name = name, value = value })
+		    self:FlushPendingEffectSync()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EnsureHeroSkillAttackLogicComponent()
+		    -- 기존 Input/Effect처럼 서버에서 한 번 추가하고 클라이언트로 복제한다.
+		    if self.Entity:GetComponent("script.HeroSkillAttackLogicComponent") ~= nil then return end
+		    local added = self.Entity:AddComponent("script.HeroSkillAttackLogicComponent")
+		    if added == nil then
+		        log_error("HeroSkillComponent: failed to attach HeroSkillAttackLogicComponent")
+		        return
+		    end
+	end
+
+	method HeroSkillAttackLogicComponent GetAttackLogicComponent()
+		    -- 매번 같은 엔티티에서 조회해 삭제된 참조를 보관하지 않는다. 누락은 조용히 무시하지 않는다.
+		    ---@type HeroSkillAttackLogicComponent
+		    local attackLogic = self.Entity:GetComponent("script.HeroSkillAttackLogicComponent")
+		    if attackLogic == nil then
+		    end
+		    return attackLogic
+	end
+
+	method integer CalcDamage(Entity attacker, Entity defender, string attackInfo)
+		    -- attackInfo가 "스킬키:데미지" 형태로 인코딩되어 있어(예: "Q:150") 뒤쪽 숫자만 파싱해서 반환.
+		    -- 쇼다운 표식 대상이면 현재 영웅의 후속 피해에 한해 배율을 적용한다.
+		    local dmgStr = string.match(attackInfo, ":(-?[%d%.]+)$")
+		    local dmg = tonumber(dmgStr) or 1
+		    if self._T.markedTargets ~= nil and isvalid(defender) then
+		        local mark = self._T.markedTargets[defender.Id]
+		        if mark ~= nil then
+		            if _UtilLogic.ElapsedSeconds < mark.expiresAt then
+		                dmg = dmg * mark.multiplier
+		            else
+		                self._T.markedTargets[defender.Id] = nil
+		            end
+		        end
+		    end
+		    return math.floor(dmg)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EnsureHeroSkillEffectComponent()
+		    -- 기존 Input/Data 컴포넌트와 같은 서버 추가 패턴. 중복 생성을 막는다.
+		    if self.Entity:GetComponent("script.HeroSkillEffectComponent") ~= nil then return end
+		    local added = self.Entity:AddComponent("script.HeroSkillEffectComponent")
+		    if added == nil then
+		        return
+		    end
+	end
+
+	method void EnsureHeroSkillStatusComponent()
+		    -- 기절처럼 여러 히어로가 공유하는 상태이상은 선택된 히어로와 무관하게 항상 붙어 있어야 한다.
+		    -- 특정 히어로의 실행 컴포넌트(예: WildHunterSkillComponent)에 얹혀가지 않도록 여기서 직접 보장한다.
+		    if self.Entity:GetComponent("script.HeroSkillStatusComponent") ~= nil then return end
+		    local added = self.Entity:AddComponent("script.HeroSkillStatusComponent")
+		    if added == nil then
+		        return
+		    end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void FlushPendingEffectSync()
+		    -- 컴포넌트 복제 순서가 늦어도 알림을 버리거나 같은 알림을 두 번 재생하지 않는다.
+		    local pending = self._T.pendingEffectSync
+		    if pending == nil or #pending == 0 then return end
+		    ---@type HeroSkillEffectComponent
+		    local effectComp = self.Entity:GetComponent("script.HeroSkillEffectComponent")
+		    if effectComp == nil then return end
+		    self._T.pendingEffectSync = nil
+		    for _, item in ipairs(pending) do
+		        effectComp:HandleSkillSync(item.name, item.value)
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method table PerformAttack(any shape, string attackInfo)
+		-- 원본 판정 형태/타수/필터를 보존하고 HP 변경만 합본 경로로 전달한다.
+		if _CombatTeamLogic:IsDead(self.Entity) then return {} end
+		local adapter = self.Entity:GetComponent("script.HeroUnitSkill")
+		if adapter ~= nil then return adapter:AttackShape(shape, attackInfo) end
+		return self:Attack(shape, attackInfo)
+	end
+
+end

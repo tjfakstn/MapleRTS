@@ -1,0 +1,134 @@
+@Logic
+script HeroSkillAssetLogic extends Logic
+
+	@DisplayName("데이터셋 이름")
+	property string DataSetName = "Hero_Skill_Asset_DataSet"
+
+	@DisplayName("사용시 볼륨")
+	property number UseVolume = 0.8
+
+	@DisplayName("사용중 볼륨")
+	property number LoopVolume = 0.6
+
+	@DisplayName("사용끝 볼륨")
+	property number EndVolume = 0.7
+
+	@DisplayName("hit 볼륨")
+	property number HitVolume = 0.7
+
+	@DisplayName("사용중 소리가 나는 시점(시전 시간 대비 비율)")
+	property number LoopAtRatio = 0.35
+
+	@DisplayName("같은 대상 hit 소리 최소 간격(초)")
+	property number SameHitInterval = 0.08
+
+	method table HeroIdsByIndex()
+		-- HeroSkillComponent.GetHeroCatalog의 index → id 대응(같은 순서).
+		return { "dark_knight", "bishop", "bowmaster", "night_lord", "captain", "soul_master", "flame_wizard",
+			"night_walker", "striker", "wind_breaker", "mechanic", "wild_hunter", "battle_mage", "xenon", "blaster" }
+	end
+
+	method table Rows()
+		-- 데이터셋을 한 번만 읽어 "heroId:스킬키" → { use, loop, endSound, hit, icon } 표로 캐시한다(서버/클라 각각).
+		if self._T.rows ~= nil then return self._T.rows end
+		local rows = {}
+		local temp = _DataService:GetTable(self.DataSetName)
+		if temp == nil then
+			self._T.rows = rows
+			return rows
+		end
+		for idx = 1, temp:GetRowCount() do
+			local heroId = temp:GetCell(idx, "heroId")
+			local skill = temp:GetCell(idx, "skill")
+			if heroId ~= nil and heroId ~= "" and skill ~= nil and skill ~= "" then
+				rows[heroId .. ":" .. skill] = {
+					use = temp:GetCell(idx, "useSound") or "",
+					loop = temp:GetCell(idx, "loopSound") or "",
+					endSound = temp:GetCell(idx, "endSound") or "",
+					hit = temp:GetCell(idx, "hitSound") or "",
+					icon = temp:GetCell(idx, "icon") or "",
+				}
+			end
+		end
+		self._T.rows = rows
+		return rows
+	end
+
+	method table GetRow(string heroId, string skillKey)
+		-- 스킬 키는 첫 글자(Q/W/E/R/T)로 본다(EB/EC 같은 연계 단계 키도 같은 스킬 칸 데이터를 쓴다).
+		if heroId == nil or heroId == "" or skillKey == nil or skillKey == "" then return nil end
+		return self:Rows()[heroId .. ":" .. string.sub(skillKey, 1, 1)]
+	end
+
+	method boolean Owns(integer heroIndex, string skillKey, string field)
+		-- 이 영웅/스킬의 field("use" / "loop" / "hit")를 데이터셋이 가지고 있는가. 있으면 기존 BuildVfx 사운드는 건너뛴다.
+		local heroId = self:HeroIdsByIndex()[heroIndex]
+		local row = self:GetRow(heroId, skillKey)
+		if row == nil then return false end
+		return row[field] ~= nil and row[field] ~= ""
+	end
+
+	method string GetIcon(string heroId, string skillKey)
+		local row = self:GetRow(heroId, skillKey)
+		if row == nil then return "" end
+		return row.icon or ""
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnCastAccepted(Entity hero, string key, number duration)
+		-- 스킬 사용 상태에 맞춰 소리를 낸다: 사용시(즉시) → 사용중(시전 시간의 LoopAtRatio 지점) → 사용끝(시전이 끝나는 시점).
+		if not isvalid(hero) then return end
+		---@type HeroUnit
+		local hu = hero:GetComponent("script.HeroUnit")
+		if hu == nil then return end
+		local row = self:GetRow(hu.HeroId, key)
+		if row == nil then return end
+		if row.use ~= "" then self:BroadcastPlay(hero, row.use, self.UseVolume) end
+		if row.loop ~= "" then
+			local ruid = row.loop
+			_TimerService:SetTimerOnce(function()
+				if isvalid(hero) then self:BroadcastPlay(hero, ruid, self.LoopVolume) end
+			end, math.max(0.05, duration * self.LoopAtRatio))
+		end
+		if row.endSound ~= "" then
+			local ruid = row.endSound
+			_TimerService:SetTimerOnce(function()
+				if isvalid(hero) then self:BroadcastPlay(hero, ruid, self.EndVolume) end
+			end, math.max(0.1, duration))
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnSkillHit(Entity attacker, Entity victim, string attackInfo)
+		-- 스킬에 맞은 엔티티(victim)에게서 hit 소리를 낸다. attackInfo는 "스킬키:시리얼:피해" 형식이다.
+		if not isvalid(attacker) or not isvalid(victim) or attackInfo == nil then return end
+		---@type HeroUnit
+		local hu = attacker:GetComponent("script.HeroUnit")
+		if hu == nil then return end
+		local skillKey = string.match(attackInfo, "^(%a+):")
+		if skillKey == nil then return end
+		local row = self:GetRow(hu.HeroId, skillKey)
+		if row == nil or row.hit == "" then return end
+		-- 다단 히트가 한 대상에게 연달아 들어가도 소리가 겹쳐 뭉개지지 않게 대상별로 간격을 둔다.
+		if self._T.lastHit == nil then self._T.lastHit = {} end
+		local hitKey = tostring(victim.Id) .. ":" .. row.hit
+		local now = _UtilLogic.ElapsedSeconds
+		local last = self._T.lastHit[hitKey]
+		if last ~= nil and now - last < self.SameHitInterval then return end
+		self._T.lastHit[hitKey] = now
+		self:BroadcastPlay(victim, row.hit, self.HitVolume)
+	end
+
+	@ExecSpace("Multicast")
+	method void BroadcastPlay(Entity source, string ruid, number volume)
+		-- 모든 클라이언트에서 source 엔티티가 내 화면 범위·시야 안에 있을 때만 재생한다(유닛 사운드와 같은 규칙).
+		if ruid == nil or ruid == "" or not isvalid(source) then return end
+		if not _SoundResources:InHearingRange(source) then return end
+		if not _SoundResources:TryConsume(ruid) then return end
+		-- 설정 창 "영웅 소리" 배율을 곱한다(0이면 재생하지 않는다).
+		volume = volume * _GameSettingsLogic.HeroMult
+		if volume <= 0.001 then return end
+		_SoundService:PlaySound(ruid, volume)
+	end
+
+end

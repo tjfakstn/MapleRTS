@@ -1,0 +1,30 @@
+@Component
+script UIButtonAction extends Component
+
+	property integer SlotIndex = 0
+
+	property string ModelId = ""
+
+	property string ActionId = ""
+
+	property Entity Building = nil
+
+	property table BuildData = {}
+
+	@EventSender("Self")
+	handler HandleButtonClickEvent(ButtonClickEvent event)
+		--------------- Native Event Sender Info ----------------
+		-- Sender: ButtonComponent
+		-- Space: Client
+		---------------------------------------------------------
+		
+		-- Parameters
+		-- local Entity = event.Entity
+		---------------------------------------------------------
+		if self.Entity ~= event.Entity or self.SlotIndex <= 0 then
+			return
+		end
+		_CommandCardLogic:ExecuteSlot(self.SlotIndex, false)
+	end
+
+end

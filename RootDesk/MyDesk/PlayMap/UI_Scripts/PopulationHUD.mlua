@@ -1,0 +1,95 @@
+@Component
+script PopulationHUD extends Component
+
+	property TextGUIRendererComponent AmountText = "b42a4c0c-61d6-43d5-af7a-6b7aa791ee22"
+
+	property string PlayMapName = "map02"
+
+	property number TickInterval = 0.5
+
+	@HideFromInspector
+	property any _timerId = nil
+
+	@HideFromInspector
+	property string _lastText = ""
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		-- 주기 갱신 타이머를 건다.
+		self._lastText = ""
+		self._timerId = _TimerService:SetTimerRepeat(function() self:Refresh() end, self.TickInterval)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		-- 타이머 해제.
+		if self._timerId ~= nil then
+			_TimerService:ClearTimer(self._timerId)
+			self._timerId = nil
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method string FormatPop(number v)
+		-- 0.5 단위 인구(물량형 유닛)도 있으므로 소수점이 있으면 한 자리까지 표시한다.
+		if v == math.floor(v) then
+			return tostring(math.floor(v))
+		end
+		return string.format("%.1f", v)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Refresh()
+		-- 현재/최대 인구를 세어 텍스트에 반영한다(값이 바뀔 때만 쓴다).
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) or not isvalid(self.AmountText) then return end
+		local map = lp.CurrentMap
+		if not isvalid(map) or map.Name ~= _LobbyController.GameMapName then return end
+		local me = lp.PlayerComponent.UserId
+		
+		local unitData = {}
+		local pinfo = lp.PlayerInfo
+		if pinfo ~= nil and pinfo.MyUnitData ~= nil then
+			unitData = pinfo.MyUnitData
+		end
+		
+		local current = 0
+		local group = map:GetChildByName("MyUnits")
+		if isvalid(group) then
+			for _, child in pairs(group.Children) do
+				local info = child.Unit_Info
+				-- 영웅은 인구를 차지하지 않는다(인구 0, SpawnUnit.GetPopulation과 같은 규칙).
+				if info ~= nil and not info.IsDead and info.PlayerID == me and child:GetComponent("script.HeroUnit") == nil then
+					local row = unitData[info.UnitModelKey]
+					if row ~= nil and row["인구"] ~= nil then
+						current += row["인구"]
+					end
+				end
+			end
+		end
+		
+		local maximum = 0
+		local structures = map:GetChildComponentsByTypeName("script.Structure_Info", true)
+		if structures ~= nil then
+			for _, s in ipairs(structures) do
+				---@type Structure_Info
+				local si = s
+				-- 건설이 끝난(IsUnderConstruction == false) 건물만 CSV Population만큼 최대 인구를 올린다. 파괴된 건물은 제외.
+				if si.PlayerID == me and not si.IsDestroyed then
+					-- 건설 중인 변환 건물은 변환 전 건물에서 물려받은 인구(PopulationCarry)만 먼저 인정한다(PlayerInfo.GetPopulationMax와 같은 기준).
+					if si.IsUnderConstruction then
+						maximum += si.PopulationCarry
+					else
+						maximum += si.PopulationProvide
+					end
+				end
+			end
+		end
+		
+		local text = self:FormatPop(current) .. " / " .. self:FormatPop(maximum)
+		if text == self._lastText then return end
+		self._lastText = text
+		self.AmountText.Text = text
+	end
+
+end

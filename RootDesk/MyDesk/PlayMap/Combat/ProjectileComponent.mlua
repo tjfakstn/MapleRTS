@@ -1,0 +1,125 @@
+@Component
+script ProjectileComponent extends Component
+
+	property number Speed = 12
+
+	property number MaxLifetime = 3
+
+	property number HitRadius = 0.4
+
+	@Sync
+	property string ImpactRUID = ""
+
+	@Sync
+	property number EffectScale = 1.0
+
+	property number RotationOffsetDeg = 0
+
+	@HideFromInspector
+	property boolean _fired = false
+
+	@HideFromInspector
+	property number _life = 0
+
+	@HideFromInspector
+	property any _target = nil
+
+	method void OnBeginPlay()
+		-- 초기화. Fire() 호출 전까지는 정지 상태.
+		self._fired = false
+		self._life = 0
+	end
+
+	@ExecSpace("Server")
+	method void SetSprite(string ruid)
+		-- 투사체 외형 지정. 스프라이트는 루트가 아니라 "Visual" 자식에 있다(아래 SetScale 설명 참고).
+		-- 서버에서 바꾸면 클라이언트로 동기화된다.
+		if ruid == "" then return end
+		local visual = self.Entity:GetChildByName("Visual")
+		if isvalid(visual) and isvalid(visual.SpriteRendererComponent) then
+			visual.SpriteRendererComponent.SpriteRUID = ruid
+		end
+	end
+
+	@ExecSpace("Server")
+	method void SetScale(number s)
+		-- 투사체 "본체"의 크기 배율(유닛별 Unit_Info.ProjectileScale). 스프라이트를 루트가 아닌
+		-- "Visual" 자식에 두고 그 자식의 Scale만 조정하는 이유: 루트는 OnUpdate에서 진행 방향으로
+		-- ZRotation을 매 프레임 돌리는데, 루트 자체에 비균일 Scale까지 섞이면 회전과 크기가
+		-- 뒤엉켜 보일 수 있다 — 회전(루트)과 크기(자식)를 분리해야 방향에 따라 자연스럽게 보인다.
+		if s == nil or s <= 0 then s = 1.0 end
+		local visual = self.Entity:GetChildByName("Visual")
+		if isvalid(visual) then
+			visual.TransformComponent.Scale = Vector3(s, s, 1)
+		end
+	end
+
+	@ExecSpace("Server")
+	method void Fire(Entity target)
+		-- 표적을 향해 발사 시작(호밍).
+		self._target = target
+		self._fired = true
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnUpdate(number delta)
+		-- 매 프레임 표적 방향으로 이동 + 거리 기반 명중 판정.
+		if not self._fired then return end
+		
+		self._life = self._life + delta
+		if self._life >= self.MaxLifetime then
+			self.Entity:Destroy()
+			return
+		end
+		
+		local t = self._target
+		if t == nil or not isvalid(t) then
+			self.Entity:Destroy()
+			return
+		end
+		
+		local myPos = self.Entity.TransformComponent.WorldPosition
+		local tPos = t.TransformComponent.WorldPosition + Vector3(0, 0.3, 0)
+		local dx = tPos.x - myPos.x
+		local dy = tPos.y - myPos.y
+		local dist = math.sqrt(dx * dx + dy * dy)
+		
+		if dist <= self.HitRadius then
+			self:Impact(myPos.x, myPos.y, myPos.z)
+			self.Entity:Destroy()
+			return
+		end
+		
+		local nx = dx / dist
+		local ny = dy / dist
+		
+		-- WorldPosition을 직접 갱신(회전이 걸린 뒤에도 Translate의 로컬/월드 축 해석에 좌우되지
+		-- 않도록 명확한 절대좌표로 이동). Body 없는 엔티티라 안전하다.
+		self.Entity.TransformComponent.WorldPosition = Vector3(myPos.x + nx * self.Speed * delta, myPos.y + ny * self.Speed * delta, myPos.z)
+		
+		-- 진행 방향으로 회전시켜(ZRotation), 화살/창처럼 방향성 있는 투사체 스프라이트도 대각선
+		-- 방향으로 날아갈 때 자연스럽게 보이도록 한다(예전엔 FlipX만 있어 좌우만 뒤집히고
+		-- 위아래/대각선 기울기는 반영되지 않았다).
+		self.Entity.TransformComponent.ZRotation = math.deg(math.atan(ny, nx)) + self.RotationOffsetDeg
+	end
+
+	@ExecSpace("Client")
+	method void Impact(number px, number py, number pz)
+		-- 명중 지점에 이펙트 1회 재생. 좌표 고정형이라 엔티티가 파괴돼도 끝까지 재생된다.
+		-- 이 RPC 도착 시점엔 투사체 엔티티가 이미 파괴됐을 수 있으므로 로컬 플레이어의 맵을 기준으로 잡는다.
+		if self.ImpactRUID == "" then return end
+		local map = nil
+		if isvalid(self.Entity) then
+			map = self.Entity.CurrentMap
+		end
+		if map == nil and _UserService.LocalPlayer ~= nil then
+			map = _UserService.LocalPlayer.CurrentMap
+		end
+		if map == nil then return end
+		local s = self.EffectScale
+		_FogOfWarLogic:PlayEffectSeen(
+			self.ImpactRUID, map, Vector3(px, py, pz), 0, Vector3(s, s, 1), false,
+			{ SortingLayer = "MapLayer0", OrderInLayer = 30 })
+	end
+
+end

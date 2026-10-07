@@ -1,0 +1,139 @@
+@Logic
+script BuildRequirementLogic extends Logic
+
+	method boolean HasAliveStructure(Entity map, string playerId, string structureName)
+		-- map의 "MyStructures" 그룹에서 playerId 소유의, 파괴되지 않았고 Structure_Info.StructureName이
+		-- structureName과 일치하는 건물이 하나라도 있으면 true. structureName이 빈 문자열이면
+		-- 선행조건이 없는 것으로 보고 항상 true(게이트 통과).
+		--
+		-- 조합 문법(기존 단일 이름 검사와 완전히 하위 호환 — 구분자가 없으면 기존과 동일하게 동작):
+		--   "|"로 나열 → OR (하나만 지으면 통과). 예: 모험가 "커닝시티 영역"의
+		--     BuildCondition="페리온 생성 건물|엘리니아 생성 건물" — 두 노선 중 아무 쪽으로 와도 된다.
+		--   ","로 나열 → AND (전부 지어야 통과). 예: 시그너스 "조건 건물 2"의
+		--     BuildCondition="지상 정예 생성 건물,공중 유닛 생성 건물".
+		--   "|"가 있으면 그 각 조각을 다시 ","(AND)로 나눠 평가한다(OR가 AND보다 우선순위 낮음).
+		--   두 구분자를 같은 문자열에 섞어 쓰는 패턴은 현재 데이터셋에 없어 그 조합까지는 다루지 않는다.
+		if structureName == nil or structureName == "" then return true end
+		
+		if string.find(structureName, "|", 1, true) ~= nil then
+			for part in string.gmatch(structureName, "([^|]+)") do
+				if self:HasAliveStructureAnd(map, playerId, part) then
+					return true
+				end
+			end
+			return false
+		end
+		
+		return self:HasAliveStructureAnd(map, playerId, structureName)
+	end
+
+	method boolean HasAliveStructureAnd(Entity map, string playerId, string structureName)
+		-- HasAliveStructure의 AND 그룹 평가부. 쉼표로 나열된 이름을 전부 만족해야 true.
+		if structureName == nil or structureName == "" then return true end
+		
+		if string.find(structureName, ",", 1, true) ~= nil then
+			for part in string.gmatch(structureName, "([^,]+)") do
+				if not self:HasAliveStructureSingle(map, playerId, part) then
+					return false
+				end
+			end
+			return true
+		end
+		
+		return self:HasAliveStructureSingle(map, playerId, structureName)
+	end
+
+	method boolean HasAliveStructureSingle(Entity map, string playerId, string structureName)
+		-- HasAliveStructure의 단일 이름 검사 본체. "MyStructures" 그룹이 없는 맵은
+		-- SpawnUnit.BuildStructureNow와 동일하게 맵 루트에 바로 건물을 스폰하므로(실측 확인: map02에는
+		-- 이 그룹이 없어 건물이 맵 바로 아래에 생김), 여기서도 같은 폴백을 따라야 한다 — 그룹이 없다고
+		-- 곧장 false를 반환하면 그 맵에서는 게이트가 항상 막혀버린다.
+		if structureName == nil or structureName == "" then return true end
+		if not isvalid(map) then return false end
+		
+		local group = map:GetChildByName("MyStructures")
+		if not isvalid(group) then group = map end
+		
+		for _, child in ipairs(group.Children:ToTable()) do
+			---@type Structure_Info
+			local info = child:GetComponent("script.Structure_Info")
+			-- 건설 중인 건물은 아직 "지어진 것"으로 인정하지 않는다(선행조건은 완공된 건물만 충족한다).
+			if info ~= nil and not info.IsDestroyed and not info.IsUnderConstruction and info.PlayerID == playerId and info.StructureName == structureName then
+				return true
+			end
+		end
+		return false
+	end
+
+	method string GetRequirementText(string structureName)
+		-- 조건 문자열을 사람이 읽는 글로 바꾼다(커맨드카드 잠금 사유·토스트용).
+		--   "A,B" → "A, B" (둘 다 필요) / "A|B" → "A 또는 B" / 빈 조건 → "".
+		if structureName == nil or structureName == "" then return "" end
+		local text = (string.gsub(structureName, ",", ", "))
+		text = (string.gsub(text, "|", " 또는 "))
+		return text
+	end
+
+	method any FindBuildCondition(Entity map, string playerId, Entity worker, string modelId)
+		-- 서버 재검증용: 건설 요청(modelId)의 선행 조건 문자열을 찾는다.
+		-- 일꾼의 WorkerAction 슬롯 → 내 영역 건물들의 RegionBuildAction 슬롯 순으로 찾고, 어디에도 없으면 nil
+		-- (목록에 없는 모델은 조건을 모르므로 막지 않는다 — Arda 채집 건물 등).
+		if isvalid(worker) then
+			---@type WorkerAction
+			local wa = worker:GetComponent("script.WorkerAction")
+			if wa ~= nil then
+				local c = wa:GetConditionForModel(modelId)
+				if c ~= nil then return c end
+			end
+		end
+		if not isvalid(map) then return nil end
+		local group = map:GetChildByName("MyStructures")
+		if not isvalid(group) then group = map end
+		for _, child in ipairs(group.Children:ToTable()) do
+			---@type Structure_Info
+			local info = child:GetComponent("script.Structure_Info")
+			if info ~= nil and not info.IsDestroyed and info.PlayerID == playerId then
+				---@type RegionBuildAction
+				local ra = child:GetComponent("script.RegionBuildAction")
+				if ra ~= nil then
+					local c = ra:GetConditionForModel(modelId)
+					if c ~= nil then return c end
+				end
+			end
+		end
+		return nil
+	end
+
+	method any FindBuildItem(Entity map, string playerId, Entity worker, string modelId)
+		-- 서버 재검증용: 건설 요청(modelId)의 건설 목록 항목 { Model, SizeX, SizeY, BuildTime, Locked, ... }을 찾는다.
+		-- FindBuildCondition과 같은 순서(일꾼의 WorkerAction 목록 → 내 영역 건물들의 RegionBuildAction 목록)로 찾고,
+		-- 어디에도 없으면 nil. 건설 시간/크기를 클라이언트 값 대신 서버의 슬롯 값으로 쓰기 위한 것이다.
+		if isvalid(worker) then
+			---@type WorkerAction
+			local wa = worker:GetComponent("script.WorkerAction")
+			if wa ~= nil then
+				for _, item in ipairs(wa:GetBuildList()) do
+					if item.Model == modelId then return item end
+				end
+			end
+		end
+		if not isvalid(map) then return nil end
+		local group = map:GetChildByName("MyStructures")
+		if not isvalid(group) then group = map end
+		for _, child in ipairs(group.Children:ToTable()) do
+			---@type Structure_Info
+			local info = child:GetComponent("script.Structure_Info")
+			if info ~= nil and not info.IsDestroyed and info.PlayerID == playerId then
+				---@type RegionBuildAction
+				local ra = child:GetComponent("script.RegionBuildAction")
+				if ra ~= nil then
+					for _, item in ipairs(ra:GetBuildList()) do
+						if item.Model == modelId then return item end
+					end
+				end
+			end
+		end
+		return nil
+	end
+
+end

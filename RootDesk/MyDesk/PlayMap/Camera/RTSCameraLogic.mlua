@@ -1,0 +1,404 @@
+@Logic
+script RTSCameraLogic extends Logic
+
+	property DragComponent Drag = "9e94ae08-23e0-4218-8142-635a72a8112c"
+
+	property string GameMapName = "map02"
+
+	property number ScrollSpeed = 10
+
+	@DisplayName("유닛 추적 보간 시간(초, 0이면 즉시 추적)")
+	property number FollowSmoothTime = 0.08
+
+	@DisplayName("추적 순간이동 거리(월드 단위)")
+	property number FollowTeleportDistance = 8
+
+	@DisplayName("하단 HUD 높이(UI px, 1080 기준) — 이만큼 카메라가 맵 아래로 더 내려갈 수 있다")
+	property number HudBottomPx = 320
+
+	property boolean SnapCameraInGame = true
+
+	@HideFromInspector
+	property boolean wasScrolling = false
+
+	@HideFromInspector
+	property number edgeSuppressUntil = 0
+
+	@HideFromInspector
+	property any camSaved = nil
+
+	property number VisibilityInterval = 0.5
+
+	property number visibilityTimer = 0
+
+	property boolean inGame = false
+
+	property Entity followTarget = nil
+
+	property boolean spaceWasDown = false
+
+	property integer lastDragCount = 0
+
+	method Vector2 GetKeyScrollDirection()
+		-- 이동 키(방향키 ←/↑/↓/→)가 눌려 있는 동안 그 방향 벡터를 돌려준다.
+		-- 두 키를 함께 누르면 대각선이며, 대각선도 같은 속도가 되도록 길이를 1로 맞춘다.
+		local dx = 0
+		local dy = 0
+		if _InputService:IsKeyPressed(KeyboardKey.LeftArrow) then dx = dx - 1 end
+		if _InputService:IsKeyPressed(KeyboardKey.RightArrow) then dx = dx + 1 end
+		if _InputService:IsKeyPressed(KeyboardKey.DownArrow) then dy = dy - 1 end
+		if _InputService:IsKeyPressed(KeyboardKey.UpArrow) then dy = dy + 1 end
+		if dx == 0 and dy == 0 then
+			return Vector2(0, 0)
+		end
+		return Vector2(dx, dy):Normalize()
+	end
+
+	method void ApplyCameraSnap(Entity player, boolean snap)
+		-- snap=true: 카메라 부드러운 추적을 꺼서 즉시 이동. snap=false: 처음 저장해 둔 원래 값으로 복구.
+		local cam = player.CameraComponent
+		if cam == nil then
+			return
+		end
+		if snap then
+			if self.camSaved == nil then
+				self.camSaved = { dead = cam.DeadZone, soft = cam.SoftZone, damping = cam.Damping }
+			end
+			cam.DeadZone = Vector2(0, 0)
+			cam.SoftZone = Vector2(0, 0)
+			cam.Damping = Vector2(0, 0)
+		elseif self.camSaved ~= nil then
+			local s = self.camSaved
+			cam.DeadZone = s.dead
+			cam.SoftZone = s.soft
+			cam.Damping = s.damping
+		end
+	end
+
+	method void ApplyCameraCenter(Entity player, boolean active)
+		local cam = player.CameraComponent
+		if cam == nil then return end
+		if active then
+			if self._T.centerSaved == nil then
+				self._T.centerSaved = { screen = cam.ScreenOffset, offset = cam.CameraOffset, confine = cam.ConfineCameraArea }
+			end
+			-- RTS 맵에서는 앵커가 실제 화면 중앙에 오게 한다. 경계는 ClampToMap이 담당한다.
+			cam.ConfineCameraArea = false
+			cam.ScreenOffset = Vector2(0.5, 0.5)
+			cam.CameraOffset = Vector2(0, 0)
+		elseif self._T.centerSaved ~= nil then
+			local saved = self._T.centerSaved
+			cam.ScreenOffset = saved.screen
+			cam.CameraOffset = saved.offset
+			cam.ConfineCameraArea = saved.confine
+			self._T.centerSaved = nil
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- 게임 맵에서는 플레이어 캐릭터를 숨기고, 플레이어 엔티티를 "카메라 앵커"로 삼아
+		-- 방향키 이동 / 스페이스바 유닛 추적으로 화면을 움직인다.
+		local player = _UserService.LocalPlayer
+		if not isvalid(player) then
+			return
+		end
+		
+		local map = player.CurrentMap
+		if not isvalid(map) then
+			return
+		end
+		
+		local nowInGame = (map.Name == self.GameMapName)
+		self:ApplyLobbyMovement(player, map.Name == _SceneController.LobbyMapName)
+		if nowInGame ~= self.inGame then
+			self.inGame = nowInGame
+			self.visibilityTimer = 0
+			self.wasScrolling = false
+			self.followTarget = nil
+			self.spaceWasDown = false
+			_GameSettingsLogic._T.lastEdgeDirection = nil
+			self:ApplyCameraCenter(player, nowInGame)
+			if not nowInGame then
+				self:ApplyLocalControl(player, true)
+			end
+			if self.SnapCameraInGame then
+				self:ApplyCameraSnap(player, nowInGame)
+			end
+		end
+		
+		-- 다른 플레이어(같은 맵)까지 포함해 캐릭터 표시 상태를 주기적으로 맞춘다.
+		self.visibilityTimer -= delta
+		if self.visibilityTimer <= 0 then
+			self.visibilityTimer = self.VisibilityInterval
+			self:RefreshPlayersVisibility()
+		end
+		
+		if not nowInGame then
+			return
+		end
+		
+		local body = player.KinematicbodyComponent
+		if body == nil then
+			return
+		end
+		
+		local pos = player.TransformComponent.WorldPosition
+		local newPos = Vector2(pos.x, pos.y)
+		
+		-- 스페이스바 토글: 선택된 유닛이 있을 때 누르면 가운데 유닛에 카메라를 고정하고,
+		-- 다시 스페이스바를 누르거나 새로 드래그를 시작하면 고정을 푼다.
+		local spaceDown = _InputService:IsKeyPressed(KeyboardKey.Space)
+		local spacePressed = spaceDown and not self.spaceWasDown
+		self.spaceWasDown = spaceDown
+		
+		local dragCount = 0
+		if isvalid(self.Drag) then
+			dragCount = self.Drag.DragStartCount
+		end
+		local newDrag = (dragCount ~= self.lastDragCount)
+		self.lastDragCount = dragCount
+		
+		if self.followTarget ~= nil then
+			if newDrag or spacePressed or not isvalid(self.followTarget) then
+				self.followTarget = nil
+			end
+		elseif spacePressed and not newDrag then
+			self.followTarget = self:GetCenterUnit()
+			if isvalid(self.followTarget) then
+			else
+				self.followTarget = nil
+			end
+		end
+		
+		-- 이동 키를 누르면 유닛 고정을 풀고 바로 수동 이동으로 넘어간다.
+		local keyDir = self:GetKeyScrollDirection()
+		-- 마우스 감도(설정): 커서를 화면 가장자리에 대면 그 방향으로 스크롤(GameSettingsLogic.EdgeScrollSpeed, 0이면 끔).
+		local edgeDir = _GameSettingsLogic:GetEdgeScrollDirection()
+		-- 스페이스를 누른 동안에는 가장자리 커서보다 중앙 추적을 우선한다.
+		if spaceDown then edgeDir = Vector2(0, 0) end
+		if _UtilLogic.ElapsedSeconds < self.edgeSuppressUntil then edgeDir = Vector2(0, 0) end
+		local scrolling = (keyDir.x ~= 0 or keyDir.y ~= 0 or edgeDir.x ~= 0 or edgeDir.y ~= 0)
+		if self.followTarget ~= nil and scrolling then
+			self.followTarget = nil
+		end
+		
+		local followed = false
+		if isvalid(self.followTarget) then
+			local p = self.followTarget.TransformComponent.WorldPosition
+			local targetPos = self:ClampToMap(map, Vector2(p.x, p.y))
+			local dx, dy = targetPos.x - pos.x, targetPos.y - pos.y
+			-- 최초 고정/순간이동은 즉시 중앙으로 이동하고, 이후 서버 위치 갱신의 계단 현상만 완화한다.
+			local alpha = 1
+			if not spacePressed and self.FollowSmoothTime > 0 and dx * dx + dy * dy < self.FollowTeleportDistance * self.FollowTeleportDistance then
+				alpha = 1 - math.exp(-math.max(0, delta) / self.FollowSmoothTime)
+			end
+			newPos = Vector2(pos.x + dx * alpha, pos.y + dy * alpha)
+			followed = true
+		end
+		
+		if not followed and scrolling then
+			-- 유닛 고정 중이 아니면: 키를 누르고 있는 동안 ScrollSpeed(초당)의 일정한 속도로 계속 이동한다.
+			local edgeSpeed = _GameSettingsLogic.EdgeScrollSpeed
+			newPos = Vector2(pos.x + (keyDir.x * self.ScrollSpeed + edgeDir.x * edgeSpeed) * delta, pos.y + (keyDir.y * self.ScrollSpeed + edgeDir.y * edgeSpeed) * delta)
+		end
+		
+		newPos = self:ClampToMap(map, newPos)
+		if newPos.x ~= pos.x or newPos.y ~= pos.y then
+			body:SetWorldPosition(newPos)
+		end
+		
+		-- 이동 시작/정지 시점에만 로그를 남긴다(매 프레임 로그 방지).
+		if scrolling ~= self.wasScrolling then
+			self.wasScrolling = scrolling
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void MoveTo(Vector2 worldPos)
+		-- 카메라 앵커(로컬 플레이어)를 지정 월드 좌표로 즉시 옮긴다(미니맵 클릭 등). 유닛 추적 중이면 추적을 풀고,
+		-- 키 스크롤과 같은 ClampToMap 경계 제한을 적용한다. 게임 맵이 아닐 때는 무시.
+		local player = _UserService.LocalPlayer
+		if not isvalid(player) then return end
+		local map = player.CurrentMap
+		if not isvalid(map) or map.Name ~= self.GameMapName then return end
+		local body = player.KinematicbodyComponent
+		if body == nil then return end
+		
+		if self.followTarget ~= nil then
+			self.followTarget = nil
+		end
+		local newPos = self:ClampToMap(map, worldPos)
+		body:SetWorldPosition(newPos)
+		self.edgeSuppressUntil = _UtilLogic.ElapsedSeconds + 0.3
+	end
+
+	method Entity GetCenterUnit()
+		-- 선택된 유닛들의 중심 좌표에 가장 가까운 유닛(= 가운데 유닛)을 돌려준다. 없으면 nil.
+		if not isvalid(self.Drag) or self.Drag.SelectedUnits == nil then
+			return nil
+		end
+		
+		local sumX = 0
+		local sumY = 0
+		local count = 0
+		for _, unit in pairs(self.Drag.SelectedUnits) do
+			if isvalid(unit) and isvalid(unit.Entity) then
+				local p = unit.Entity.TransformComponent.WorldPosition
+				sumX += p.x
+				sumY += p.y
+				count += 1
+			end
+		end
+		if count == 0 then
+			return nil
+		end
+		
+		local cx = sumX / count
+		local cy = sumY / count
+		local best = nil
+		local bestDist = 0
+		for _, unit in pairs(self.Drag.SelectedUnits) do
+			if isvalid(unit) and isvalid(unit.Entity) then
+				local p = unit.Entity.TransformComponent.WorldPosition
+				local d = (p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy)
+				if best == nil or d < bestDist then
+					best = unit.Entity
+					bestDist = d
+				end
+			end
+		end
+		return best
+	end
+
+	method Vector2 ClampToMap(Entity map, Vector2 pos)
+		-- 카메라 앵커가 맵 밖으로 무한히 벗어나지 않도록 맵 경계 안으로 제한한다.
+		local mapComp = map.MapComponent
+		if mapComp == nil then
+			return pos
+		end
+		local lb, rt = mapComp:GetBound()
+		if lb == nil or rt == nil then
+			return pos
+		end
+		-- 기본값(-1,-1)~(1,1)이거나 비정상적으로 작은 경계는 유효하지 않은 값으로 보고 제한하지 않는다.
+		if (rt.x - lb.x) <= 2.5 or (rt.y - lb.y) <= 2.5 then
+			return pos
+		end
+		
+		-- 앵커(카메라 기준점)가 아니라 "화면 가장자리"가 맵 경계에 닿을 때 멈추도록, 현재 화면이 앵커로부터
+		-- 상하좌우로 얼마나 펼쳐져 있는지(줌/해상도/ScreenOffset 반영)를 구해 그만큼 허용 범위를 줄인다.
+		local ext = self:GetViewExtents()
+		local left = ext.x
+		local right = ext.y
+		local below = ext.z
+		local above = ext.w
+		local minX = lb.x + left
+		local maxX = rt.x - right
+		-- 하단 HUD(커맨드카드 등)가 화면 아래를 덮으므로, 맵 아래쪽 끝이 HUD 위로 올라올 때까지 카메라가 더 내려가게 한다
+		-- (스타처럼 맵 맨 아래 유닛·건물도 HUD에 가리지 않고 클릭할 수 있게).
+		local hudWorld = (below + above) * self.HudBottomPx / 1080
+		local minY = lb.y + below - hudWorld
+		local maxY = rt.y - above
+		-- 맵이 화면보다 좁은 축은 가운데에 고정한다.
+		local x = (minX > maxX) and (lb.x + rt.x + left - right) / 2 or math.min(math.max(pos.x, minX), maxX)
+		local y = (minY > maxY) and (lb.y + rt.y + below - above) / 2 or math.min(math.max(pos.y, minY), maxY)
+		return Vector2(x, y)
+	end
+
+	method Vector4 GetViewExtents()
+		-- 현재 화면의 네 가장자리가 카메라 앵커(로컬 플레이어 위치)로부터 떨어진 거리(월드 단위)를
+		-- Vector4(왼쪽, 오른쪽, 아래, 위)로 돌려준다. 화면 크기를 알 수 없으면 PC 기본 화면(12.8 x 7.2, 앵커 중앙)으로 가정한다.
+		local player = _UserService.LocalPlayer
+		local w = _UILogic.ScreenWidth
+		local h = _UILogic.ScreenHeight
+		if not isvalid(player) or w == nil or h == nil or w <= 0 or h <= 0 then
+			return Vector4(6.4, 6.4, 3.6, 3.6)
+		end
+		-- 화면의 월드 크기(줌/해상도 반영)는 카메라가 한 프레임 늦게 따라와도 변하지 않으므로 화면 모서리로 구하고,
+		-- 앵커가 화면의 어디에 놓이는지는 CameraComponent.ScreenOffset(화면 비율, 앵커 = 1 - ScreenOffset 위치)으로 계산한다.
+		-- (화면 모서리 좌표를 앵커와 직접 비교하면 이동 중 1프레임 지연만큼 경계를 살짝 넘어간다.)
+		local bl = _UILogic:ScreenToWorldPosition(Vector2(0, 0))
+		local tr = _UILogic:ScreenToWorldPosition(Vector2(w, h))
+		local viewW = math.abs(tr.x - bl.x)
+		local viewH = math.abs(tr.y - bl.y)
+		local so = Vector2(0.5, 0.5)
+		if player.CameraComponent ~= nil then
+			so = player.CameraComponent.ScreenOffset
+		end
+		return Vector4(viewW * (1 - so.x), viewW * so.x, viewH * (1 - so.y), viewH * so.y)
+	end
+
+	method void RefreshPlayersVisibility()
+		-- 게임 맵에 있는 플레이어의 캐릭터는 숨기고, 그 밖(로비)에 있는 플레이어는 다시 보이게 한다.
+		local localPlayer = _UserService.LocalPlayer
+		for _, user in pairs(_UserService.UserEntities.Values) do
+			if isvalid(user) and isvalid(user.CurrentMap) then
+				local inGameMap = (user.CurrentMap.Name == self.GameMapName)
+				self:ApplyPlayerVisible(user, not inGameMap)
+				if user == localPlayer then
+					self:ApplyLocalControl(user, not inGameMap)
+				end
+			end
+		end
+	end
+
+	method void ApplyPlayerVisible(Entity player, boolean visible)
+		-- 캐릭터(아바타/이름표/그림자)의 표시 여부를 바꾼다. 값이 이미 같으면 건드리지 않는다.
+		local avatar = player.AvatarRendererComponent
+		if avatar ~= nil and avatar.Enable ~= visible then
+			avatar.Enable = visible
+		end
+		local nameTag = player.NameTagComponent
+		if nameTag ~= nil and nameTag.Enable ~= visible then
+			nameTag.Enable = visible
+		end
+		local body = player.KinematicbodyComponent
+		if body ~= nil and body.EnableShadow ~= visible then
+			body.EnableShadow = visible
+		end
+	end
+
+	method void ApplyLobbyMovement(Entity player, boolean inLobby)
+		-- MapleTile 로비는 Rigidbody로 걷고 점프한다. 다른 타일맵용 Body와 동시에 제어하지 않는다.
+		local rigid = player.RigidbodyComponent
+		local kinetic = player.KinematicbodyComponent
+		local sideview = player.SideviewbodyComponent
+		local movement = player.MovementComponent
+		if inLobby then
+			if self._T.lobbyBodySaved == nil then
+				self._T.lobbyBodySaved = {
+					rigid = rigid ~= nil and rigid.Enable,
+					kinetic = kinetic ~= nil and kinetic.Enable,
+					sideview = sideview ~= nil and sideview.Enable,
+					movement = movement ~= nil and movement.Enable
+				}
+			end
+			if kinetic ~= nil and kinetic.Enable then kinetic.Enable = false end
+			if sideview ~= nil and sideview.Enable then sideview.Enable = false end
+			if rigid ~= nil and not rigid.Enable then rigid.Enable = true end
+			if movement ~= nil and not movement.Enable then movement.Enable = true end
+			self:ApplyLocalControl(player, true)
+		elseif self._T.lobbyBodySaved ~= nil then
+			local saved = self._T.lobbyBodySaved
+			if rigid ~= nil then rigid.Enable = saved.rigid end
+			if kinetic ~= nil then kinetic.Enable = saved.kinetic end
+			if sideview ~= nil then sideview.Enable = saved.sideview end
+			if movement ~= nil then movement.Enable = saved.movement end
+			self._T.lobbyBodySaved = nil
+		end
+	end
+
+	method void ApplyLocalControl(Entity player, boolean normal)
+		-- 로컬 플레이어의 키보드 이동/타일 충돌을 게임 맵에서는 끄고(카메라 앵커로만 사용), 로비에서는 되돌린다.
+		local controller = player.PlayerControllerComponent
+		if controller ~= nil and controller.Enable ~= normal then
+			controller.Enable = normal
+		end
+		local body = player.KinematicbodyComponent
+		if body ~= nil and body.EnableTileCollision ~= normal then
+			body.EnableTileCollision = normal
+		end
+	end
+
+end

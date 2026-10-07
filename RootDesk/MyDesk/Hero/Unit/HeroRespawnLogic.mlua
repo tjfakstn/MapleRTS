@@ -1,0 +1,104 @@
+@Logic
+script HeroRespawnLogic extends Logic
+
+	property number RespawnDelay = 30
+
+	property number RetryInterval = 1
+
+	@ExecSpace("ServerOnly")
+	method void ScheduleRespawn(Entity hero)
+		-- 영웅 유닛이 죽는 순간(Unit_Info.GetDamage) 서버에서 호출된다. 죽은 엔티티는 사망 모션 뒤 제거되므로
+		-- 부활에 필요한 값(직업·이름·소유자·모델·맵)을 여기서 미리 꺼내 두고, RespawnDelay 뒤에 새 영웅을 스폰한다.
+		if not isvalid(hero) then return end
+		---@type HeroUnit
+		local heroComp = hero:GetComponent("script.HeroUnit")
+		if heroComp == nil or heroComp.OwnerUserId == "" or heroComp.SpawnModelId == "" then
+			return
+		end
+		local data = {
+			heroId = heroComp.HeroId,
+			heroName = heroComp.HeroName,
+			ownerUserId = heroComp.OwnerUserId,
+			modelId = heroComp.SpawnModelId,
+			map = hero.CurrentMap,
+			gameSerial = _LobbyController.GameSerial,
+		}
+		-- RTS 사망 경로는 DeadEvent/ReviveEvent를 올리지 않아 영웅 패키지의 사망 정리 핸들러가 호출되지 않는다.
+		-- 죽는 순간 진행 중인 채널·소환체·상태를 직접 정리한다(엔티티 제거 전까지 남지 않게).
+		for _, name in ipairs({ "HeroSkillStatusComponent", "MechanicSkillComponent", "WildHunterSkillComponent" }) do
+			local comp = hero:GetComponent("script." .. name)
+			if comp ~= nil then comp:Cleanup() end
+		end
+		_UIToast_:ShowMessage("영웅이 쓰러졌습니다. " .. tostring(math.floor(self.RespawnDelay)) .. "초 뒤 본진에서 부활합니다", data.ownerUserId)
+		_TimerService:SetTimerOnce(function() self:TryRespawn(data) end, self.RespawnDelay)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TryRespawn(table data)
+		-- 소유자의 살아있는 본진(BuildingKey == "HQ") 아래에 영웅을 다시 스폰한다.
+		-- 본진이 없으면 본진이 다시 생길 때까지 RetryInterval마다 확인한다(소유자가 나갔으면 중단).
+		if not isvalid(data.map) then return end
+		-- 그 사이 경기가 끝났으면(로비 복귀/재경기) 이전 경기의 부활 예약은 버린다.
+		if data.gameSerial ~= _LobbyController.GameSerial then
+			return
+		end
+		if _UserService:GetUserEntityByUserId(data.ownerUserId) == nil then
+			return
+		end
+		local hq = self:FindAliveHQ(data.map, data.ownerUserId)
+		if hq == nil then
+			if not data.warned then
+				data.warned = true
+				_UIToast_:ShowMessage("본진이 없어 영웅이 부활하지 못합니다", data.ownerUserId)
+			end
+			_TimerService:SetTimerOnce(function() self:TryRespawn(data) end, self.RetryInterval)
+			return
+		end
+		
+		local parent = data.map:GetChildByName("MyUnits")
+		if not isvalid(parent) then parent = data.map end
+		-- LobbyController.SpawnHeroUnit과 같은 자리(HeroSpawnPos)·같은 좌표 변환(parent 기준 로컬).
+		local wp = self:HeroSpawnPos(hq)
+		local pp = parent.TransformComponent.WorldPosition
+		local hero = _SpawnService:SpawnByModelId(data.modelId, "Hero_" .. data.ownerUserId, Vector3(wp.x - pp.x, wp.y - pp.y, wp.z - pp.z), parent)
+		if hero == nil then
+			return
+		end
+		---@type HeroUnit
+		local heroComp = hero:GetComponent("script.HeroUnit")
+		if heroComp ~= nil then
+			heroComp.SpawnModelId = data.modelId
+			heroComp:ApplyHero(data.heroId, data.heroName, data.ownerUserId)
+		end
+		_UIToast_:ShowMessage("영웅이 본진에서 부활했습니다", data.ownerUserId)
+	end
+
+	method Vector3 HeroSpawnPos(Entity hq)
+		-- 영웅이 놓이는 월드 위치. 본진 아래는 화면 하단 커맨드카드 UI에 가려 영웅이 안 보이므로, 맵 중앙 쪽 본진 옆(본진 박스 바깥 1.5칸)에 둔다.
+		local hp = hq.TransformComponent.WorldPosition
+		local halfW = 1.5
+		local trigger = hq.TriggerComponent
+		if trigger ~= nil then
+			local sx = math.abs(hq.TransformComponent.Scale.x)
+			halfW = math.abs(trigger.BoxSize.x * sx) / 2
+		end
+		local side = (hp.x > 0) and -1 or 1
+		return Vector3(hp.x + side * (halfW + 1.5), hp.y, hp.z)
+	end
+
+	@ExecSpace("ServerOnly")
+	method Entity FindAliveHQ(Entity map, string userId)
+		-- userId 소유의 완공된 살아있는 본진 중 첫 번째. 없으면 nil.
+		local group = map:GetChildByName("MyStructures")
+		if not isvalid(group) then group = map end
+		for _, child in ipairs(group.Children:ToTable()) do
+			---@type Structure_Info
+			local info = child:GetComponent("script.Structure_Info")
+			if info ~= nil and info.PlayerID == userId and info.BuildingKey == "HQ" and not info.IsDestroyed and not info.IsUnderConstruction then
+				return child
+			end
+		end
+		return nil
+	end
+
+end

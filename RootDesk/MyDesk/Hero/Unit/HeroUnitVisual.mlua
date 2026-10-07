@@ -1,0 +1,259 @@
+@Component
+script HeroUnitVisual extends Component
+
+	property number FacingDeadzone = 0.01
+
+	@HideFromInspector
+	property string _appliedState = ""
+
+	@HideFromInspector
+	property number _lastX = 0
+
+	@HideFromInspector
+	property number _facing = -1
+
+	@HideFromInspector
+	property boolean _spriteHidden = false
+
+	@HideFromInspector
+	property number _castPoseUntil = 0
+
+	@DisplayName("기본 공격 스윙 동작 유지 시간(초)")
+	property number SwingDuration = 0.4
+
+	@DisplayName("피격 붉은 점멸 시간(초)")
+	property number HitFlashDuration = 0.2
+
+	@HideFromInspector
+	property number _swingUntil = 0
+
+	@HideFromInspector
+	property integer _swingIndex = 0
+
+	@HideFromInspector
+	property integer _flashSerial = 0
+
+	@ExecSpace("ClientOnly")
+	method void PlayCastPose(number duration, boolean faceRight)
+		-- 스킬 시전(HeroUnitSkill.PlayCastFx)에서 호출: 조준 방향을 보고 duration초 동안 공격 동작을 유지한다.
+		self._castPoseUntil = _UtilLogic.ElapsedSeconds + duration
+		_HeroPortraitLogic:MirrorSwing(self.Entity, duration)
+		self:ApplyFacing(faceRight and 1 or -1)
+		if self:ApplyBodyAction("ATTACK") then
+			self._appliedState = "CAST"
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayAttackSwing()
+		-- 기본 공격 한 번마다 호출(UnitStateComponent.NotifyAttackSwing): 무기를 안 낀 아바타는 ATTACK 상태 동작이 alert 자세뿐이라
+		-- 공격이 눈에 안 띈다. 그래서 상태 동작 대신 몸 동작(swingO1~3 / 원거리는 shoot1)을 1회 재생한다.
+		if _CombatTeamLogic:IsDead(self.Entity) then return end
+		if _UtilLogic.ElapsedSeconds < self._castPoseUntil then return end   -- 스킬 시전 동작 중에는 덮지 않는다
+		local avatar = self.Entity.AvatarRendererComponent
+		if not isvalid(avatar) then return end
+		local body = avatar:GetBodyEntity()
+		if not isvalid(body) then return end
+		---@type HeroUnit
+		local hero = self.Entity:GetComponent("script.HeroUnit")
+		local ranged = hero ~= nil and hero:IsRangedHero(hero.HeroId)
+		local action = "shoot1"
+		if not ranged then
+			local melee = { "swingO1", "swingO2", "swingO3" }
+			self._swingIndex = (self._swingIndex % #melee) + 1
+			action = melee[self._swingIndex]
+		end
+		local ev = ActionStateChangedEvent()
+		ev.CoreActionName = action
+		ev.PartsActionName = action
+		ev.PlayRate = 1.0
+		ev.PlayType = SpriteAnimClipPlayType.Onetime
+		body:SendEvent(ev)
+		self._swingUntil = _UtilLogic.ElapsedSeconds + self.SwingDuration
+		_HeroPortraitLogic:MirrorSwing(self.Entity, self.SwingDuration)
+		self._appliedState = "SWING"
+	end
+
+	@ExecSpace("ClientOnly")
+	method void FlashHit()
+		-- 피격 시 아바타 전체를 잠깐 붉게 물들였다가 되돌린다(피격 자세 alert는 움직임이 없어 눈에 안 띈다).
+		local avatar = self.Entity.AvatarRendererComponent
+		if not isvalid(avatar) then return end
+		self._flashSerial = self._flashSerial + 1
+		local serial = self._flashSerial
+		avatar:SetColor(1.0, 0.4, 0.4, 1.0)
+		local entity = self.Entity
+		_TimerService:SetTimerOnce(function()
+			if not isvalid(entity) or self._flashSerial ~= serial then return end
+			local av = entity.AvatarRendererComponent
+			if isvalid(av) then av:SetColor(1.0, 1.0, 1.0, 1.0) end
+		end, self.HitFlashDuration)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		-- 월드 스프라이트를 숨기고 시작 위치를 기록한다.
+		self._lastX = self.Entity.TransformComponent.WorldPosition.x
+		self:HideWorldSprite()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void HideWorldSprite()
+		-- 초상화용 SpriteRendererComponent를 월드에서만 보이지 않게 한다(SpriteRUID는 UI가 계속 읽는다).
+		local renderer = self.Entity.SpriteRendererComponent
+		if isvalid(renderer) then
+			renderer.Color = Color(1, 1, 1, 0)
+			self._spriteHidden = true
+		end
+		-- 무기/사거리 판정용 자식(Attack_, 태그 "Weapon")도 화면에서 가린다(판정·소리·이펙트는 그대로 동작).
+		for _, child in pairs(self.Entity.Children) do
+			if isvalid(child) and isvalid(child.TagComponent) then
+				for _, tag in pairs(child.TagComponent.Tags) do
+					if tag == "Weapon" then child.Visible = false end
+				end
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- 매 프레임 상태→아바타 동작, 이동 방향→좌우 반전을 반영한다.
+		if not self._spriteHidden then self:HideWorldSprite() end
+		self:SyncOwnerCostume()
+		
+		-- 스킬 시전 동작 중에는 상태/이동 방향 반영을 잠시 멈춘다(끝나면 _appliedState가 달라 자동 복귀).
+		if not _CombatTeamLogic:IsDead(self.Entity) and _UtilLogic.ElapsedSeconds < self._castPoseUntil then
+			self._lastX = self.Entity.TransformComponent.WorldPosition.x
+			return
+		end
+		
+		-- 기본 공격 스윙 동작 중에는 상태 동작을 덮어쓰지 않는다. 끝나면 현재 상태 동작을 다시 적용한다.
+		if self._swingUntil > 0 then
+			if _UtilLogic.ElapsedSeconds < self._swingUntil and not _CombatTeamLogic:IsDead(self.Entity) then
+				self._lastX = self.Entity.TransformComponent.WorldPosition.x
+				return
+			end
+			self._swingUntil = 0
+			self._appliedState = ""
+		end
+		
+		---@type UnitStateComponent
+		local usc = self.Entity:GetComponent("script.UnitStateComponent")
+		-- 부활 복귀: UnitStateComponent는 DEAD에 들어가면 잠기므로(ChangeState가 DEAD에서 나가지 않음), 서버가 IsDead를
+		-- 다시 false로 바꾼 뒤에는 여기서 IDLE로 직접 되돌린다. 사망 동작 자체는 아무것도 파괴/영구 숨김하지 않는다.
+		if usc ~= nil and usc.CurrentState == "DEAD" and not _CombatTeamLogic:IsDead(self.Entity) then
+			usc.CurrentState = "IDLE"
+			usc:PlayFor("IDLE")
+			self._appliedState = ""
+			self._castPoseUntil = 0
+		end
+		local state = (usc ~= nil) and usc.CurrentState or "IDLE"
+		if state ~= self._appliedState then
+			if self:ApplyBodyAction(state) then
+				self._appliedState = state
+				if state == "HIT" then self:FlashHit() end
+			end
+		end
+		
+		local x = self.Entity.TransformComponent.WorldPosition.x
+		local dx = x - self._lastX
+		self._lastX = x
+		if math.abs(dx) > self.FacingDeadzone then
+			self:ApplyFacing(dx > 0 and 1 or -1)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SyncOwnerCostume()
+		-- 영웅을 "주인 플레이어의 코디"로 보이게 한다(2026-10-06: 각 클라에서 모든 영웅이 자기 아바타로 보이던 문제).
+		-- 서버가 넣는 CostumeManagerComponent.DefaultEquipUserId만으로는 클라마다 로컬 유저 코디로 그려져서,
+		-- 이 클라에 있는 주인 플레이어 엔티티의 장비를 부위별로 읽어 영웅에 그대로 입힌다(UseCustomEquipOnly).
+		-- 주인 장비가 아직 안 읽히면 1초마다 다시 시도하고, 주인이 이 맵에 없으면 DefaultEquipUserId로 대신한다.
+		if self._T.costumeDone then return end
+		local now = _UtilLogic.ElapsedSeconds
+		if now < (self._T.costumeRetryAt or 0) then return end
+		self._T.costumeRetryAt = now + 1.0
+		---@type HeroUnit
+		local hero = self.Entity:GetComponent("script.HeroUnit")
+		local costume = self.Entity.CostumeManagerComponent
+		if hero == nil or not isvalid(costume) or hero.OwnerUserId == "" then return end
+		local owner = _UserService:GetUserEntityByUserId(hero.OwnerUserId)
+		local src = isvalid(owner) and owner.CostumeManagerComponent or nil
+		if not isvalid(src) then
+			if costume.DefaultEquipUserId ~= hero.OwnerUserId then costume.DefaultEquipUserId = hero.OwnerUserId end
+			return
+		end
+		local cats = {
+			MapleAvatarItemCategory.Body, MapleAvatarItemCategory.Hair, MapleAvatarItemCategory.Face,
+			MapleAvatarItemCategory.Cap, MapleAvatarItemCategory.Cape, MapleAvatarItemCategory.Coat,
+			MapleAvatarItemCategory.Glove, MapleAvatarItemCategory.Longcoat, MapleAvatarItemCategory.Pants,
+			MapleAvatarItemCategory.Shoes, MapleAvatarItemCategory.OneHandedWeapon, MapleAvatarItemCategory.TwoHandedWeapon,
+			MapleAvatarItemCategory.SubWeapon, MapleAvatarItemCategory.FaceAccessory, MapleAvatarItemCategory.EyeAccessory,
+			MapleAvatarItemCategory.EarAccessory, MapleAvatarItemCategory.Ear,
+		}
+		local equips = {}
+		local filled = 0
+		for i, cat in ipairs(cats) do
+			local ruid = src:GetEquip(cat) or ""
+			equips[i] = ruid
+			if ruid ~= "" then filled += 1 end
+		end
+		-- 피부·머리·얼굴도 없으면 주인 코디가 아직 로드 전 — 다음에 다시.
+		if filled == 0 then return end
+		costume.UseCustomEquipOnly = true
+		for i, cat in ipairs(cats) do
+			costume:SetEquip(cat, equips[i])
+		end
+		self._T.costumeDone = true
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean ApplyBodyAction(string state)
+		-- UnitStateComponent 상태 이름 → MapleAvatarBodyActionState. 아바타 몸 엔티티가 아직 없으면 false(다음 프레임 재시도).
+		local avatar = self.Entity.AvatarRendererComponent
+		if not isvalid(avatar) then return false end
+		local body = avatar:GetBodyEntity()
+		if not isvalid(body) then return false end
+		local selector = body:GetComponent("AvatarBodyActionSelectorComponent")
+		if selector == nil then return false end
+		
+		local action = MapleAvatarBodyActionState.Stand
+		if state == "MOVE" then action = MapleAvatarBodyActionState.Walk
+		elseif state == "ATTACK" then action = MapleAvatarBodyActionState.Attack
+		elseif state == "HIT" then action = MapleAvatarBodyActionState.Hit
+		elseif state == "DEAD" then action = MapleAvatarBodyActionState.Dead
+		end
+		selector.ActionState = action
+		local core, parts, playType = "stand1", "stand1", SpriteAnimClipPlayType.ZigzagLoop
+		if state == "MOVE" then core, parts, playType = "walk1", "walk1", SpriteAnimClipPlayType.Loop
+		elseif state == "ATTACK" then core, parts, playType = "alert", "alert", SpriteAnimClipPlayType.ZigzagLoop
+		elseif state == "HIT" then core, parts, playType = "alert", "alert", SpriteAnimClipPlayType.ZigzagLoop
+		elseif state == "DEAD" then core, parts, playType = "dead", "stand1", SpriteAnimClipPlayType.Loop
+		end
+		-- ActionState(셀렉터) 대입만으로는 실제 스프라이트 동작이 바뀌지 않아, 동작 이벤트를 직접 보낸다.
+		local ev = ActionStateChangedEvent()
+		ev.CoreActionName = core
+		ev.PartsActionName = parts
+		ev.PlayRate = 1.0
+		ev.PlayType = playType
+		body:SendEvent(ev)
+		return true
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ApplyFacing(integer dir)
+		-- dir: 1=오른쪽, -1=왼쪽. 아바타 루트의 가로 스케일 부호로 반전한다.
+		local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		if core == nil and dir == self._facing then return end
+		local avatar = self.Entity.AvatarRendererComponent
+		if not isvalid(avatar) then return end
+		local root = avatar:GetAvatarRootEntity()
+		if not isvalid(root) then return end
+		local s = root.TransformComponent.Scale
+		local sx = math.abs(s.x)
+		-- 원본 스킬 실행기는 엔티티 자체를 반전한다. 아바타 루트까지 반전하면 두 번 뒤집힌다.
+		root.TransformComponent.Scale = Vector3(core ~= nil and sx or ((dir > 0) and -sx or sx), s.y, s.z)
+		self._facing = dir
+	end
+
+end

@@ -1,0 +1,509 @@
+@Component
+script StrikerSkillComponent extends Component
+
+	@ExecSpace("ServerOnly")
+	method string ResolveCastKey(string requestedSkillKey, table kit)
+		    -- 요청 키를 실제 시전 키로 해석한다. nil이면 이번 입력을 거부한다(연계 시전 잠금/공유 쿨다운).
+		    if requestedSkillKey == "Q" then return "QB" end
+		    if requestedSkillKey == "E" then return self:ResolveStrikerECastKey() end
+		    if requestedSkillKey == "R" then return self:ResolveStrikerRCastKey() end
+		    return requestedSkillKey
+	end
+
+	@ExecSpace("ServerOnly")
+	method string GetCooldownKey(string requestedSkillKey)
+		    -- E/R은 첫 입력/후속 입력이 하나의 공유 쿨다운 키를 쓴다. 그 외 키는 nil(기본 "<영웅>:<키>" 사용).
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if requestedSkillKey == "E" then return core:GetChainSpec("strikerE").cooldownKey end
+		    if requestedSkillKey == "R" then return core:GetChainSpec("strikerR").cooldownKey end
+		    return nil
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean CommitCast(string requestedSkillKey, string resolvedSkillKey, table skill)
+		    -- 승인된 다른 스킬만 미완성 연계를 끊는다. 거부된 입력은 연계를 잃게 하지 않는다.
+		    self:BreakOtherChain("strikerE", requestedSkillKey == "E")
+		    self:BreakOtherChain("strikerR", requestedSkillKey == "R")
+		    if resolvedSkillKey == "EC" or resolvedSkillKey == "RC" or resolvedSkillKey == "T" then
+		        local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		        core._T.cooldownEndAt = core._T.cooldownEndAt or {}
+		        core._T.cooldownEndAt["9:W"] = 0
+		    end
+		    -- 시전 뒤 연계 상태를 커밋한다. true면 공유 쿨다운까지 이 컴포넌트가 처리했으므로 기본 쿨다운을 쓰지 않는다.
+		    if requestedSkillKey == "E" then self:CommitStrikerECast(resolvedSkillKey, skill) return true end
+		    if requestedSkillKey == "R" then self:CommitStrikerRCast(resolvedSkillKey, skill) return true end
+		    return false
+	end
+
+	@ExecSpace("ServerOnly")
+	method void BreakOtherChain(string chainId, boolean sameKey)
+		if sameKey then return end
+		local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		local spec = core:GetChainSpec(chainId)
+		local state = core:GetChainState(spec)
+		if state == nil or state.phase ~= spec.awaitPhase then return end
+		core._T.cooldownEndAt = core._T.cooldownEndAt or {}
+		core._T.cooldownEndAt[spec.cooldownKey] = math.max(core._T.cooldownEndAt[spec.cooldownKey] or 0,
+			_UtilLogic.ElapsedSeconds + (state.sharedCooldown or 0))
+		core:ClearChainState(spec)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CastSkillClass(string skillClass, string heroName, string skillKey, table skill, Vector2 aimDir, Vector2 aimWorldPos)
+		    -- CastGeneric이 skillClass 데이터를 보고 넘겨주는 스트라이커 전용 시전 진입점.
+		    if skillClass == "striker_flash" then
+		        self:CastStrikerFlash(heroName, skillKey, skill, aimDir, aimWorldPos)
+		    elseif skillClass == "striker_wave" then
+		        self:CastStrikerWave(heroName, skillKey, skill, aimDir, aimWorldPos)
+		    elseif skillClass == "striker_ascend" then
+		        self:CastStrikerAscend(heroName, skillKey, skill, aimDir, aimWorldPos)
+		    elseif skillClass == "striker_thunder" then
+		        self:CastStrikerThunder(heroName, skillKey, skill, aimDir, aimWorldPos)
+		    end
+	end
+
+	method void CommitStrikerChainCast(string chainId, string actualSkillKey, table skill)
+		    -- 스트라이커 연계 스킬 공통 시간 값(시전 잠금, 후속 창, 공유 쿨다운)을 스킬 데이터에서 읽어 커밋한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local castLock = skill.chainCastUnlockDelay or skill.castWindup or 0.05
+		    local followupWindow = skill.chainFollowupWindow or 1.0
+		    local sharedCooldown = core.designNoCooldown and 0 or (skill.sharedCooldown or skill.cooldown or 0)
+		    core:CommitChainCast(core:GetChainSpec(chainId), actualSkillKey, castLock, followupWindow, sharedCooldown)
+	end
+
+	method table GetStrikerQChainState()
+		    -- 스트라이커 Q는 섬광 후 1초 안에 다시 누르면 충아로 이어진다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return core:GetChainState(core:GetChainSpec("strikerQ"))
+	end
+
+	method string ResolveStrikerQCastKey()
+		    -- 첫 Q는 섬광(QB), 유예 시간 안의 두 번째 Q는 충아(QC)로 해석한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return core:ResolveChainCastKey(core:GetChainSpec("strikerQ"))
+	end
+
+	method void CommitStrikerQCast(string actualSkillKey, table skill)
+		    -- 섬광이 먼저 나가면 follow-up 창을 열고, 충아가 나가거나 창이 닫히면 공유 쿨다운으로 전환한다.
+		    self:CommitStrikerChainCast("strikerQ", actualSkillKey, skill)
+	end
+
+	method table GetStrikerEChainState()
+		    -- 스트라이커 E는 승천 후 1초 안에 다시 누르면 뇌성으로 이어진다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return core:GetChainState(core:GetChainSpec("strikerE"))
+	end
+
+	method string ResolveStrikerECastKey()
+		    -- 첫 E는 승천(EB), 유예 시간 안의 두 번째 E는 뇌성(EC)으로 해석한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return core:ResolveChainCastKey(core:GetChainSpec("strikerE"))
+	end
+
+	method void CommitStrikerECast(string actualSkillKey, table skill)
+		    -- 승천이 먼저 나가면 후속 창을 열고, 뇌성이 나가거나 창이 닫히면 공유 쿨다운으로 전환한다.
+		    self:CommitStrikerChainCast("strikerE", actualSkillKey, skill)
+	end
+
+	method table GetStrikerRChainState()
+		    -- 스트라이커 R는 섬멸 후 1초 안에 다시 누르면 벽력으로 이어진다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return core:GetChainState(core:GetChainSpec("strikerR"))
+	end
+
+	method string ResolveStrikerRCastKey()
+		    -- 첫 R은 섬멸(RB), 유예 시간 안의 두 번째 R은 벽력(RC)으로 해석한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return core:ResolveChainCastKey(core:GetChainSpec("strikerR"))
+	end
+
+	method void CommitStrikerRCast(string actualSkillKey, table skill)
+		    -- 섬멸이 먼저 나가면 후속 창을 열고, 벽력이 나가거나 창이 닫히면 공유 쿨다운으로 전환한다.
+		    self:CommitStrikerChainCast("strikerR", actualSkillKey, skill)
+	end
+
+	@ExecSpace("ServerOnly")
+	method table FindStrikerFlashDashInfo(table skill, Vector2 casterPos, Vector2 aimDir)
+		    -- 공식 설명에 맞춰 전방 복도 안의 적에게만 돌격한다.
+		    -- 범위 안에 적이 없을 경우에만 전방으로 짧게 순간 이동한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local maxDistance = (skill.length or 0) * core.rangeScale
+		    local corridorHalfWidth = ((skill.width or 1.6) * core.rangeScale) * 0.5
+		    local dashStopDistance = (skill.dashStopDistance or 0.35) * core.rangeScale
+		    local nearestProj = nil
+		    local nearestTarget = nil
+		    local nearestTargetPos = nil
+		    for _, candidate in ipairs(core:CollectEnemyUnitCandidates()) do
+		        if isvalid(candidate) and candidate ~= self.Entity and candidate.TransformComponent ~= nil then
+		            if candidate.CurrentMap == self.Entity.CurrentMap and (not core:IsSameOwner(self.Entity, candidate)) then
+		                local candidatePos = core:GetEntityWorldPos2(candidate)
+		                local offsetX = candidatePos.x - casterPos.x
+		                local offsetY = candidatePos.y - casterPos.y
+		                local proj = offsetX * aimDir.x + offsetY * aimDir.y
+		                if proj >= 0 and proj <= maxDistance then
+		                    local lateralSq = (offsetX * offsetX + offsetY * offsetY) - (proj * proj)
+		                    if lateralSq <= corridorHalfWidth * corridorHalfWidth then
+		                        if nearestProj == nil or proj < nearestProj then
+		                            nearestProj = proj
+		                            nearestTarget = candidate
+		                            nearestTargetPos = candidatePos
+		                        end
+		                    end
+		                end
+		
+		            end
+		        end
+		    end
+		
+		    if nearestTarget ~= nil and nearestTargetPos ~= nil then
+		        local landingDistance = math.max(0, nearestProj - dashStopDistance)
+		        return {
+		            target = nearestTarget,
+		            targetPos = nearestTargetPos,
+		            landingPos = casterPos + aimDir * landingDistance,
+		            impactPos = nearestTargetPos,
+		            travelDistance = landingDistance,
+		        }
+		    end
+		
+		    local forwardOnlyDistance = math.min(maxDistance, (skill.forwardFallbackDistance or 1.45) * core.rangeScale)
+		    local landingPos = casterPos + aimDir * forwardOnlyDistance
+		    return {
+		        target = nil,
+		        targetPos = landingPos,
+		        landingPos = landingPos,
+		        impactPos = landingPos,
+		        travelDistance = forwardOnlyDistance,
+		        dashDir = aimDir,
+		    }
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TeleportSelfToWorld(Vector2 worldPos)
+		local adapter = self.Entity:GetComponent("script.HeroUnitSkill")
+		if adapter ~= nil then adapter:MoveForSkill(worldPos) return end
+		    -- 현재 맵의 이동 바디를 존중하며 플레이어를 즉시 지정 좌표로 옮긴다.
+		    local moveComp = self.Entity.MovementComponent
+		    if moveComp ~= nil then
+		        moveComp:SetWorldPosition(worldPos)
+		        moveComp:Stop()
+		        return
+		    end
+		
+		    local kinBody = self.Entity.KinematicbodyComponent
+		    if kinBody ~= nil then
+		        kinBody:SetWorldPosition(worldPos)
+		        kinBody.MoveVelocity = Vector2(0, 0)
+		        return
+		    end
+		
+		    local sideBody = self.Entity.SideviewbodyComponent
+		    if sideBody ~= nil then
+		        sideBody:SetWorldPosition(worldPos)
+		        sideBody.MoveVelocity = Vector2(0, 0)
+		        return
+		    end
+		
+		    self.Entity.TransformComponent.WorldPosition = Vector3(worldPos.x, worldPos.y, 0)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TweenSelfToWorld(Vector2 fromPos, Vector2 toPos, number duration)
+		local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		local castMap = self.Entity.CurrentMap
+		core._T.rtsLockUntil = math.max(core._T.rtsLockUntil or 0, _UtilLogic.ElapsedSeconds + duration)
+		    -- 플레이어에는 Kinematicbody가 붙어 있어서, _TweenLogic:MoveTo가 만지는 Transform.Position은
+		    -- 다음 프레임에 물리엔진이 그대로 덮어쓴다(MSW 금지 패턴). 그래서 승천/하강 같은 자기 이동은
+		    -- Tween이 아니라 바디를 존중하는 SetWorldPosition(TeleportSelfToWorld)을 짧은 간격으로
+		    -- 갱신해서 보간한다. 새 이동이 시작되면 토큰으로 이전 보간을 취소한다.
+		    local stepInterval = 0.02
+		    local totalDuration = math.max(duration or 0, stepInterval)
+		    local stepCount = math.max(1, math.floor(totalDuration / stepInterval + 0.5))
+		    local moveToken = (self._T.selfTweenToken or 0) + 1
+		    self._T.selfTweenToken = moveToken
+		
+		    local stepIndex = 0
+		    local timerId = nil
+		    local advance = function()
+		        if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then
+		            if timerId ~= nil then _TimerService:ClearTimer(timerId) end
+		            return
+		        end
+		        if self._T.selfTweenToken ~= moveToken then
+		            if timerId ~= nil then _TimerService:ClearTimer(timerId) end
+		            return
+		        end
+		
+		        stepIndex = stepIndex + 1
+		        local ratio = stepIndex / stepCount
+		        if ratio > 1 then ratio = 1 end
+		        self:TeleportSelfToWorld(fromPos + (toPos - fromPos) * ratio)
+		
+		        if stepIndex >= stepCount then
+		            if timerId ~= nil then _TimerService:ClearTimer(timerId) end
+		        end
+		    end
+		
+		    timerId = _TimerService:SetTimerRepeat(advance, stepInterval)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ResetStrikerComboCooldowns()
+		    -- 회축은 연계 흐름을 다시 이어가기 쉽게 E/R/T 쿨다운을 즉시 비운다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    -- RTS 합본에서는 E/R 연계 또는 T 승인만 W를 반환한다.
+		    if self.Entity:GetComponent("script.HeroUnitSkill") ~= nil then return end
+		    if core._T.cooldownEndAt == nil then return end
+		    core._T.cooldownEndAt["9:ECHAIN"] = 0
+		    core._T.cooldownEndAt["9:RCHAIN"] = 0
+		    core._T.cooldownEndAt["9:T"] = 0
+		    core:ClearChainState(core:GetChainSpec("strikerE"))
+		    core:ClearChainState(core:GetChainSpec("strikerR"))
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CastStrikerFlash(string heroName, string skillKey, table skill, Vector2 aimDir, Vector2 aimWorldPos)
+		local castMap = self.Entity.CurrentMap
+		    -- 섬광은 전방 적에게 순간 돌진 후 타격하고, 적이 없으면 전방으로 순간 이동만 한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local casterPos3 = self.Entity.TransformComponent.WorldPosition
+		    local casterPos = Vector2(casterPos3.x, casterPos3.y)
+		    local dashInfo = self:FindStrikerFlashDashInfo(skill, casterPos, aimDir)
+		    local windup = skill.castWindup or core.castWindup
+		    local dashDir = dashInfo.dashDir or aimDir
+		    local aimAngle = math.atan(dashDir.y, dashDir.x)
+		    -- 클라이언트 전기 이펙트는 실제 타격점이 아니라 착지/이동 거리까지만 보이게 한다.
+		    core.lastCast = skillKey .. ":" .. tostring(aimAngle) .. ":" .. tostring(dashInfo.landingPos.x) .. ":" .. tostring(dashInfo.landingPos.y) .. ":" .. tostring(casterPos.x) .. ":" .. tostring(casterPos.y) .. ":" .. tostring(_UtilLogic.ElapsedSeconds)
+		
+		    _TimerService:SetTimerOnce(function()
+		        if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		
+		        self:TeleportSelfToWorld(dashInfo.landingPos)
+		
+		        if dashInfo.target == nil then
+		            return
+		        end
+		
+		        local hitLength = (skill.hitLength or skill.length or 1.8) * core.rangeScale
+		        local hitWidth = (skill.hitWidth or skill.width or hitLength) * core.rangeScale
+		        local attackShape = core:BuildCenteredBox(dashInfo.impactPos, dashDir, hitLength, hitWidth)
+		        attackShape = core:ResolveSkillVisualShape(skillKey, skill, casterPos, dashInfo.landingPos, dashDir, attackShape)
+		        core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		        local attackInfo = skillKey .. ":" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(skill.damage or 0)
+		
+		        core:BeginAttackTargetFilter(attackInfo, skill.maxTargets or 1)
+		        local hitComponents = core:PerformAttack(attackShape, attackInfo)
+		        core:EndAttackTargetFilter(attackInfo)
+		
+		        local fallbackImpactPos = dashInfo.impactPos
+		        local actualImpactPos = core:GetImpactPointFromHits(hitComponents, fallbackImpactPos)
+		        core:EmitImpactSync(skillKey, actualImpactPos)
+		        if #hitComponents > 0 then
+		            _TimerService:SetTimerOnce(function()
+		                if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		                core:EmitImpactBatchSync(skillKey, hitComponents, skill.maxImpactFxCount or #hitComponents)
+		            end, skill.impactFollowupDelay or 0.04)
+		        end
+		
+		    end, windup)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CastStrikerWave(string heroName, string skillKey, table skill, Vector2 aimDir, Vector2 aimWorldPos)
+		local castMap = self.Entity.CurrentMap
+		    -- 파도는 현재 바라보는 수평 방향으로 전진하면서 범위 안 적을 쓸고, 사용 시 Q/E/R 연계 쿨을 비운다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local casterPos3 = self.Entity.TransformComponent.WorldPosition
+		    local casterPos = Vector2(casterPos3.x, casterPos3.y)
+		    local horizontalDir = core:GetCurrentFacingDirection(aimDir)
+		    local travelDistance = (skill.waveTravelDistance or 3.2) * core.rangeScale
+		    local landingPos = casterPos + horizontalDir * travelDistance
+		    local impactCenter = casterPos + horizontalDir * (travelDistance * 0.5)
+		    local windup = skill.castWindup or core.castWindup
+		    local aimAngle = math.atan(horizontalDir.y, horizontalDir.x)
+		    core.lastCast = skillKey .. ":" .. tostring(aimAngle) .. ":" .. tostring(landingPos.x) .. ":" .. tostring(landingPos.y) .. ":" .. tostring(_UtilLogic.ElapsedSeconds)
+		
+		    _TimerService:SetTimerOnce(function()
+		        if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		
+		        self:TeleportSelfToWorld(landingPos)
+		
+		        local hitLength = (skill.hitLength or skill.length or 4.0) * core.rangeScale
+		        local hitWidth = (skill.hitWidth or skill.width or 1.8) * core.rangeScale
+		        local attackShape = core:BuildCenteredBox(impactCenter, horizontalDir, hitLength, hitWidth)
+		        attackShape = core:ResolveSkillVisualShape(skillKey, skill, casterPos, landingPos, horizontalDir, attackShape)
+		        core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		        local attackInfo = skillKey .. ":" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(skill.damage or 0)
+		
+		        core:BeginAttackTargetFilter(attackInfo, skill.maxTargets or 0)
+		        local hitComponents = core:PerformAttack(attackShape, attackInfo)
+		        core:EndAttackTargetFilter(attackInfo)
+		
+		        if skill.waveResetStrikerCombo == true then
+		            self:ResetStrikerComboCooldowns()
+		        end
+		
+		        if #hitComponents > 0 then
+		            local pullDistance = (skill.wavePullDistance or 0.6) * core.rangeScale
+		            for _, hitComp in ipairs(hitComponents) do
+		                local defender = hitComp.Entity
+		                -- 건물은 끌어오지 않는다. RTS 유닛은 다른 끌어오기(ApplyPull)와 같은 ForceMove 경로로 벽/건물 검사와
+		                -- CurrentPos 갱신을 거친다. 이동기가 없는 소환체만 예전처럼 Kinematicbody로 직접 옮긴다.
+		                if isvalid(defender) and defender.TransformComponent ~= nil
+		                    and defender:GetComponent("script.Structure_Info") == nil then
+		                    local defenderPos = core:GetEntityWorldPos2(defender)
+		                    local dest = defenderPos + horizontalDir * pullDistance
+		                    if defender:GetComponent("script.UnitMoveComponent") ~= nil then
+		                        _CombatTeamLogic:ForceMove(defender, dest, 0.1)
+		                    elseif defender.KinematicbodyComponent ~= nil then
+		                        defender.KinematicbodyComponent:SetWorldPosition(dest)
+		                    end
+		                end
+		            end
+		        end
+		
+		        local actualImpactPos = core:GetImpactPointFromHits(hitComponents, impactCenter)
+		        core:EmitImpactSync(skillKey, actualImpactPos)
+		        if #hitComponents > 0 then
+		            _TimerService:SetTimerOnce(function()
+		                if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		                core:EmitImpactBatchSync(skillKey, hitComponents, skill.maxImpactFxCount or #hitComponents)
+		            end, skill.impactFollowupDelay or 0.04)
+		        end
+		
+		    end, windup)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CastStrikerAscend(string heroName, string skillKey, table skill, Vector2 aimDir, Vector2 aimWorldPos)
+		local castMap = self.Entity.CurrentMap
+		    -- 승천은 마우스 좌/우 방향을 보고 위로 솟구친 뒤, 다시 아래로 내려오며 원위치로 복귀한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local originPos3 = self.Entity.TransformComponent.WorldPosition
+		    local originPos = Vector2(originPos3.x, originPos3.y)
+		    local sideSign = aimWorldPos.x >= originPos.x and 1 or -1
+		    -- 상승 높이는 "사거리"가 아니라 캐릭터가 실제로 뜨는 높이라서 rangeScale(0.5)을 곱하지 않는다.
+		    -- 예전에는 1.45 * 0.5 = 0.725칸이라 올라가도 눈에 보이지 않았다.
+		    local ascendHeight = skill.ascendHeight or 1.45
+		    local horizontalDrift = skill.ascendHorizontalDrift or 0
+		    local apexPos = originPos + Vector2(sideSign * horizontalDrift, ascendHeight)
+		    local windup = skill.castWindup or core.castWindup
+		    local ascendTravelDuration = skill.ascendTravelDuration or 0.11
+		    local descendTravelDuration = skill.descendTravelDuration or 0.12
+		    local returnDelay = skill.returnDelay or 0.12
+		    -- RTS의 입력 예약을 정상 타격 이후 소비할 여유를 둔다. 후속 뇌성은 기존 토큰으로 자동 복귀를 취소한다.
+		    if self.Entity:GetComponent("script.HeroUnitSkill") ~= nil then returnDelay = math.max(returnDelay, 0.14) end
+		    local returnToken = tostring(_UtilLogic.ElapsedSeconds) .. ":" .. tostring(originPos.x) .. ":" .. tostring(originPos.y)
+		    self._T.strikerAscendReturnToken = returnToken
+		    self._T.strikerAscendOriginPos = originPos
+		    if self.Entity.TransformComponent ~= nil then
+		        local currentScale = self.Entity.TransformComponent.Scale
+		        local absScaleX = math.abs(currentScale.x)
+		        if absScaleX < 0.001 then absScaleX = 1 end
+		        local facingScaleX = sideSign >= 0 and -absScaleX or absScaleX
+		        self.Entity.TransformComponent.Scale = Vector3(facingScaleX, currentScale.y, currentScale.z)
+		    end
+		    core.lastCast = skillKey .. ":" .. tostring(sideSign >= 0 and 0 or math.pi) .. ":" .. tostring(apexPos.x) .. ":" .. tostring(apexPos.y) .. ":" .. tostring(_UtilLogic.ElapsedSeconds)
+		
+		    _TimerService:SetTimerOnce(function()
+		        if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		
+		        local finishAtApex = function()
+		            if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		
+		            local hitLength = (skill.hitLength or skill.length or 2.3) * core.rangeScale
+		            local hitWidth = (skill.hitWidth or skill.width or hitLength) * core.rangeScale
+		            local attackShape = core:BuildCenteredBox(apexPos, Vector2(sideSign, 0), hitLength, hitWidth)
+		            attackShape = core:ResolveSkillVisualShape(skillKey, skill, originPos, apexPos, Vector2(sideSign, 0), attackShape)
+		            core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		            local attackInfo = skillKey .. ":" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(skill.damage or 0)
+		
+		            core:BeginAttackTargetFilter(attackInfo, skill.maxTargets or 0)
+		            local hitComponents = core:PerformAttack(attackShape, attackInfo)
+		            core:EndAttackTargetFilter(attackInfo)
+		
+		            local actualImpactPos = core:GetImpactPointFromHits(hitComponents, apexPos)
+		            core:EmitImpactSync(skillKey, actualImpactPos)
+		            if #hitComponents > 0 then
+		                _TimerService:SetTimerOnce(function()
+		                    if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		                    core:EmitImpactBatchSync(skillKey, hitComponents, skill.maxImpactFxCount or #hitComponents)
+		                end, skill.impactFollowupDelay or 0.04)
+		            end
+		
+		            _TimerService:SetTimerOnce(function()
+		                if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		                if self._T.strikerAscendReturnToken ~= returnToken then return end
+		                -- 뇌성(EC)을 안 쓰면 원래 자리로 그대로 내려온다.
+		                self:TweenSelfToWorld(apexPos, originPos, descendTravelDuration)
+		            end, returnDelay)
+		
+		        end
+		
+		        -- _TweenLogic:MoveTo는 Kinematicbody에 막혀서 실제로 캐릭터가 올라가지 않았다.
+		        self:TweenSelfToWorld(originPos, apexPos, ascendTravelDuration)
+		        _TimerService:SetTimerOnce(finishAtApex, ascendTravelDuration)
+		    end, windup)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CastStrikerThunder(string heroName, string skillKey, table skill, Vector2 aimDir, Vector2 aimWorldPos)
+		local castMap = self.Entity.CurrentMap
+		    -- 뇌성은 승천 후 좌/우 입력만 반영해 아래 대각선으로 돌진하고, 바닥 높이로 복귀하며 경로 중심을 타격한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local currentPos3 = self.Entity.TransformComponent.WorldPosition
+		    local currentPos = Vector2(currentPos3.x, currentPos3.y)
+		    local originPos = self._T.strikerAscendOriginPos or currentPos
+		    local sideSign = aimWorldPos.x >= currentPos.x and 1 or -1
+		    local diagonalDir = Vector2(sideSign, -1):Normalize()
+		    local dashDistance = (skill.thunderDashDistance or 3.8) * core.rangeScale
+		    -- 시작 높이도 사거리가 아니라 실제 높이라서 rangeScale을 곱하지 않는다(승천과 같은 기준).
+		    local minimumStartHeight = skill.thunderStartHeight or 1.15
+		    local launchPos = Vector2(currentPos.x, math.max(currentPos.y, originPos.y + minimumStartHeight))
+		    local landingPos = Vector2(originPos.x + sideSign * dashDistance, originPos.y)
+		    local impactCenter = Vector2((launchPos.x + landingPos.x) * 0.5, (launchPos.y + landingPos.y) * 0.5)
+		    local windup = skill.castWindup or core.castWindup
+		    local descendDelay = math.max(skill.thunderDescendDelay or 0.03, skill.thunderTravelDuration or 0.12)
+		    self._T.strikerAscendReturnToken = nil
+		    core.lastCast = skillKey .. ":" .. tostring(math.atan(diagonalDir.y, diagonalDir.x)) .. ":" .. tostring(landingPos.x) .. ":" .. tostring(landingPos.y) .. ":" .. tostring(_UtilLogic.ElapsedSeconds)
+		
+		    _TimerService:SetTimerOnce(function()
+		        if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		
+		        self:TeleportSelfToWorld(launchPos)
+		
+		        -- 대각선 낙하가 눈에 보이도록 순간이동 대신 짧게 보간한다.
+		        local thunderTravelDuration = skill.thunderTravelDuration or 0.12
+		        self:TweenSelfToWorld(launchPos, landingPos, thunderTravelDuration)
+		
+		        _TimerService:SetTimerOnce(function()
+		            if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		
+		            self:TeleportSelfToWorld(landingPos)
+		
+		            local hitLength = (skill.hitLength or skill.length or 4.6) * core.rangeScale
+		            local hitWidth = (skill.hitWidth or skill.width or 1.9) * core.rangeScale
+		            local attackShape = core:BuildCenteredBox(impactCenter, diagonalDir, hitLength, hitWidth)
+		            attackShape = core:ResolveSkillVisualShape(skillKey, skill, currentPos, landingPos, diagonalDir, attackShape)
+		            core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		            local attackInfo = skillKey .. ":" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(skill.damage or 0)
+		
+		            core:BeginAttackTargetFilter(attackInfo, skill.maxTargets or 0)
+		            local hitComponents = core:PerformAttack(attackShape, attackInfo)
+		            core:EndAttackTargetFilter(attackInfo)
+		
+		            local actualImpactPos = core:GetImpactPointFromHits(hitComponents, landingPos)
+		            core:EmitImpactSync(skillKey, actualImpactPos)
+		            if #hitComponents > 0 then
+		                _TimerService:SetTimerOnce(function()
+		                    if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		                    core:EmitImpactBatchSync(skillKey, hitComponents, skill.maxImpactFxCount or #hitComponents)
+		                end, skill.impactFollowupDelay or 0.04)
+		            end
+		
+		            self._T.strikerAscendOriginPos = nil
+		        end, descendDelay)
+		    end, windup)
+	end
+
+end

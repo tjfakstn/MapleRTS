@@ -1,0 +1,451 @@
+@Component
+script UnitStateComponent extends Component
+
+	property string IdleRUID = ""
+
+	property string MoveRUID = ""
+
+	property string AttackRUID = ""
+
+	property string HitRUID = ""
+
+	property string DeadRUID = ""
+
+	@DisplayName("시즈모드 중 그림(비우면 안 바꿈) — 방어시스템: 강화된 방어 시스템")
+	property string SiegeRUID = ""
+
+	@DisplayName("시즈모드 중 공격 모션(비우면 SiegeRUID)")
+	property string SiegeAttackRUID = ""
+
+	@DisplayName("시즈모드 중 피격 모션(비우면 SiegeRUID)")
+	property string SiegeHitRUID = ""
+
+	property number HitDuration = 0.35
+
+	@DisplayName("피격 모션 최소 간격(초)")
+	property number HitAnimCooldown = 0.8
+
+	@DisplayName("건설 중 작업 불꽃 간격(초)")
+	property number BuildSwingInterval = 0.6
+
+	@DisplayName("건설 중 작업 불꽃 RUID(비우면 CombatConfig.ImpactRUID)")
+	property string BuildSparkRUID = ""
+
+	@DisplayName("건설 중 작업 불꽃 크기")
+	property number BuildSparkScale = 0.3
+
+	@HideFromInspector
+	property number _buildSwingTimer = 0
+
+	@HideFromInspector
+	property any _buildState = nil
+
+	property number AnimPlayRate = 1.0
+
+	property boolean DestroyOnDead = true
+
+	property number DestroyDelay = 1.0
+
+	@DisplayName("울음(선택) 사운드 RUID")
+	property string CrySoundRUID = ""
+
+	@DisplayName("공격 사운드 RUID")
+	property string AttackSoundRUID = ""
+
+	@DisplayName("피격 사운드 RUID")
+	property string HitSoundRUID = ""
+
+	@DisplayName("사망 사운드 RUID")
+	property string DieSoundRUID = ""
+
+	@HideFromInspector
+	property number _hitSoundAt = -10
+
+	@HideFromInspector
+	property string CurrentState = "IDLE"
+
+	@HideFromInspector
+	property any _renderer = nil
+
+	@HideFromInspector
+	property any _info = nil
+
+	@HideFromInspector
+	property any _mover = nil
+
+	@HideFromInspector
+	property any _weapon = nil
+
+	@HideFromInspector
+	property number _prevHp = 0
+
+	@HideFromInspector
+	property boolean _hpReady = false
+
+	@HideFromInspector
+	property number _hitTimer = 0
+
+	@HideFromInspector
+	property any _warned = nil
+
+	@DisplayName("이동 판정 최소 속도(월드 단위/초)")
+	property number MoveSpeedThreshold = 0.3
+
+	@DisplayName("이동 멈춤 판정 지연(초)")
+	property number MoveHoldSeconds = 0.25
+
+	@DisplayName("이동 인정까지 필요한 지속 시간(초)")
+	property number MoveStartSeconds = 0.1
+
+	@HideFromInspector
+	property number _lastX = 0
+
+	@HideFromInspector
+	property number _lastY = 0
+
+	@HideFromInspector
+	property number _movedUntil = 0
+
+	@HideFromInspector
+	property boolean _posReady = false
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		-- 컴포넌트 캐싱 후 IDLE 로 시작한다.
+		self._warned = {}
+		self:CacheRefs()
+		self.CurrentState = "IDLE"
+		self._prevHp = 0
+		self._hpReady = false
+		self._hitTimer = 0
+		self:PlayFor("IDLE")
+	end
+
+	method void CacheRefs()
+		-- 유닛 루트/자식에서 필요한 컴포넌트를 찾아 캐싱한다. 아직 못 찾은 것만 다시 시도한다.
+		local e = self.Entity
+		
+		if not isvalid(self._renderer) then
+			self._renderer = e.SpriteRendererComponent
+		end
+		if self._info == nil then
+			self._info = e:GetComponent("script.Unit_Info")
+		end
+		if self._mover == nil then
+			self._mover = e:GetComponent("script.UnitMoveComponent")
+		end
+		if self._buildState == nil then
+			-- 일꾼이 아니면 false로 기억해 매 프레임 다시 찾지 않는다.
+			self._buildState = e:GetComponent("script.WorkerBuildState") or false
+		end
+		if self._weapon == nil then
+			-- 1) Unit_Info 가 찾아둔 Weapon 엔티티 우선
+			if self._info ~= nil and isvalid(self._info.Weapon) then
+				self._weapon = self._info.Weapon:GetComponent("script.Weapon")
+			end
+			-- 2) 폴백: 자식 엔티티에서 script.Weapon 직접 탐색
+			if self._weapon == nil then
+				for _, child in ipairs(e.Children:ToTable()) do
+					local w = child:GetComponent("script.Weapon")
+					if w ~= nil then
+						self._weapon = w
+						break
+					end
+				end
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- 매 프레임 상태 조건을 평가하고 필요 시 전환한다.
+		self:CacheRefs()
+		if not isvalid(self._renderer) then return end
+		
+		-- UnitMoveComponent.IsMove는 서버에서만 갱신되는 값이라 클라이언트에선 늘 false다 — 실제 위치(동기화된 Transform) 변화로 이동을 판정한다.
+		local wp = self.Entity.TransformComponent.WorldPosition
+		if self._posReady and delta > 0 then
+			local ddx, ddy = wp.x - self._lastX, wp.y - self._lastY
+			local now = _UtilLogic.ElapsedSeconds
+			if math.sqrt(ddx * ddx + ddy * ddy) / delta > self.MoveSpeedThreshold then
+				-- 움직임이 끊겼다가 다시 시작되면 "이동 시작 시각"을 새로 잡는다.
+				if now >= self._movedUntil or self._T.moveSince == nil then self._T.moveSince = now end
+				self._T.lastMoveAt = now
+				self._movedUntil = now + self.MoveHoldSeconds
+			end
+		end
+		self._lastX, self._lastY, self._posReady = wp.x, wp.y, true
+		
+		---@type Unit_Info
+		local info = self._info
+		
+		-- HP가 한 번이라도 양수였는지(=스탯 초기화 완료) 확인. 초기화 전 오판 방지.
+		if info ~= nil and info.Hp > 0 then
+			self._hpReady = true
+		end
+		
+		-- 1) DEAD 판정 (최우선 · 진입 후 잠금)
+		if info ~= nil then
+			local isDead = info.IsDead or (self._hpReady and info.Hp <= 0)
+			if isDead then
+				self:ChangeState("DEAD")
+				self._prevHp = info.Hp
+				return
+			end
+		end
+		if self.CurrentState == "DEAD" then return end
+		
+		-- 2) HIT 판정 (HP 감소 감지) — 명시적 NotifyHit() 호출과 병행되는 폴백
+		if info ~= nil then
+			if self._hpReady and info.Hp < self._prevHp then
+				self:EnterHit()
+			end
+			self._prevHp = info.Hp
+		end
+		
+		-- 3) HIT 유지 / 해제
+		if self.CurrentState == "HIT" then
+			self._hitTimer = self._hitTimer - delta
+			-- 피격 모션 중에 공격이 시작되면 바로 공격 모션으로 넘어간다(공격이 가려지지 않게).
+			if self._weapon ~= nil and self._weapon.IsAttack then self._hitTimer = 0 end
+			if self._hitTimer > 0 then return end
+			self:ChangeState(self:EvaluateBaseState())
+			return
+		end
+		
+		-- 시즈모드 켜고 끔(Unit_Info.AbilityToggle, @Sync)이 바뀌면 같은 상태라도 그림을 다시 넣는다(SiegeRUID).
+		if self.SiegeRUID ~= "" and info ~= nil then
+			local sieged = info.AbilityToggle == true
+			if sieged ~= (self._T.sieged == true) then
+				self._T.sieged = sieged
+				self:PlayFor(self.CurrentState)
+			end
+		end
+		
+		-- 4) ATTACK / BUILD / MOVE / IDLE
+		self:ChangeState(self:EvaluateBaseState())
+		
+		-- 건설 중(2026-10-07, 훈련로봇 피드백 B안 — 사용자 확정): 이동 애니메이션을 제자리에서 재생하고(RuidFor "BUILD"),
+		-- BuildSwingInterval마다 작업 불꽃을 좌우 번갈아 띄워 망치질처럼 보이게 한다.
+		-- (훈련로봇A 리소스엔 공격·작업 동작이 없고 AttackRUID가 대기와 같은 클립이라 공격 모션 반복은 서 있는 것과 똑같았다.)
+		if self.CurrentState == "BUILD" then
+			self._buildSwingTimer = self._buildSwingTimer + delta
+			if self._buildSwingTimer >= self.BuildSwingInterval then
+				self._buildSwingTimer = 0
+				self:PlayBuildSpark()
+			end
+		else
+			self._buildSwingTimer = 0
+		end
+	end
+
+	method string EvaluateBaseState()
+		-- HIT/DEAD 를 제외한 기본 상태를 계산한다. (ATTACK > MOVE > IDLE)
+		---@type Weapon
+		local weapon = self._weapon
+		---@type UnitMoveComponent
+		local mover = self._mover
+		
+		if weapon ~= nil and weapon.IsAttack then
+			return "ATTACK"
+		end
+		
+		local moving = false
+		if mover ~= nil and mover.IsMove then moving = true end
+		if weapon ~= nil and weapon.ShouldMove then moving = true end
+		-- 위치 변화로 판정하는 이동은 MoveStartSeconds 이상 이어졌을 때만 인정한다.
+		-- 밀림·위치 보정 같은 한두 프레임짜리 흔들림에 대기↔이동이 번갈아 바뀌면 애니메이션이 매번 처음부터 다시 재생돼 깜빡여 보인다.
+		if _UtilLogic.ElapsedSeconds < self._movedUntil and self._T.moveSince ~= nil and self._T.lastMoveAt ~= nil
+			and (self._T.lastMoveAt - self._T.moveSince) >= self.MoveStartSeconds then
+			moving = true
+		end
+		if moving then return "MOVE" end
+		
+		-- 건설에 묶인 일꾼(에델슈타인 훈련로봇 — 완공까지 부착)은 서 있는 동안 작업 모션을 보여 준다.
+		---@type WorkerBuildState
+		local bs = self._buildState
+		if bs ~= nil and bs ~= false and bs.IsBuilding and not bs.FreeWhileBuilding then
+			return "BUILD"
+		end
+		-- 테란식 건설(에델슈타인): 건물 곁에서 실제로 짓는 중(IsRepairing)일 때. 건물이 사라졌거나 완공됐으면 아님.
+		if bs ~= nil and bs ~= false and bs.IsRepairing and isvalid(bs.BuildTarget) then
+			local si = bs.BuildTarget.Structure_Info
+			if si ~= nil and si.IsUnderConstruction and not si.IsDestroyed then return "BUILD" end
+		end
+		
+		return "IDLE"
+	end
+
+	method void EnterHit()
+		-- 피격 1회: 피격음은 항상, 피격 모션은 조건부.
+		-- 2026-10-07 "대형 유닛이 맞으면 공격이 씹힌다" 피드백: 피해·공격은 서버에서 정상인데, 맞을 때마다 피격 모션(0.35초)으로
+		-- 바뀌고 그동안 공격 모션이 안 나와서, 여러 마리에게 계속 맞는 대형 유닛은 피격 자세에 갇혀 공격 모션이 아예 안 보였다.
+		--  ① 공격 중(Weapon.IsAttack)에는 피격 모션으로 바꾸지 않는다(공격 모션 유지).
+		--  ② 피격 모션은 HitAnimCooldown(0.8초)에 한 번만 — 연속으로 맞아도 피격 자세에 갇히지 않는다.
+		if self.CurrentState == "DEAD" then return end
+		self:PlayHitSound()
+		---@type Weapon
+		local weapon = self._weapon
+		if weapon ~= nil and weapon.IsAttack then
+			if self.CurrentState == "HIT" then
+				self._hitTimer = 0
+				self:ChangeState(self:EvaluateBaseState())
+			end
+			return
+		end
+		local now = _UtilLogic.ElapsedSeconds
+		if now - (self._T.lastHitAnimAt or -10) < self.HitAnimCooldown then return end
+		self._T.lastHitAnimAt = now
+		self._hitTimer = self.HitDuration
+		if self.CurrentState == "HIT" then
+			self:PlayFor("HIT")   -- 1회형 클립 재시작 시도
+			return
+		end
+		self:ChangeState("HIT")
+	end
+
+	method void ChangeState(string newState)
+		-- 상태 전환의 유일한 진입점. 같은 상태면 무시, DEAD 진입 후에는 잠금.
+		if self.CurrentState == "DEAD" then return end
+		if newState == self.CurrentState then return end
+		
+		self.CurrentState = newState
+		self:PlayFor(newState)
+		if newState == "DEAD" then
+			_SoundResources:PlayUnitSound(self.Entity, self.DieSoundRUID, "die")
+		end
+		
+		if newState == "DEAD" and self.DestroyOnDead then
+			-- 죽는 모션이 끝나면 사라지게 한다. Entity:Destroy 는 서버/소유자 권한이 필요해 클라이언트에서 직접 못 하므로,
+			-- 모션 길이만큼 기다린 뒤 서버 RPC(RequestRemove)로 제거를 요청한다.
+			local delay = self:GetDeathMotionDuration()
+			_TimerService:SetTimerOnce(function()
+				if isvalid(self.Entity) then
+					self:RequestRemove()
+				end
+			end, delay)
+		end
+	end
+
+	method number GetDeathMotionDuration()
+		-- 사망 애니메이션 클립(DeadRUID)의 총 재생 시간(초) = 프레임 Delay의 합. 클립을 읽지 못하거나 0이면 DestroyDelay.
+		if self.DeadRUID == "" then return self.DestroyDelay end
+		local clip = _ResourceService:LoadAnimationClipAndWait(self.DeadRUID)
+		if clip == nil then return self.DestroyDelay end
+		
+		local total = 0
+		for _, frame in ipairs(clip.Frames:ToTable()) do
+			total = total + frame.Delay
+		end
+		-- 단위가 밀리초로 들어오는 클립 대비(수십 초를 넘는 죽는 모션은 없다고 본다).
+		if total > 20 then total = total / 1000 end
+		if total <= 0 then return self.DestroyDelay end
+		return total / math.max(self.AnimPlayRate, 0.01)
+	end
+
+	@ExecSpace("Server")
+	method void RequestRemove()
+		-- 죽는 모션이 끝난 유닛을 서버가 제거한다. 사망 판정은 서버(Unit_Info.GetDamage)가 하므로 서버 기준으로
+		-- 실제로 죽은 유닛만 제거한다. 여러 클라이언트가 동시에 요청해도 첫 요청만 유효하다(이미 제거됐으면 무시).
+		if not isvalid(self.Entity) then return end
+		---@type Unit_Info
+		local info = self.Entity:GetComponent("script.Unit_Info")
+		if info ~= nil and not info.IsDead then
+			return
+		end
+		self.Entity:Destroy()
+	end
+
+	method void PlayFor(string state)
+		-- 상태에 매핑된 RUID 를 렌더러에 적용해 애니메이션을 재생한다.
+		if not isvalid(self._renderer) then return end
+		local ruid = self:RuidFor(state)
+		if ruid == nil or ruid == "" then
+			self:WarnOnce(state)
+			return
+		end
+		self._renderer.PlayRate = self.AnimPlayRate
+		self._renderer.SpriteRUID = ruid
+	end
+
+	method string RuidFor(string state)
+		-- 상태 이름 → RUID 매핑 테이블.
+		-- 시즈모드(2026-10-07): 방어시스템은 시즈모드 동안 사망을 뺀 모든 상태를 강화된 방어 시스템 그림(SiegeRUID)으로 보여 준다.
+		if state ~= "DEAD" and self.SiegeRUID ~= "" and self._info ~= nil and self._info.AbilityToggle == true then
+			if state == "ATTACK" and self.SiegeAttackRUID ~= "" then return self.SiegeAttackRUID end
+			if state == "HIT" and self.SiegeHitRUID ~= "" then return self.SiegeHitRUID end
+			return self.SiegeRUID
+		end
+		if state == "IDLE"   then return self.IdleRUID end
+		if state == "MOVE"   then return self.MoveRUID end
+		if state == "ATTACK" then return self.AttackRUID end
+		if state == "BUILD"  then return (self.MoveRUID ~= "") and self.MoveRUID or self.IdleRUID end
+		if state == "HIT"    then return self.HitRUID end
+		if state == "DEAD"   then return self.DeadRUID end
+		return ""
+	end
+
+	method void WarnOnce(string state)
+		-- 비어 있는 RUID 경고를 상태별 1회만 출력(로그 스팸 방지).
+		if self._warned == nil then self._warned = {} end
+		if self._warned[state] then return end
+		self._warned[state] = true
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayBuildSpark()
+		-- 건설 중 작업 불꽃 1회(클라 로컬, 안개 속이면 FogOfWarLogic이 재생하지 않음). 일꾼 몸 앞쪽 위에서 좌우 번갈아.
+		local ruid = (self.BuildSparkRUID ~= "") and self.BuildSparkRUID or _CombatConfig.ImpactRUID
+		if ruid == "" then return end
+		self._T.sparkSide = not (self._T.sparkSide == true)
+		local dx = self._T.sparkSide and 0.25 or -0.25
+		local pos = self.Entity.TransformComponent.WorldPosition + Vector3(dx, 0.35, 0)
+		local sc = self.BuildSparkScale
+		_FogOfWarLogic:PlayEffectSeen(ruid, self.Entity, pos, 0, Vector3(sc, sc, 1), false,
+			{ SortingLayer = "MapLayer0", OrderInLayer = 30 })
+	end
+
+	@ExecSpace("ClientOnly")
+	method void NotifyHit()
+		-- HP 감소 폴링 대신, 피격 시점에 명시적으로 호출하고 싶을 때 사용.
+		-- 예) Unit_Info:GetDamage() 안에서 호출됨.
+		if self.CurrentState == "DEAD" then return end
+		self:EnterHit()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void NotifyDead()
+		-- 사망 시점에 명시적으로 호출. (폴링으로도 감지되지만 즉시 반영용)
+		self:ChangeState("DEAD")
+	end
+
+	@ExecSpace("ClientOnly")
+	method void NotifyAttackSwing()
+		-- 공격 스윙마다 ATTACK 클립을 다시 재생하고 싶을 때 호출(1회형 클립용).
+		-- 예) Weapon:AttackMotion() 안에서 호출됨. 공격 소리는 상태와 무관하게 스윙마다 낸다(사망 제외).
+		if self.CurrentState == "DEAD" then return end
+		_SoundResources:PlayUnitSound(self.Entity, self.AttackSoundRUID, "attack")
+		-- 영웅 유닛은 아바타 몸 동작(스윙/사격)을 스윙마다 다시 재생한다.
+		---@type HeroUnitVisual
+		local heroVisual = self.Entity:GetComponent("script.HeroUnitVisual")
+		if heroVisual ~= nil then heroVisual:PlayAttackSwing() end
+		if self.CurrentState ~= "ATTACK" then return end
+		self:PlayFor("ATTACK")
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayHitSound()
+		-- 피격음. HP 감소 폴링과 NotifyHit가 같은 타격을 두 번 잡을 수 있어 유닛별 0.25초 간격을 둔다.
+		local now = _UtilLogic.ElapsedSeconds
+		if now - self._hitSoundAt < 0.25 then return end
+		self._hitSoundAt = now
+		_SoundResources:PlayUnitSound(self.Entity, self.HitSoundRUID, "hit")
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ForceState(string state)
+		-- 테스트/수동 제어용 강제 전환.
+		self:ChangeState(state)
+	end
+
+end

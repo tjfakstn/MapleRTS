@@ -1,0 +1,444 @@
+@Component
+script WildHunterSkillComponent extends Component
+
+	property integer unlockedJaguarCount = 3
+
+	@Sync
+	property boolean casting = false
+
+	method table BuildKit()
+		    -- 수치는 WildHunterHeroDataComponent가 단일 출처로 소유한다. 기존 호출부 호환을 위한 위임이다.
+		    ---@type WildHunterHeroDataComponent
+		    local data = self.Entity:GetComponent("script.WildHunterHeroDataComponent")
+		    if data == nil then
+		        return {}
+		    end
+		    local kit = data:BuildKit()
+		    local adapter = self.Entity:GetComponent("script.HeroUnitSkill")
+		    if adapter ~= nil then return adapter:PrepareKit(kit, 12) end
+		    return kit
+	end
+
+	method table BuildVfx()
+		    -- VFX RUID/배율은 WildHunterHeroDataComponent가 단일 출처로 소유한다. 기존 호출부 호환을 위한 위임이다.
+		    ---@type WildHunterHeroDataComponent
+		    local data = self.Entity:GetComponent("script.WildHunterHeroDataComponent")
+		    if data == nil then
+		        return {}
+		    end
+		    return data:BuildVfx()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnBeginPlay()
+		    -- 소유자별 소환/발사 상태를 분리한다. AI는 재규어 컴포넌트가 소유한다.
+		    self._T.jaguars = {}
+		    self._T.flights = {}
+		    self._T.nextScan = 0
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean IsLivingEnemy(Entity target)
+		    -- 탐색은 진영과 생존 여부만 검사하고 실제 타격은 엔진 Hit collider에 맡긴다.
+		    if not isvalid(target) or not target.EnabledInHierarchy or target.CurrentMap ~= self.Entity.CurrentMap then return false end
+		    if not _CombatTeamLogic:IsEnemy(self.Entity, target) then return false end
+		    local info = target:GetComponent("script.Unit_Info")
+		    if info ~= nil then return not info.IsDead and info.Hp > 0 end
+		    local structure = target:GetComponent("script.Structure_Info")
+		    if structure ~= nil then return not structure.IsDestroyed end
+		    local unit = target:GetComponent("script.UnitHitComponent")
+		    if unit ~= nil then return not unit.isDead and unit.hp > 0 end
+		    local dummy = target:GetComponent("script.TrainingDummyComponent")
+		    if dummy ~= nil then return true end
+		    return target.PlayerComponent ~= nil and not target.PlayerComponent:IsDead()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void MaintainCompanions()
+		    -- 사망 시각부터 30초를 센 뒤 새 개체의 UnitHit 초기화로 HP를 회복한다.
+		    local origin = self.Entity.TransformComponent.WorldPosition
+		    local now = _UtilLogic.ElapsedSeconds
+		    local count = math.max(0, math.min(3, self.unlockedJaguarCount))
+		    for slot = 1, 3 do
+		        local record = self._T.jaguars[slot]
+		        if slot > count then
+		            if record ~= nil and isvalid(record.entity) then record.entity:Destroy() end
+		            self._T.jaguars[slot] = nil
+		        else
+		            if record ~= nil and isvalid(record.entity) then
+		                local ai = record.entity:GetComponent("script.JaguarCompanionComponent")
+		                if not ai:IsAlive() then
+		                    if record.respawnAt == nil then
+		                        record.respawnAt = now + 30
+		                        record.hideAt = now + 1.5
+		                    end
+		                    if now >= record.hideAt then record.entity.Visible = false end
+		                    if now >= record.respawnAt then record.entity:Destroy() self._T.jaguars[slot] = nil end
+		                end
+		            elseif record ~= nil then
+		                self._T.jaguars[slot] = nil
+		            end
+		            if self._T.jaguars[slot] == nil then
+		                local angle = slot * 2.094
+		                local pos = Vector3(origin.x + math.cos(angle) * 1.4, origin.y + math.sin(angle) * 1.4, origin.z)
+		                local entity = _SpawnService:SpawnByModelId("wildhunterjaguar", "Jaguar_" .. tostring(self.Entity.Id) .. "_" .. tostring(slot), pos, self.Entity.CurrentMap)
+		                if isvalid(entity) then
+		                    local ai = entity:AddComponent("script.JaguarCompanionComponent")
+		                    ai:Configure(self.Entity, slot)
+		                    self._T.jaguars[slot] = { entity = entity }
+		                end
+		            end
+		        end
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method table GetAliveCompanions()
+		    -- W/R 모두 같은 생존 목록을 사용한다.
+		    local alive = {}
+		    for _, record in pairs(self._T.jaguars or {}) do
+		        if isvalid(record.entity) then
+		            local ai = record.entity:GetComponent("script.JaguarCompanionComponent")
+		            if ai ~= nil and ai:IsAlive() then table.insert(alive, ai) end
+		        end
+		    end
+		    return alive
+	end
+
+	@ExecSpace("ServerOnly")
+	method void AssignTargets()
+		    -- 0.25초마다 가까운 적을 배정하되 미배정 적을 우선하고 단일 적은 공유한다.
+		    local candidates = {}
+		    local seen = {}
+		    local map = self.Entity.CurrentMap
+		    for _, typeName in ipairs({ "script.Unit_Info", "script.Structure_Info", "script.UnitHitComponent", "script.TrainingDummyComponent", "PlayerComponent" }) do
+		        for _, component in ipairs(map:GetChildComponentsByTypeName(typeName, true)) do
+		            local e = component.Entity
+		            if not seen[e.Id] and self:IsLivingEnemy(e) then seen[e.Id] = true table.insert(candidates, e) end
+		        end
+		    end
+		    local used = {}
+		    local master = self.Entity.TransformComponent.WorldPosition:ToVector2()
+		    for _, ai in ipairs(self:GetAliveCompanions()) do
+		        local p = ai.Entity.TransformComponent.WorldPosition:ToVector2()
+		        local best = nil
+		        local bestScore = math.huge
+		        for _, e in ipairs(candidates) do
+		            local ep = e.TransformComponent.WorldPosition:ToVector2()
+		            if (ep - master):Magnitude() <= ai.leash then
+		                local score = (ep - p):Magnitude() + (used[e.Id] and 1000 or 0)
+		                if score < bestScore then best = e bestScore = score end
+		            end
+		        end
+		        ai._T.target = best
+		        if best ~= nil then used[best.Id] = true end
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method string BeginAttack(string key, integer damage, integer maxTargets)
+		    -- 기존 Core의 공격 정보 형식과 필터를 재사용한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		    local info = key .. ":" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(damage)
+		    core:BeginAttackTargetFilter(info, maxTargets)
+		    return info
+	end
+
+	@ExecSpace("ServerOnly")
+	method void PassiveAttack(Entity jaguar, Entity target)
+		    -- 근접 동료 공격도 플레이어 Core Attack을 통해 HP/HitEvent 기존 경로로 전달한다.
+		    if not self:IsLivingEnemy(target) then return end
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local damage = self.Entity:GetComponent("script.HeroUnitSkill") ~= nil and 12 or 25
+		    local info = self:BeginAttack("JAGUAR", damage, 1)
+		    local hits = core:PerformAttack(CircleShape(jaguar.TransformComponent.WorldPosition:ToVector2(), 1.1), info)
+		    core:EndAttackTargetFilter(info)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void AttackCorridor(Vector2 origin, Vector2 direction, number length, number width, string info, string key)
+		    -- 같은 발사/돌진의 필터를 유지해 경로 중간 적을 한 번씩만 타격한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local status = self.Entity:GetComponent("script.HeroSkillStatusComponent")
+		    local shape = core:BuildFrontBox(origin, direction, math.max(0.01, length), width)
+		    if key == "W" then
+		        local bounds = core:GetAttackLogicComponent():GetMeasuredEffectBounds(self:BuildVfx().W.effect)
+		        if bounds ~= nil then
+		            local scale = 1.05 * 1.15
+		            local sign = direction.x >= 0 and -1 or 1
+		            local center = origin + direction * (length * 0.5) + Vector2((bounds[1] + bounds[3]) * 0.5 * scale * sign, (bounds[2] + bounds[4]) * 0.5 * scale)
+		            shape = BoxShape(center, Vector2((bounds[3] - bounds[1]) * scale + math.abs(direction.x * length), (bounds[4] - bounds[2]) * scale + math.abs(direction.y * length)), 0)
+		        end
+		    end
+		    local hits = core:PerformAttack(shape, info)
+		    local positions = {}
+		    for _, hit in ipairs(hits) do
+		        if isvalid(hit.Entity) then
+		            table.insert(positions, hit.Entity.TransformComponent.WorldPosition)
+		            if key == "W" and status ~= nil then status:StunTarget(hit.Entity, 1, self:BuildVfx().W.impact) end
+		        end
+		    end
+		    if #positions > 0 and key ~= "W" then self:PlayImpacts(key, positions) end
+		    if #hits > 0 then  end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TryCast(string key, Vector2 aim)
+		    -- Core 소유권 검사 뒤 호출된다. 생존 재규어가 없으면 W/R 쿨타임을 쓰지 않는다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if core:GetSelectedHeroId() ~= "wild_hunter" or _CombatTeamLogic:IsDead(self.Entity) or self.casting then return end
+		    local kit = self:BuildKit()
+		    local skill = kit[key]
+		    if type(skill) ~= "table" then return end
+		    local alive = self:GetAliveCompanions()
+		    if (key == "W" or key == "R") and #alive == 0 then  return end
+		    local now = _UtilLogic.ElapsedSeconds
+		    core._T.cooldownEndAt = core._T.cooldownEndAt or {}
+		    local cdKey = "12:" .. key
+		    if now < (core._T.cooldownEndAt[cdKey] or 0) then return end
+		    local origin = self.Entity.TransformComponent.WorldPosition:ToVector2()
+		    local direction = core:GetResolvedSkillDirection(skill, core:GetAimDirection(origin, aim))
+		    core:AcceptActorCast(key, skill)
+		    core._T.cooldownEndAt[cdKey] = now + (core.designNoCooldown and 0 or skill.cooldown)
+		    if key == "Q" or key == "E" then
+		        core:CastGeneric(kit.name, key, skill, direction, aim)
+		    elseif key == "W" then
+		        for _, ai in ipairs(alive) do
+		            local facing = ai:GetFacingDirection()
+		            ai:CancelDash()
+		            ai:BeginDash(facing, skill.dashDistance, skill.duration)
+		        end
+		    elseif key == "R" then
+		        for _, ai in ipairs(alive) do
+		            local facing = ai:GetFacingDirection()
+		            ai:CancelDash()
+		            ai._T.firingUntil = now + skill.duration
+		            ai.Entity.MovementComponent:Stop()
+		            ai:SetMode("Idle")
+		            local p = ai.Entity.TransformComponent.WorldPosition:ToVector2()
+		            local info = self:BeginAttack("R", skill.damage, 16)
+		            local jaguarScale = math.abs(ai.Entity.TransformComponent.Scale.x)
+		            local startScale = 0.55 * jaguarScale / 1.15
+		            local startY = 0.07 * startScale - (ai.slot == 3 and 0.07 * jaguarScale or 0)
+		            table.insert(self._T.flights, { origin = p, direction = facing, elapsed = 0, previous = 0,
+		                startScale = startScale, startY = startY, duration = skill.duration, length = skill.travelDistance, info = info })
+		            self:PlayFlight(ai.Entity, p, facing, skill.travelDistance, skill.duration)
+		        end
+		    elseif key == "T" then
+		        local hit = _CombatTeamLogic:GetReceiver(self.Entity)
+		        local old = hit ~= nil and (hit._T.immuneUntil or 0) or 0
+		        self._T.ultimate = { origin = origin, elapsed = 0, fired = 0, oldImmune = old, damage = skill.damage,
+		            deadline = math.max(old, now + skill.duration), finishPlayed = false }
+		        if hit ~= nil then hit._T.immuneUntil = self._T.ultimate.deadline end
+		        self.casting = true
+		        self:PlayUltimate(origin, false)
+		    end
+	end
+
+	method void OnUpdate(number delta)
+		    -- 클라이언트는 발사체 연출만, 서버는 소환/판정/무적 수명만 갱신한다.
+		    if self:IsClient() then
+		        for i = #(self._T.visuals or {}), 1, -1 do
+		            local v = self._T.visuals[i]
+		            v.elapsed = v.elapsed + delta
+		            if isvalid(v.entity) then
+		                -- R의 모든 프레임을 합친 로컬 경계: X[-4.49,1.87], Y[-0.43,2.83].
+		                -- 왼쪽 원본을 뒤집은 뒤 4.452칸 너비를 포함해 전체 이동 끝을 length에 맞춘다.
+		                local progress = math.min(1, v.elapsed / v.duration)
+		                -- 첫 모션은 재규어 발밑에서 시작하고 0.18초 동안 기존 비행 크기/경로로 연결한다.
+		                local blend = math.min(1, v.elapsed / 0.18)
+		                local scale = v.startScale + (0.7 - v.startScale) * blend
+		                v.entity.TransformComponent.Scale = Vector3(v.direction.x > 0 and -scale or scale, scale, 1)
+		                local forward = 1.309 * blend + math.max(0, v.length - 4.452) * progress
+		                local y = v.startY * (1 - blend)
+		                local p = v.origin + v.direction * forward + Vector2(0, y)
+		                v.entity.TransformComponent.Position = Vector3(p.x, p.y, 0)
+		            end
+		            if v.elapsed >= v.duration then
+		                if isvalid(v.entity) then v.entity:Destroy() end
+		                table.remove(self._T.visuals, i)
+		            end
+		        end
+		        for i = #(self._T.effects or {}), 1, -1 do
+		            local e = self._T.effects[i]
+		            e.remaining = e.remaining - delta
+		            if e.remaining <= 0 then _EffectService:RemoveEffect(e.serial) table.remove(self._T.effects, i) end
+		        end
+		        return
+		    end
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if core == nil or core:GetSelectedHeroId() ~= "wild_hunter" or _CombatTeamLogic:IsDead(self.Entity) then
+		        if self._T.activeMap ~= nil then self:Cleanup() end
+		        return
+		    end
+		    if self._T.activeMap ~= nil and self._T.activeMap ~= self.Entity.CurrentMap then self:Cleanup() end
+		    self._T.activeMap = self.Entity.CurrentMap
+		    self:MaintainCompanions()
+		    if _UtilLogic.ElapsedSeconds >= self._T.nextScan then
+		        self._T.nextScan = _UtilLogic.ElapsedSeconds + 0.25
+		        self:AssignTargets()
+		    end
+		    for i = #self._T.flights, 1, -1 do
+		        local shot = self._T.flights[i]
+		        shot.elapsed = shot.elapsed + delta
+		        local progress = math.min(1, shot.elapsed / shot.duration)
+		        local blend = math.min(1, shot.elapsed / 0.18)
+		        local scale = shot.startScale + (0.7 - shot.startScale) * blend
+		        local forward = 1.309 * blend + math.max(0, shot.length - 4.452) * progress
+		        local position = shot.origin + shot.direction * forward + Vector2(0, shot.startY * (1 - blend))
+		        local shape = core:GetAttackLogicComponent():BuildMeasuredEffectBox(self:BuildVfx().R.effect, position, shot.direction, scale)
+		        if shape ~= nil then
+		            local hits = core:PerformAttack(shape, shot.info)
+		            local positions = {}
+		            for _, hit in ipairs(hits) do
+		                if isvalid(hit.Entity) then table.insert(positions, hit.Entity.TransformComponent.WorldPosition) end
+		            end
+		            if #positions > 0 then self:PlayImpacts("R", positions)  end
+		        end
+		        if shot.elapsed >= shot.duration then core:EndAttackTargetFilter(shot.info) table.remove(self._T.flights, i) end
+		    end
+		    local u = self._T.ultimate
+		    if u ~= nil then
+		        u.elapsed = u.elapsed + delta
+		        local phaseStarts = { 0.36, 1.08, 1.8, 2.52 }
+		        while u.fired < 24 do
+		            local phase = math.floor(u.fired / 6) + 1
+		            local due = phaseStarts[phase] + (u.fired % 6) * 0.045
+		            if u.elapsed < due then break end
+		            local info = self:BeginAttack("T", u.damage, 128)
+		            local hits = core:PerformAttack(BoxShape(u.origin, Vector2(12.8, 7.2), 0), info)
+		            core:EndAttackTargetFilter(info)
+		            local positions = {}
+		            for _, h in ipairs(hits) do if isvalid(h.Entity) then table.insert(positions, h.Entity.TransformComponent.WorldPosition) end end
+		            if #positions > 0 then self:PlayImpacts("T", positions) end
+		            u.fired = u.fired + 1
+		        end
+		        if not u.finishPlayed and u.elapsed >= 2.16 then u.finishPlayed = true self:PlayUltimate(u.origin, true) end
+		        if u.elapsed >= 3.15 then self:FinishUltimate() end
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void FinishUltimate()
+		    -- 자신이 설정한 무적만 되돌리고 더 긴 외부 무적은 보존한다.
+		    local u = self._T.ultimate
+		    if u == nil then return end
+		    local hit = _CombatTeamLogic:GetReceiver(self.Entity)
+		    if hit ~= nil and hit._T.immuneUntil == u.deadline then hit._T.immuneUntil = u.oldImmune end
+		    self._T.ultimate = nil
+		    self.casting = false
+		    self:ClearPresentation()
+	end
+
+	@ExecSpace("Client")
+	method void PlayDash(Entity jaguar, Vector2 direction, number duration)
+		    -- 이동 중인 재규어에만 돌진 효과를 부착하고 돌진 종료 시 제거한다.
+		    if not isvalid(jaguar) then return end
+		    -- 좌우 반전은 재규어의 부모 X 배율을 그대로 따르고 180도 회전하지 않는다.
+		    local serial = _FogOfWarLogic:PlayEffectAttachedSeen(self:BuildVfx().W.effect, jaguar, Vector3.zero,
+		        0, Vector3(1.05, 1.05, 1), false, nil)
+		    self._T.effects = self._T.effects or {}
+		    table.insert(self._T.effects, { serial = serial, remaining = duration })
+	end
+
+	@ExecSpace("Client")
+	method void PlayFlight(Entity jaguar, Vector2 origin, Vector2 direction, number length, number duration)
+		    -- R은 재규어와 독립된 body-less 시각 개체만 전진한다.
+		    local e = _SpawnService:SpawnByModelId("projectile", "JaguarRampage", origin:ToVector3(), self.Entity.CurrentMap)
+		    if not isvalid(e) then return end
+		    e.SpriteRendererComponent.SpriteRUID = self:BuildVfx().R.effect
+		    local jaguarScale = isvalid(jaguar) and math.abs(jaguar.TransformComponent.Scale.x) or 1.15
+		    local startScale = 0.55 * jaguarScale / 1.15
+		    local ai = isvalid(jaguar) and jaguar:GetComponent("script.JaguarCompanionComponent") or nil
+		    -- 원본 R pivot Y=7px. 3번 재규어만 idle pivot Y=7px이며 나머지는 0px이다.
+		    local startY = 0.07 * startScale - (ai ~= nil and ai.slot == 3 and 0.07 * jaguarScale or 0)
+		    e.TransformComponent.Scale = Vector3(direction.x > 0 and -startScale or startScale, startScale, 1)
+		    e.TransformComponent.ZRotation = 0
+		    local start = origin + Vector2(0, startY)
+		    e.TransformComponent.Position = start:ToVector3()
+		    self._T.visuals = self._T.visuals or {}
+		    table.insert(self._T.visuals, { entity = e, origin = origin, direction = direction,
+		        length = length, duration = duration, elapsed = 0, startScale = startScale, startY = startY })
+	end
+
+	@ExecSpace("Client")
+	method void PlayImpacts(string key, table positions)
+		    -- W 표시는 0.36초 클립을 1초 동안 반복하고 반드시 제거한다.
+		    local ruid = self:BuildVfx()[key].impact
+		    for _, p in ipairs(positions) do
+		        local serial = _FogOfWarLogic:PlayEffectSeen(ruid, self.Entity.CurrentMap,
+		            Vector3(p.x, p.y + (key == "W" and 0.9 or 0.3), p.z), 0, Vector3.one, key == "W", nil)
+		        if key == "W" then
+		            self._T.effects = self._T.effects or {}
+		            table.insert(self._T.effects, { serial = serial, remaining = 1 })
+		        end
+		    end
+	end
+
+	@ExecSpace("Client")
+	method void PlayUltimate(Vector2 origin, boolean finishing)
+		    -- 메인 2.16초와 마무리 0.99초를 별도로 한 번씩 재생한다.
+		    local vfx = self:BuildVfx().T
+		    -- 화면 크기와 클립 경계 중심을 사용한 시각 전용 보정. 서버 Box/24타는 건드리지 않는다.
+		    local bottomLeft = _UILogic:ScreenToWorldPosition(Vector2.zero)
+		    local topRight = _UILogic:ScreenToWorldPosition(Vector2(_UILogic.ScreenWidth, _UILogic.ScreenHeight))
+		    local center = (bottomLeft + topRight) * 0.5
+		    local width = math.abs(topRight.x - bottomLeft.x)
+		    local height = math.abs(topRight.y - bottomLeft.y)
+		    local scale = math.max(width / (finishing and 7.24 or 7.96), height / (finishing and 5.08 or 5.02)) * 1.1
+		    local clipCenter = finishing and Vector2(0.04, 0.32) or Vector2(-0.03, -0.08)
+		    local position = center - clipCenter * scale
+		    local serial = _FogOfWarLogic:PlayEffectSeen(finishing and vfx.effect2 or vfx.effect,
+		        self.Entity.CurrentMap, position:ToVector3(), 0, Vector3(scale, scale, 1), false, nil)
+		    self._T.effects = self._T.effects or {}
+		    table.insert(self._T.effects, { serial = serial, remaining = finishing and 0.99 or 2.16 })
+	end
+
+	@ExecSpace("Client")
+	method void ClearPresentation()
+		    -- 시전 취소와 맵 이탈에도 잔여 개체/루프 serial을 남기지 않는다.
+		    for _, v in ipairs(self._T.visuals or {}) do if isvalid(v.entity) then v.entity:Destroy() end end
+		    for _, e in ipairs(self._T.effects or {}) do _EffectService:RemoveEffect(e.serial) end
+		    self._T.visuals = {}
+		    self._T.effects = {}
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Cleanup()
+		    -- 소유자 수명 종료 시 소환체와 전용 공격 필터, 이동 제한을 정리한다.
+		    self:FinishUltimate()
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    for _, shot in ipairs(self._T.flights or {}) do if core ~= nil then core:EndAttackTargetFilter(shot.info) end end
+		    for _, rec in pairs(self._T.jaguars or {}) do if isvalid(rec.entity) then rec.entity:Destroy() end end
+		    self._T.jaguars = {}
+		    self._T.flights = {}
+		    self._T.activeMap = nil
+		    self:ClearPresentation()
+	end
+
+	method void OnMapLeave(Entity map)
+		    -- 맵 전환 시 양쪽 실행 공간의 전용 상태를 해제한다.
+		    if self:IsServer() then self:Cleanup() else self:ClearPresentation() end
+	end
+
+	method void OnEndPlay()
+		    -- 컴포넌트 종료 시 AI/타격/VFX 수명을 종료한다.
+		    if self:IsServer() then self:Cleanup() else self:ClearPresentation() end
+	end
+
+	@ExecSpace("ServerOnly")
+	@EventSender("Self")
+	handler HandleDeath(DeadEvent event)
+		    -- 리스폰 이전에도 사망 즉시 궁극기의 무적과 예약을 해제한다.
+		    self:Cleanup()
+	end
+
+	@ExecSpace("ServerOnly")
+	@EventSender("Self")
+	handler HandleRevive(ReviveEvent event)
+		    -- 즉시 리스폰하는 기존 플레이어 사망 경로도 중단으로 취급한다.
+		    self:Cleanup()
+	end
+
+end

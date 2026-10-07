@@ -1,0 +1,362 @@
+@Component
+script ArdaMonster extends Component
+
+	@DisplayName("자동 공격 범위(몬스터 중심 기준, world unit)")
+	property number Range = 2.0
+
+	@Sync
+	property number Cooltime = 2
+
+	@DisplayName("죽을 때 떨어뜨리는 Arda 모델(EntryKey)")
+	property string ArdaModelId = "model://3cb85fd6-3077-4d4b-9bcc-7e29e2506b92"
+
+	@DisplayName("죽을 때 떨어뜨리는 Arda 양")
+	property integer ArdaAmount = 3
+
+	@DisplayName("죽은 뒤 제거까지의 시간(초, 이 시간 동안 서서히 사라진다)")
+	property number DeathDelay = 1.0
+
+	@DisplayName("배회 속도 배율(Unit_Info.MoveSpeed × 이 값)")
+	property number WanderSpeedRate = 0.5
+
+	@DisplayName("멈춰 있는 최소 시간(초)")
+	property number IdleMin = 1.0
+
+	@DisplayName("멈춰 있는 최대 시간(초)")
+	property number IdleMax = 3.0
+
+	@DisplayName("공격 모션 유지 시간(초, 이 동안 멈춰서 공격한다)")
+	property number AttackMotionTime = 0.6
+
+	@Sync
+	property boolean IsMoving = false
+
+	@Sync
+	property boolean IsAttacking = false
+
+	@Sync
+	property boolean FacingRight = false
+
+	@HideFromInspector
+	property number _deadTime = 0
+
+	@HideFromInspector
+	property number _cool = 0
+
+	@HideFromInspector
+	property boolean _hpReady = false
+
+	@HideFromInspector
+	property boolean _dead = false
+
+	@HideFromInspector
+	property boolean _hasArea = false
+
+	@HideFromInspector
+	property Vector2 _areaMin = Vector2(0, 0)
+
+	@HideFromInspector
+	property Vector2 _areaMax = Vector2(0, 0)
+
+	@HideFromInspector
+	property Vector2 _wanderTarget = Vector2(0, 0)
+
+	@HideFromInspector
+	property boolean _wandering = false
+
+	@HideFromInspector
+	property number _idleTimer = 0
+
+	@HideFromInspector
+	property number _attackTimer = 0
+
+	@ExecSpace("ServerOnly")
+	method void SetArea(Vector2 areaMin, Vector2 areaMax)
+		-- 스포너가 스폰 직후 넘겨주는 배회 영역(월드 좌표). 이 영역 안에서만 돌아다닌다.
+		self._areaMin = areaMin
+		self._areaMax = areaMax
+		self._hasArea = true
+		self._idleTimer = self.IdleMin + _UtilLogic:RandomDouble() * (self.IdleMax - self.IdleMin)
+	end
+
+	method void OnUpdate(number delta)
+		-- 서버는 사망 판정/자동 공격/배회 이동을, 클라이언트는 사라지는 연출만 담당한다.
+		if self:IsServer() then
+			self:ServerUpdate(delta)
+		else
+			self:ClientUpdate(delta)
+		end
+	end
+
+	method void ServerUpdate(number delta)
+		if self._dead then return end
+		if self.Entity.CurrentMap.Name == "map02" and self:GetWallBlocker() == nil then
+			if not self._T.blockerMissingLogged then
+				self._T.blockerMissingLogged = true
+			end
+			return
+		end
+		
+		---@type Unit_Info
+		local minfo = self.Entity:GetComponent("script.Unit_Info")
+		if minfo ~= nil then
+			if minfo.Hp > 0 then
+				self._hpReady = true
+			end
+			-- 사망 판정: 유닛 공격(서버 Weapon)으로 Hp<=0이 되면 줍기 방식으로 Arda를 떨어뜨린다.
+			if minfo.IsDead or (self._hpReady and minfo.Hp <= 0) then
+				self:Die("")
+				return
+			end
+		end
+		
+		-- 자동 공격: 쿨타임이 찼고 범위 안에 플레이어 유닛이 있으면 공격한다.
+		if self._hpReady then
+			self._cool = math.min(self._cool + delta, self.Cooltime)
+			if self._cool >= self.Cooltime then
+				local target = self:FindTargetInRange()
+				if target ~= nil then
+					self._cool = 0
+					self:AttackUnit(target)
+				end
+			end
+		end
+		
+		if not self._hasArea then return end
+		
+		-- 공격 모션 중에는 멈춰 서서 공격한다.
+		if self._attackTimer > 0 then
+			self._attackTimer = self._attackTimer - delta
+			if self._attackTimer <= 0 then
+				self.IsAttacking = false
+			end
+			return
+		end
+		
+		local tf = self.Entity.TransformComponent
+		local wp = tf.WorldPosition
+		
+		if self._wandering then
+			---@type Unit_Info
+			local info = self.Entity:GetComponent("script.Unit_Info")
+			local speed = ((info ~= nil) and info.MoveSpeed or 1) * self.WanderSpeedRate
+			local pos = Vector2(wp.x, wp.y)
+			local toTarget = self._wanderTarget - pos
+			local dist = toTarget:Magnitude()
+			local step = speed * delta
+		
+			if dist <= step or dist <= 0.0001 then
+				local safeTarget = self._wanderTarget
+				local blocker = self:GetWallBlocker()
+				if blocker ~= nil then safeTarget = blocker:ResolveStep(pos, safeTarget) end
+				tf.WorldPosition = Vector3(safeTarget.x, safeTarget.y, wp.z)
+				self._wandering = false
+				if self.IsMoving then self.IsMoving = false end
+				self._idleTimer = self.IdleMin + _UtilLogic:RandomDouble() * (self.IdleMax - self.IdleMin)
+			else
+				local dir = toTarget:Normalize()
+				local nextPos = Vector2(wp.x + dir.x * step, wp.y + dir.y * step)
+				-- 경계 타일(벽)을 넘지 않게 한 걸음을 보정한다. 정면으로 막히면 배회를 끝내고 잠시 멈춘다.
+				local blocker = self:GetWallBlocker()
+				if blocker ~= nil then
+					nextPos = blocker:ResolveStep(pos, nextPos)
+					if Vector2.Distance(nextPos, pos) < 0.0001 then
+						self._wandering = false
+						if self.IsMoving then self.IsMoving = false end
+						self._idleTimer = self.IdleMin + _UtilLogic:RandomDouble() * (self.IdleMax - self.IdleMin)
+						return
+					end
+				end
+				tf.WorldPosition = Vector3(nextPos.x, nextPos.y, wp.z)
+				if math.abs(dir.x) > 0.05 then
+					local right = dir.x > 0
+					if self.FacingRight ~= right then self.FacingRight = right end
+				end
+			end
+		else
+			self._idleTimer = self._idleTimer - delta
+			if self._idleTimer <= 0 then
+				-- 영역 가장자리에 너무 붙지 않게 0.3 안쪽에서 다음 목적지를 고른다.
+				local margin = 0.3
+				local minX = self._areaMin.x + margin
+				local maxX = self._areaMax.x - margin
+				local minY = self._areaMin.y + margin
+				local maxY = self._areaMax.y - margin
+				if maxX < minX then minX = (self._areaMin.x + self._areaMax.x) / 2; maxX = minX end
+				if maxY < minY then minY = (self._areaMin.y + self._areaMax.y) / 2; maxY = minY end
+				-- 벽 칸이 아닌 목적지를 몇 번 다시 뽑고, 그래도 벽이면 가장 가까운 빈 칸으로 옮긴다.
+				local blocker = self:GetWallBlocker()
+				local target = nil
+				for _ = 1, 5 do
+					target = Vector2(minX + _UtilLogic:RandomDouble() * (maxX - minX), minY + _UtilLogic:RandomDouble() * (maxY - minY))
+					if blocker == nil or not blocker:IsBlocked(target.x, target.y) then break end
+				end
+				if blocker ~= nil then target = blocker:PushOut(target) end
+				self._wanderTarget = target
+				self._wandering = true
+				if not self.IsMoving then self.IsMoving = true end
+			end
+		end
+	end
+
+	method WallTileBlocker GetWallBlocker()
+		-- 현재 맵의 경계 타일 컴포넌트(WallTileBlocker)를 찾는다. 맵이 바뀔 때만 다시 찾도록 캐시한다(없는 맵이면 nil).
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return nil end
+		if self._T.wallMap ~= map or not isvalid(self._T.wallBlocker) then
+			self._T.wallMap = map
+			local wall = map:GetChildByName("Wall")
+			self._T.wallBlocker = nil
+			if isvalid(wall) then
+				self._T.wallBlocker = wall:GetComponent("script.WallTileBlocker")
+			end
+			if not isvalid(self._T.wallBlocker) then
+				self._T.wallBlocker = map:GetFirstChildComponentByTypeName("script.WallTileBlocker", true)
+			end
+			if isvalid(self._T.wallBlocker) and not self._T.blockerFoundLogged then
+				self._T.blockerFoundLogged = true
+			end
+		end
+		local blocker = self._T.wallBlocker
+		if blocker ~= nil and isvalid(blocker) then return blocker end
+		return nil
+	end
+
+	method void ClientUpdate(number delta)
+		-- 서버가 알려준 IsDead(@Sync)를 보고 서서히 사라진다.
+		---@type Unit_Info
+		local info = self.Entity:GetComponent("script.Unit_Info")
+		if info ~= nil and info.IsDead then
+			self:FadeOut(delta)
+		end
+	end
+
+	method void FadeOut(number delta)
+		self._deadTime = self._deadTime + delta
+		local renderer = self.Entity.SpriteRendererComponent
+		if isvalid(renderer) then
+			local alpha = math.max(0, 1 - self._deadTime / math.max(self.DeathDelay, 0.01))
+			renderer.Color = Color(1, 1, 1, alpha)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method Entity FindTargetInRange()
+		-- 모든 플레이어의 살아있는 유닛 중 범위 안에서 가장 가까운 유닛(없으면 nil).
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return nil end
+		
+		local group = map:GetChildByName("MyUnits")
+		if not isvalid(group) then return nil end
+		
+		local mp = self.Entity.TransformComponent.WorldPosition
+		local best = nil
+		local bestDist = self.Range
+		for _, child in ipairs(group.Children:ToTable()) do
+			---@type Unit_Info
+			local uinfo = child:GetComponent("script.Unit_Info")
+			if uinfo ~= nil and not uinfo.IsDead and uinfo.PlayerID ~= "" then
+				local up = child.TransformComponent.WorldPosition
+				local d = Vector2.Distance(Vector2(mp.x, mp.y), Vector2(up.x, up.y))
+				if d <= bestDist then
+					best = child
+					bestDist = d
+				end
+			end
+		end
+		return best
+	end
+
+	@ExecSpace("ServerOnly")
+	method void AttackUnit(Entity unit)
+		-- 범위 안에서 찾은 유닛에게 피해를 적용한다(서버 권위).
+		if self._dead or not isvalid(unit) then return end
+		---@type Unit_Info
+		local uinfo = unit:GetComponent("script.Unit_Info")
+		if uinfo == nil or uinfo.IsDead then return end
+		local targetX = unit.TransformComponent.WorldPosition.x
+		
+		-- 공격 모션: 멈춰서 대상 쪽을 바라보고 AttackMotionTime 동안 IsAttacking을 켠다(ArdaMonsterState가 재생).
+		self._wandering = false
+		self._attackTimer = self.AttackMotionTime
+		if self.IsMoving then self.IsMoving = false end
+		self.IsAttacking = true
+		local mx = self.Entity.TransformComponent.WorldPosition.x
+		local right = targetX > mx
+		if self.FacingRight ~= right then self.FacingRight = right end
+		
+		---@type Unit_Info
+		local minfo = self.Entity:GetComponent("script.Unit_Info")
+		local dmg = math.floor((minfo ~= nil) and minfo.damage or 0)
+		uinfo:GetDamage(dmg)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void HarvestDamage(number damage, string ownerId)
+		-- Arda 채집 건물(ArdaHarvester)이 서버에서 직접 주는 피해. 서버 권위 값이라 Hp(@Sync)가 모든 클라이언트에 반영된다.
+		-- 이 피해로 죽으면 떨어진 Arda는 줍기 없이 ownerId의 본진으로 자동으로 날아간다.
+		if self._dead then return end
+		---@type Unit_Info
+		local minfo = self.Entity:GetComponent("script.Unit_Info")
+		if minfo == nil then return end
+		
+		minfo.Hp = minfo.Hp - math.floor(damage)
+		if minfo.Hp <= 0 then
+			self:Die(ownerId)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Die(string autoCollectOwnerId)
+		-- 사망 처리 공통부. autoCollectOwnerId가 있으면 그 플레이어의 본진으로 자동 수거, 비어 있으면 유닛이 주울 수 있게 드롭.
+		if self._dead then return end
+		self._dead = true
+		self._wandering = false
+		if self.IsMoving then self.IsMoving = false end
+		if self.IsAttacking then self.IsAttacking = false end
+		
+		---@type Unit_Info
+		local minfo = self.Entity:GetComponent("script.Unit_Info")
+		if minfo ~= nil then
+			minfo.Hp = 0
+			minfo.IsDead = true
+		end
+		self:DropArda(autoCollectOwnerId)
+		
+		_TimerService:SetTimerOnce(function()
+			if isvalid(self.Entity) then self.Entity:Destroy() end
+		end, self.DeathDelay)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void DropArda(string autoCollectOwnerId)
+		-- 몬스터 위치에 Arda 드롭 엔티티를 스폰하고 드롭량을 넘긴다(줍기/비행은 ArdaPickup이 담당).
+		-- autoCollectOwnerId가 있으면 유닛이 줍는 대신 그 플레이어의 본진으로 바로 날려 보낸다.
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return end
+		local wp = self.Entity.TransformComponent.WorldPosition
+		local parentPos = Vector3(0, 0, 0)
+		if isvalid(map.TransformComponent) then
+			parentPos = map.TransformComponent.WorldPosition
+		end
+		
+		local drop = _SpawnService:SpawnByModelId(self.ArdaModelId, "Arda", Vector3(wp.x - parentPos.x, wp.y - parentPos.y, wp.z - parentPos.z), map)
+		if drop == nil then
+			return
+		end
+		---@type ArdaPickup
+		local pick = drop:GetComponent("script.ArdaPickup")
+		if pick ~= nil then
+			pick.Amount = self.ArdaAmount
+			if autoCollectOwnerId ~= "" then
+				-- 스폰이 클라이언트에 복제될 시간을 잠깐 준 뒤 비행을 시작한다(Multicast가 유실되지 않게).
+				_TimerService:SetTimerOnce(function()
+					if isvalid(pick) then pick:AutoCollect(autoCollectOwnerId) end
+				end, 0.4)
+			else
+				pick.Pickable = true
+			end
+		end
+	end
+
+end

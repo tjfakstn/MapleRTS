@@ -1,0 +1,565 @@
+@Component
+script WorkerAction extends ActionBase
+
+	@DisplayName("건물 건설 버튼 아이콘 RUID")
+	property string BuildButtonRuid = ""
+
+	@DisplayName("메소 채집 버튼 아이콘 RUID")
+	property string GatherButtonRuid = "4cc5ffc272224edc809a792b8efa16e3"
+
+	@DisplayName("건설 목록 개방 조건 - 살아있어야 하는 본진 이름(없으면 빈 칸)")
+	property string HQCondition = ""
+
+	@DisplayName("고급 건설(V) 목록에 넣을 건설 슬롯 번호(쉼표, 비우면 B 한 목록)")
+	property string AdvancedSlots = ""
+
+	@DisplayName("건설 가능 건물 1 - Model")
+	property string BuildModel1 = ""
+
+	@DisplayName("건설 가능 건물 1 - 아이콘 RUID")
+	property string BuildRuid1 = ""
+
+	@DisplayName("건설 가능 건물 1 - 가로 크기(footprint)")
+	property number BuildSizeX1 = 1
+
+	@DisplayName("건설 가능 건물 1 - 세로 크기(footprint)")
+	property number BuildSizeY1 = 1
+
+	@DisplayName("건설 가능 건물 1 - 스프라이트 ScaleX")
+	property number BuildScaleX1 = 1
+
+	@DisplayName("건설 가능 건물 1 - 스프라이트 ScaleY")
+	property number BuildScaleY1 = 1
+
+	@DisplayName("건설 가능 건물 1 - 건설 시간(초)")
+	property number BuildTime1 = 5
+
+	@DisplayName("건설 가능 건물 1 - 선행 건물 이름(없으면 빈 칸)")
+	property string BuildCondition1 = ""
+
+	@DisplayName("건설 가능 건물 2 - Model")
+	property string BuildModel2 = ""
+
+	@DisplayName("건설 가능 건물 2 - 아이콘 RUID")
+	property string BuildRuid2 = ""
+
+	@DisplayName("건설 가능 건물 2 - 가로 크기(footprint)")
+	property number BuildSizeX2 = 1
+
+	@DisplayName("건설 가능 건물 2 - 세로 크기(footprint)")
+	property number BuildSizeY2 = 1
+
+	@DisplayName("건설 가능 건물 2 - 스프라이트 ScaleX")
+	property number BuildScaleX2 = 1
+
+	@DisplayName("건설 가능 건물 2 - 스프라이트 ScaleY")
+	property number BuildScaleY2 = 1
+
+	@DisplayName("건설 가능 건물 2 - 건설 시간(초)")
+	property number BuildTime2 = 5
+
+	@DisplayName("건설 가능 건물 2 - 선행 건물 이름(없으면 빈 칸)")
+	property string BuildCondition2 = ""
+
+	@DisplayName("건설 가능 건물 3 - Model")
+	property string BuildModel3 = ""
+
+	@DisplayName("건설 가능 건물 3 - 아이콘 RUID")
+	property string BuildRuid3 = ""
+
+	@DisplayName("건설 가능 건물 3 - 가로 크기(footprint)")
+	property number BuildSizeX3 = 1
+
+	@DisplayName("건설 가능 건물 3 - 세로 크기(footprint)")
+	property number BuildSizeY3 = 1
+
+	@DisplayName("건설 가능 건물 3 - 스프라이트 ScaleX")
+	property number BuildScaleX3 = 1
+
+	@DisplayName("건설 가능 건물 3 - 스프라이트 ScaleY")
+	property number BuildScaleY3 = 1
+
+	@DisplayName("건설 가능 건물 3 - 건설 시간(초)")
+	property number BuildTime3 = 5
+
+	@DisplayName("건설 가능 건물 3 - 선행 건물 이름(없으면 빈 칸)")
+	property string BuildCondition3 = ""
+
+	@DisplayName("건설 가능 건물 4 - Model")
+	property string BuildModel4 = ""
+
+	@DisplayName("건설 가능 건물 4 - 아이콘 RUID")
+	property string BuildRuid4 = ""
+
+	@DisplayName("건설 가능 건물 4 - 가로 크기(footprint)")
+	property number BuildSizeX4 = 1
+
+	@DisplayName("건설 가능 건물 4 - 세로 크기(footprint)")
+	property number BuildSizeY4 = 1
+
+	@DisplayName("건설 가능 건물 4 - 스프라이트 ScaleX")
+	property number BuildScaleX4 = 1
+
+	@DisplayName("건설 가능 건물 4 - 스프라이트 ScaleY")
+	property number BuildScaleY4 = 1
+
+	@DisplayName("건설 가능 건물 4 - 건설 시간(초)")
+	property number BuildTime4 = 5
+
+	@DisplayName("건설 가능 건물 4 - 선행 건물 이름(없으면 빈 칸)")
+	property string BuildCondition4 = ""
+
+	@DisplayName("건설 가능 건물 5 - Model")
+	property string BuildModel5 = ""
+
+	@DisplayName("건설 가능 건물 5 - 아이콘 RUID")
+	property string BuildRuid5 = ""
+
+	@DisplayName("건설 가능 건물 5 - 가로 크기(footprint)")
+	property number BuildSizeX5 = 1
+
+	@DisplayName("건설 가능 건물 5 - 세로 크기(footprint)")
+	property number BuildSizeY5 = 1
+
+	@DisplayName("건설 가능 건물 5 - 스프라이트 ScaleX")
+	property number BuildScaleX5 = 1
+
+	@DisplayName("건설 가능 건물 5 - 스프라이트 ScaleY")
+	property number BuildScaleY5 = 1
+
+	@DisplayName("건설 가능 건물 5 - 건설 시간(초)")
+	property number BuildTime5 = 5
+
+	@DisplayName("건설 가능 건물 5 - 선행 건물 이름(없으면 빈 칸)")
+	property string BuildCondition5 = ""
+
+	@DisplayName("건설 가능 건물 6 - Model")
+	property string BuildModel6 = ""
+
+	@DisplayName("건설 가능 건물 6 - 아이콘 RUID")
+	property string BuildRuid6 = ""
+
+	@DisplayName("건설 가능 건물 6 - 가로 크기(footprint)")
+	property number BuildSizeX6 = 1
+
+	@DisplayName("건설 가능 건물 6 - 세로 크기(footprint)")
+	property number BuildSizeY6 = 1
+
+	@DisplayName("건설 가능 건물 6 - 스프라이트 ScaleX")
+	property number BuildScaleX6 = 1
+
+	@DisplayName("건설 가능 건물 6 - 스프라이트 ScaleY")
+	property number BuildScaleY6 = 1
+
+	@DisplayName("건설 가능 건물 6 - 건설 시간(초)")
+	property number BuildTime6 = 5
+
+	@DisplayName("건설 가능 건물 6 - 선행 건물 이름(없으면 빈 칸)")
+	property string BuildCondition6 = ""
+
+	@DisplayName("건설 가능 건물 7 - Model")
+	property string BuildModel7 = ""
+
+	@DisplayName("건설 가능 건물 7 - 아이콘 RUID")
+	property string BuildRuid7 = ""
+
+	@DisplayName("건설 가능 건물 7 - 가로 크기(footprint)")
+	property number BuildSizeX7 = 1
+
+	@DisplayName("건설 가능 건물 7 - 세로 크기(footprint)")
+	property number BuildSizeY7 = 1
+
+	@DisplayName("건설 가능 건물 7 - 스프라이트 ScaleX")
+	property number BuildScaleX7 = 1
+
+	@DisplayName("건설 가능 건물 7 - 스프라이트 ScaleY")
+	property number BuildScaleY7 = 1
+
+	@DisplayName("건설 가능 건물 7 - 건설 시간(초)")
+	property number BuildTime7 = 5
+
+	@DisplayName("건설 가능 건물 7 - 선행 건물 이름(없으면 빈 칸)")
+	property string BuildCondition7 = ""
+
+	@DisplayName("건설 가능 건물 8 - Model")
+	property string BuildModel8 = ""
+
+	@DisplayName("건설 가능 건물 8 - 아이콘 RUID")
+	property string BuildRuid8 = ""
+
+	@DisplayName("건설 가능 건물 8 - 가로 크기(footprint)")
+	property number BuildSizeX8 = 1
+
+	@DisplayName("건설 가능 건물 8 - 세로 크기(footprint)")
+	property number BuildSizeY8 = 1
+
+	@DisplayName("건설 가능 건물 8 - 스프라이트 ScaleX")
+	property number BuildScaleX8 = 1
+
+	@DisplayName("건설 가능 건물 8 - 스프라이트 ScaleY")
+	property number BuildScaleY8 = 1
+
+	@DisplayName("건설 가능 건물 8 - 건설 시간(초)")
+	property number BuildTime8 = 5
+
+	@DisplayName("건설 가능 건물 8 - 선행 건물 이름(없으면 빈 칸, 쉼표로 여러 개 나열 시 모두 필요)")
+	property string BuildCondition8 = ""
+
+	@DisplayName("건설 가능 건물 9 - Model")
+	property string BuildModel9 = ""
+
+	@DisplayName("건설 가능 건물 9 - 아이콘 RUID")
+	property string BuildRuid9 = ""
+
+	@DisplayName("건설 가능 건물 9 - 가로 크기(footprint)")
+	property number BuildSizeX9 = 1
+
+	@DisplayName("건설 가능 건물 9 - 세로 크기(footprint)")
+	property number BuildSizeY9 = 1
+
+	@DisplayName("건설 가능 건물 9 - 스프라이트 ScaleX")
+	property number BuildScaleX9 = 1
+
+	@DisplayName("건설 가능 건물 9 - 스프라이트 ScaleY")
+	property number BuildScaleY9 = 1
+
+	@DisplayName("건설 가능 건물 9 - 건설 시간(초)")
+	property number BuildTime9 = 5
+
+	@DisplayName("건설 가능 건물 9 - 선행 건물 이름(없으면 빈 칸, 쉼표로 여러 개 나열 시 모두 필요)")
+	property string BuildCondition9 = ""
+
+	@DisplayName("건설 가능 건물 10 - Model")
+	property string BuildModel10 = ""
+
+	@DisplayName("건설 가능 건물 10 - 아이콘 RUID")
+	property string BuildRuid10 = ""
+
+	@DisplayName("건설 가능 건물 10 - 가로 크기(footprint)")
+	property number BuildSizeX10 = 1
+
+	@DisplayName("건설 가능 건물 10 - 세로 크기(footprint)")
+	property number BuildSizeY10 = 1
+
+	@DisplayName("건설 가능 건물 10 - 스프라이트 ScaleX")
+	property number BuildScaleX10 = 1
+
+	@DisplayName("건설 가능 건물 10 - 스프라이트 ScaleY")
+	property number BuildScaleY10 = 1
+
+	@DisplayName("건설 가능 건물 10 - 건설 시간(초)")
+	property number BuildTime10 = 5
+
+	@DisplayName("건설 가능 건물 10 - 선행 건물 이름(없으면 빈 칸, 쉼표로 여러 개 나열 시 모두 필요)")
+	property string BuildCondition10 = ""
+
+	@DisplayName("건설 가능 건물 11 - Model")
+	property string BuildModel11 = ""
+
+	@DisplayName("건설 가능 건물 11 - 아이콘 RUID")
+	property string BuildRuid11 = ""
+
+	@DisplayName("건설 가능 건물 11 - 가로 크기(footprint)")
+	property number BuildSizeX11 = 1
+
+	@DisplayName("건설 가능 건물 11 - 세로 크기(footprint)")
+	property number BuildSizeY11 = 1
+
+	@DisplayName("건설 가능 건물 11 - 스프라이트 ScaleX")
+	property number BuildScaleX11 = 1
+
+	@DisplayName("건설 가능 건물 11 - 스프라이트 ScaleY")
+	property number BuildScaleY11 = 1
+
+	@DisplayName("건설 가능 건물 11 - 건설 시간(초)")
+	property number BuildTime11 = 5
+
+	@DisplayName("건설 가능 건물 11 - 선행 건물 이름(없으면 빈 칸, 쉼표로 여러 개 나열 시 모두 필요)")
+	property string BuildCondition11 = ""
+
+	@DisplayName("건설 가능 건물 12 - Model")
+	property string BuildModel12 = ""
+
+	@DisplayName("건설 가능 건물 12 - 아이콘 RUID")
+	property string BuildRuid12 = ""
+
+	@DisplayName("건설 가능 건물 12 - 가로 크기(footprint)")
+	property number BuildSizeX12 = 1
+
+	@DisplayName("건설 가능 건물 12 - 세로 크기(footprint)")
+	property number BuildSizeY12 = 1
+
+	@DisplayName("건설 가능 건물 12 - 스프라이트 ScaleX")
+	property number BuildScaleX12 = 1
+
+	@DisplayName("건설 가능 건물 12 - 스프라이트 ScaleY")
+	property number BuildScaleY12 = 1
+
+	@DisplayName("건설 가능 건물 12 - 건설 시간(초)")
+	property number BuildTime12 = 5
+
+	@DisplayName("건설 가능 건물 12 - 선행 건물 이름(없으면 빈 칸, 쉼표로 여러 개 나열 시 모두 필요)")
+	property string BuildCondition12 = ""
+
+	@DisplayName("건설 가능 건물 13 - Model")
+	property string BuildModel13 = ""
+
+	@DisplayName("건설 가능 건물 13 - 아이콘 RUID")
+	property string BuildRuid13 = ""
+
+	@DisplayName("건설 가능 건물 13 - 가로 크기(footprint)")
+	property number BuildSizeX13 = 1
+
+	@DisplayName("건설 가능 건물 13 - 세로 크기(footprint)")
+	property number BuildSizeY13 = 1
+
+	@DisplayName("건설 가능 건물 13 - 스프라이트 ScaleX")
+	property number BuildScaleX13 = 1
+
+	@DisplayName("건설 가능 건물 13 - 스프라이트 ScaleY")
+	property number BuildScaleY13 = 1
+
+	@DisplayName("건설 가능 건물 13 - 건설 시간(초)")
+	property number BuildTime13 = 5
+
+	@DisplayName("건설 가능 건물 13 - 선행 건물 이름(없으면 빈 칸, 쉼표로 여러 개 나열 시 모두 필요)")
+	property string BuildCondition13 = ""
+
+	@DisplayName("건설 가능 건물 14 - Model")
+	property string BuildModel14 = ""
+
+	@DisplayName("건설 가능 건물 14 - 아이콘 RUID")
+	property string BuildRuid14 = ""
+
+	@DisplayName("건설 가능 건물 14 - 가로 크기(footprint)")
+	property number BuildSizeX14 = 1
+
+	@DisplayName("건설 가능 건물 14 - 세로 크기(footprint)")
+	property number BuildSizeY14 = 1
+
+	@DisplayName("건설 가능 건물 14 - 스프라이트 ScaleX")
+	property number BuildScaleX14 = 1
+
+	@DisplayName("건설 가능 건물 14 - 스프라이트 ScaleY")
+	property number BuildScaleY14 = 1
+
+	@DisplayName("건설 가능 건물 14 - 건설 시간(초)")
+	property number BuildTime14 = 5
+
+	@DisplayName("건설 가능 건물 14 - 선행 건물 이름(없으면 빈 칸, 쉼표로 여러 개 나열 시 모두 필요)")
+	property string BuildCondition14 = ""
+
+	@DisplayName("건설 가능 건물 15 - Model")
+	property string BuildModel15 = ""
+
+	@DisplayName("건설 가능 건물 15 - 아이콘 RUID")
+	property string BuildRuid15 = ""
+
+	@DisplayName("건설 가능 건물 15 - 가로 크기(footprint)")
+	property number BuildSizeX15 = 1
+
+	@DisplayName("건설 가능 건물 15 - 세로 크기(footprint)")
+	property number BuildSizeY15 = 1
+
+	@DisplayName("건설 가능 건물 15 - 스프라이트 ScaleX")
+	property number BuildScaleX15 = 1
+
+	@DisplayName("건설 가능 건물 15 - 스프라이트 ScaleY")
+	property number BuildScaleY15 = 1
+
+	@DisplayName("건설 가능 건물 15 - 건설 시간(초)")
+	property number BuildTime15 = 5
+
+	@DisplayName("건설 가능 건물 15 - 선행 건물 이름(없으면 빈 칸, 쉼표로 여러 개 나열 시 모두 필요)")
+	property string BuildCondition15 = ""
+
+	@DisplayName("건설 가능 건물 16 - Model")
+	property string BuildModel16 = ""
+
+	@DisplayName("건설 가능 건물 16 - 아이콘 RUID")
+	property string BuildRuid16 = ""
+
+	@DisplayName("건설 가능 건물 16 - 가로 크기(footprint)")
+	property number BuildSizeX16 = 1
+
+	@DisplayName("건설 가능 건물 16 - 세로 크기(footprint)")
+	property number BuildSizeY16 = 1
+
+	@DisplayName("건설 가능 건물 16 - 스프라이트 ScaleX")
+	property number BuildScaleX16 = 1
+
+	@DisplayName("건설 가능 건물 16 - 스프라이트 ScaleY")
+	property number BuildScaleY16 = 1
+
+	@DisplayName("건설 가능 건물 16 - 건설 시간(초)")
+	property number BuildTime16 = 5
+
+	@DisplayName("건설 가능 건물 16 - 선행 건물 이름(없으면 빈 칸, 쉼표로 여러 개 나열 시 모두 필요)")
+	property string BuildCondition16 = ""
+
+	@DisplayName("건설 가능 건물 17 - Model")
+	property string BuildModel17 = ""
+
+	@DisplayName("건설 가능 건물 17 - 아이콘 RUID")
+	property string BuildRuid17 = ""
+
+	@DisplayName("건설 가능 건물 17 - 가로 크기(footprint)")
+	property number BuildSizeX17 = 1
+
+	@DisplayName("건설 가능 건물 17 - 세로 크기(footprint)")
+	property number BuildSizeY17 = 1
+
+	@DisplayName("건설 가능 건물 17 - 스프라이트 ScaleX")
+	property number BuildScaleX17 = 1
+
+	@DisplayName("건설 가능 건물 17 - 스프라이트 ScaleY")
+	property number BuildScaleY17 = 1
+
+	@DisplayName("건설 가능 건물 17 - 건설 시간(초)")
+	property number BuildTime17 = 5
+
+	@DisplayName("건설 가능 건물 17 - 선행 건물 이름(없으면 빈 칸, 쉼표로 여러 개 나열 시 모두 필요)")
+	property string BuildCondition17 = ""
+
+	method table ChangeActionUI()
+		-- 일꾼이 아니면(RoleKey ~= "Worker") 액션을 노출하지 않는다.
+		local info = self.Entity.Unit_Info
+		if info == nil or info.RoleKey ~= "Worker" then
+			return {}
+		end
+		
+		return {
+			{
+				ActionID = "OpenBuildList",
+				UnitModel = "",
+				Ruid = self.BuildButtonRuid,
+				-- 어느 일꾼이 건설 버튼을 눌렀는지 알아야 그 일꾼의 건설 목록(GetBuildList)을 읽을 수 있다.
+				Building = self.Entity,
+			},
+			{
+				ActionID = "GatherMeso",
+				UnitModel = "",
+				Ruid = self.GatherButtonRuid,
+				-- 어느 일꾼이 채집 버튼을 눌렀는지 알아야 그 일꾼의 WorkerGatherComponent에 채집을 지시할 수 있다.
+				Building = self.Entity,
+			},
+		}
+	end
+
+	method table GetBuildList()
+		-- 버튼 클릭 시(UIButtonAction) 호출되어, 이 일꾼이 지을 수 있는 건물 목록을 반환한다.
+		-- BuildCondition이 있는 슬롯은 그 이름의 건물을 소유자가 이미 지어뒀을 때만 목록에 포함한다.
+		local slots = {
+			{ self.BuildModel1, self.BuildRuid1, self.BuildSizeX1, self.BuildSizeY1, self.BuildScaleX1, self.BuildScaleY1, self.BuildTime1, self.BuildCondition1 },
+			{ self.BuildModel2, self.BuildRuid2, self.BuildSizeX2, self.BuildSizeY2, self.BuildScaleX2, self.BuildScaleY2, self.BuildTime2, self.BuildCondition2 },
+			{ self.BuildModel3, self.BuildRuid3, self.BuildSizeX3, self.BuildSizeY3, self.BuildScaleX3, self.BuildScaleY3, self.BuildTime3, self.BuildCondition3 },
+			{ self.BuildModel4, self.BuildRuid4, self.BuildSizeX4, self.BuildSizeY4, self.BuildScaleX4, self.BuildScaleY4, self.BuildTime4, self.BuildCondition4 },
+			{ self.BuildModel5, self.BuildRuid5, self.BuildSizeX5, self.BuildSizeY5, self.BuildScaleX5, self.BuildScaleY5, self.BuildTime5, self.BuildCondition5 },
+			{ self.BuildModel6, self.BuildRuid6, self.BuildSizeX6, self.BuildSizeY6, self.BuildScaleX6, self.BuildScaleY6, self.BuildTime6, self.BuildCondition6 },
+			{ self.BuildModel7, self.BuildRuid7, self.BuildSizeX7, self.BuildSizeY7, self.BuildScaleX7, self.BuildScaleY7, self.BuildTime7, self.BuildCondition7 },
+			{ self.BuildModel8, self.BuildRuid8, self.BuildSizeX8, self.BuildSizeY8, self.BuildScaleX8, self.BuildScaleY8, self.BuildTime8, self.BuildCondition8 },
+			{ self.BuildModel9, self.BuildRuid9, self.BuildSizeX9, self.BuildSizeY9, self.BuildScaleX9, self.BuildScaleY9, self.BuildTime9, self.BuildCondition9 },
+			{ self.BuildModel10, self.BuildRuid10, self.BuildSizeX10, self.BuildSizeY10, self.BuildScaleX10, self.BuildScaleY10, self.BuildTime10, self.BuildCondition10 },
+			{ self.BuildModel11, self.BuildRuid11, self.BuildSizeX11, self.BuildSizeY11, self.BuildScaleX11, self.BuildScaleY11, self.BuildTime11, self.BuildCondition11 },
+			{ self.BuildModel12, self.BuildRuid12, self.BuildSizeX12, self.BuildSizeY12, self.BuildScaleX12, self.BuildScaleY12, self.BuildTime12, self.BuildCondition12 },
+			{ self.BuildModel13, self.BuildRuid13, self.BuildSizeX13, self.BuildSizeY13, self.BuildScaleX13, self.BuildScaleY13, self.BuildTime13, self.BuildCondition13 },
+			{ self.BuildModel14, self.BuildRuid14, self.BuildSizeX14, self.BuildSizeY14, self.BuildScaleX14, self.BuildScaleY14, self.BuildTime14, self.BuildCondition14 },
+			{ self.BuildModel15, self.BuildRuid15, self.BuildSizeX15, self.BuildSizeY15, self.BuildScaleX15, self.BuildScaleY15, self.BuildTime15, self.BuildCondition15 },
+			{ self.BuildModel16, self.BuildRuid16, self.BuildSizeX16, self.BuildSizeY16, self.BuildScaleX16, self.BuildScaleY16, self.BuildTime16, self.BuildCondition16 },
+			{ self.BuildModel17, self.BuildRuid17, self.BuildSizeX17, self.BuildSizeY17, self.BuildScaleX17, self.BuildScaleY17, self.BuildTime17, self.BuildCondition17 },
+		}
+		
+		local map = self.Entity.CurrentMap
+		---@type Unit_Info
+		local info = self.Entity.Unit_Info
+		local playerId = (info ~= nil) and info.PlayerID or ""
+		
+		local list = {}
+		-- 본진(세계수 등)이 파괴되면 건설 목록 자체를 비운다(빈 목록이면 BuildListUI가 닫힘).
+		if not _BuildRequirementLogic:HasAliveStructure(map, playerId, self.HQCondition) then
+			return list
+		end
+		for slotIndex, slot in ipairs(slots) do
+			if slot[1] ~= "" then
+				-- 선행 건물이 없으면 숨기지 않고 잠금으로 넣는다(커맨드카드가 회색 + 필요한 건물 이름으로 표시).
+				local unlocked = _BuildRequirementLogic:HasAliveStructure(map, playerId, slot[8])
+				local lockReason = ""
+				if not unlocked then lockReason = _BuildRequirementLogic:GetRequirementText(slot[8]) end
+				-- 전직관은 플레이어당 하나만 지을 수 있다(이미 있으면 잠금 + 안내 문구).
+				local lockToast = ""
+				if unlocked and _JobAdvanceLogic:IsInstructorModel(slot[1]) and _JobAdvanceLogic:HasInstructor(map, playerId) then
+					unlocked = false
+					lockToast = "전직관은 하나만 지을 수 있습니다"
+				end
+				table.insert(list, {
+					Model = slot[1],
+					Ruid = slot[2],
+					SizeX = slot[3],
+					SizeY = slot[4],
+					ScaleX = slot[5],
+					ScaleY = slot[6],
+					BuildTime = slot[7],
+					Locked = not unlocked,
+					LockReason = lockReason,
+					SlotIndex = slotIndex,
+					LockToast = lockToast,
+				})
+			end
+		end
+		return list
+	end
+
+	method boolean IsAdvancedSlot(integer slotIndex)
+		-- slotIndex번 건설 슬롯이 고급 건설(V) 목록에 속하는지(AdvancedSlots에 번호가 있으면).
+		if self.AdvancedSlots == "" then return false end
+		for part in string.gmatch(self.AdvancedSlots, "[^,]+") do
+			if tonumber(part) == slotIndex then return true end
+		end
+		return false
+	end
+
+	method boolean HasAdvancedList()
+		-- 고급 건설(V) 목록이 따로 있는 일꾼인지.
+		return self.AdvancedSlots ~= ""
+	end
+
+	method table GetBuildListKind(string kind)
+		-- 커맨드카드용: kind = "basic"(B 기본 건설) / "advanced"(V 고급 건설)로 나눈 건설 목록. 스타 SCV·프로브 방식.
+		local all = self:GetBuildList()
+		if not self:HasAdvancedList() then return all end
+		local want = (kind == "advanced")
+		local out = {}
+		for _, item in ipairs(all) do
+			if self:IsAdvancedSlot(item.SlotIndex or 0) == want then table.insert(out, item) end
+		end
+		return out
+	end
+
+	method any GetConditionForModel(string modelId)
+		-- 서버 재검증용: 건설 슬롯 중 modelId의 선행 건물 조건 문자열. 슬롯에 없는 모델이면 nil.
+		local slots = {
+			{ self.BuildModel1, self.BuildCondition1 },
+			{ self.BuildModel2, self.BuildCondition2 },
+			{ self.BuildModel3, self.BuildCondition3 },
+			{ self.BuildModel4, self.BuildCondition4 },
+			{ self.BuildModel5, self.BuildCondition5 },
+			{ self.BuildModel6, self.BuildCondition6 },
+			{ self.BuildModel7, self.BuildCondition7 },
+			{ self.BuildModel8, self.BuildCondition8 },
+			{ self.BuildModel9, self.BuildCondition9 },
+			{ self.BuildModel10, self.BuildCondition10 },
+			{ self.BuildModel11, self.BuildCondition11 },
+			{ self.BuildModel12, self.BuildCondition12 },
+			{ self.BuildModel13, self.BuildCondition13 },
+			{ self.BuildModel14, self.BuildCondition14 },
+			{ self.BuildModel15, self.BuildCondition15 },
+			{ self.BuildModel16, self.BuildCondition16 },
+			{ self.BuildModel17, self.BuildCondition17 },
+		}
+		for _, slot in ipairs(slots) do
+			if slot[1] ~= "" and slot[1] == modelId then return slot[2] or "" end
+		end
+		return nil
+	end
+
+end

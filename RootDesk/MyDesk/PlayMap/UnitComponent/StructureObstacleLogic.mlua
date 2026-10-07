@@ -1,0 +1,159 @@
+@Logic
+script StructureObstacleLogic extends Logic
+
+	property table _boxes = {}
+
+	property number _lastRefresh = -100
+
+	property number RefreshInterval = 0.4
+
+	method table GetBoxes(Entity map)
+		local now = _UtilLogic.ElapsedSeconds
+		if math.abs(now - self._lastRefresh) < self.RefreshInterval then
+			return self._boxes
+		end
+		self._lastRefresh = now
+		
+		local list = {}
+		if isvalid(map) then
+			local comps = map:GetChildComponentsByTypeName("script.Structure_Info", true)
+			for _, comp in ipairs(comps) do
+				---@type Structure_Info
+				local info = comp
+				local e = comp.Entity
+				-- 꺼진 엔티티(다 캐서 사라진 메소 광맥)는 장애물이 아니다.
+				if isvalid(e) and e.Enable and not info.IsDestroyed then
+					local trig = e.TriggerComponent
+					if trig ~= nil then
+						-- ⚠ TriggerComponent.BoxSize/ColliderOffset은 "로컬" 값이라 엔티티의 Transform Scale이 곱해진
+						-- 크기가 실제 충돌 영역이다(Weapon.AttackTarget도 BoxSize × Scale로 범위를 잡는다. 건물
+						-- 모델의 BoxSize는 스프라이트 원본 크기, Scale이 0.2~0.4). Scale을 빼고 BoxSize를 그대로
+						-- 쓰면 실제보다 2.5~5배 큰 박스가 되어 건물에서 멀리 떨어져 크게 돌아가게 된다.
+						local tf = e.TransformComponent
+						local wp = tf.WorldPosition
+						local sx = math.abs(tf.Scale.x)
+						local sy = math.abs(tf.Scale.y)
+						local off = trig.ColliderOffset
+						table.insert(list, {
+							entity = e,
+							cx = wp.x + off.x * sx,
+							cy = wp.y + off.y * sy,
+							hx = trig.BoxSize.x * sx / 2,
+							hy = trig.BoxSize.y * sy / 2,
+						})
+					end
+				end
+			end
+		end
+		self._boxes = list
+		return list
+	end
+
+	method table FindBox(table boxes, number x, number y, number r, Entity exempt)
+		-- (x, y)가 (반경 r만큼 넓힌) 어떤 건물 박스 안에 있으면 그 박스를, 없으면 nil. exempt 건물은 무시한다.
+		for _, b in ipairs(boxes) do
+			if b.entity ~= exempt and math.abs(x - b.cx) < b.hx + r and math.abs(y - b.cy) < b.hy + r then
+				return b
+			end
+		end
+		return nil
+	end
+
+	method Vector2 PushOut(Entity map, Vector2 p, number r, Entity exempt)
+		-- 이동 "목표 지점"이 건물 박스 안이면 가장 가까운 바깥 가장자리로 옮긴다(건물 위로 이동 명령을 내렸을 때
+		-- 유닛이 건물 앞에서 영원히 걷지 않도록). 인접한 건물 때문에 몇 번 반복한다.
+		local boxes = self:GetBoxes(map)
+		local x = p.x
+		local y = p.y
+		for _ = 1, 3 do
+			local b = self:FindBox(boxes, x, y, r, exempt)
+			if b == nil then break end
+			local ex = b.hx + r + 0.02
+			local ey = b.hy + r + 0.02
+			local dl = x - (b.cx - ex)
+			local dr = (b.cx + ex) - x
+			local db = y - (b.cy - ey)
+			local dt = (b.cy + ey) - y
+			local m = math.min(dl, dr, db, dt)
+			if m == dl then
+				x = b.cx - ex
+			elseif m == dr then
+				x = b.cx + ex
+			elseif m == db then
+				y = b.cy - ey
+			else
+				y = b.cy + ey
+			end
+		end
+		return Vector2(x, y)
+	end
+
+	method Vector2 ResolveStep(Entity map, Vector2 cur, Vector2 nextPos, Vector2 goal, number r, Entity exempt)
+		-- cur에서 nextPos로 가는 한 걸음이 건물 박스에 들어가면 보정한다.
+		--  1) 막히지 않으면 그대로.
+		--  2) 이미 박스 안에서 출발했다면(생산 직후 등) 자유 이동 — 걸어서 빠져나오게 둔다.
+		--  3) 한 축만 옮겨도 되면 벽을 따라 미끄러진다(더 많이 가는 축 우선).
+		--  4) 미끄러짐이 거의 없으면(정면 충돌) 목표(goal) 쪽 모서리로 벽을 따라 돌아간다.
+		local boxes = self:GetBoxes(map)
+		local nx = nextPos.x
+		local ny = nextPos.y
+		
+		local hit = self:FindBox(boxes, nx, ny, r, exempt)
+		if hit == nil then return nextPos end
+		if self:FindBox(boxes, cur.x, cur.y, r, exempt) ~= nil then return nextPos end
+		
+		local stepLen = (nextPos - cur):Magnitude()
+		
+		local best = nil
+		local bestLen = 0
+		if self:FindBox(boxes, nx, cur.y, r, exempt) == nil then
+			bestLen = math.abs(nx - cur.x)
+			best = Vector2(nx, cur.y)
+		end
+		if self:FindBox(boxes, cur.x, ny, r, exempt) == nil then
+			local l = math.abs(ny - cur.y)
+			if best == nil or l > bestLen then
+				bestLen = l
+				best = Vector2(cur.x, ny)
+			end
+		end
+		if best ~= nil and bestLen >= stepLen * 0.3 then
+			return best
+		end
+		
+		-- 정면 충돌: 막힌 면의 축을 알아내 반대 축으로 벽을 따라 돈다.
+		local gapx = math.abs(cur.x - hit.cx) - (hit.hx + r)
+		local gapy = math.abs(cur.y - hit.cy) - (hit.hy + r)
+		local cand = nil
+		if gapx > gapy then
+			local sgn = 1
+			if math.abs(goal.y - hit.cy) < 0.01 then
+				if cur.y < hit.cy then sgn = -1 end
+			elseif goal.y < hit.cy then
+				sgn = -1
+			end
+			cand = Vector2(cur.x, cur.y + sgn * stepLen)
+			if self:FindBox(boxes, cand.x, cand.y, r, exempt) ~= nil then
+				cand = Vector2(cur.x, cur.y - sgn * stepLen)
+			end
+		else
+			local sgn = 1
+			if math.abs(goal.x - hit.cx) < 0.01 then
+				if cur.x < hit.cx then sgn = -1 end
+			elseif goal.x < hit.cx then
+				sgn = -1
+			end
+			cand = Vector2(cur.x + sgn * stepLen, cur.y)
+			if self:FindBox(boxes, cand.x, cand.y, r, exempt) ~= nil then
+				cand = Vector2(cur.x - sgn * stepLen, cur.y)
+			end
+		end
+		
+		if self:FindBox(boxes, cand.x, cand.y, r, exempt) ~= nil then
+			if best ~= nil then return best end
+			return cur
+		end
+		return cand
+	end
+
+end

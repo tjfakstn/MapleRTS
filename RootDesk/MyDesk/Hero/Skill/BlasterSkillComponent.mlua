@@ -1,0 +1,373 @@
+@Component
+script BlasterSkillComponent extends Component
+
+	property number comboWindow = 1.2
+
+	@Sync
+	property integer comboCount = 0
+
+	@Sync
+	property string lastAction = ""
+
+	@Sync
+	property number bunkerBuffUntil = 0
+
+	method table BuildKit()
+		    -- 수치는 BlasterHeroDataComponent가 단일 출처로 소유한다. 기존 호출부 호환을 위한 위임이다.
+		    ---@type BlasterHeroDataComponent
+		    local data = self.Entity:GetComponent("script.BlasterHeroDataComponent")
+		    if data == nil then
+		        return {}
+		    end
+		    local kit = data:BuildKit()
+		    local adapter = self.Entity:GetComponent("script.HeroUnitSkill")
+		    if adapter ~= nil then return adapter:PrepareKit(kit, 15) end
+		    return kit
+	end
+
+	method table BuildVfx()
+		    -- VFX RUID/배율은 BlasterHeroDataComponent가 단일 출처로 소유한다. 기존 호출부 호환을 위한 위임이다.
+		    ---@type BlasterHeroDataComponent
+		    local data = self.Entity:GetComponent("script.BlasterHeroDataComponent")
+		    if data == nil then
+		        return {}
+		    end
+		    return data:BuildVfx()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnBeginPlay()
+		    -- 캐릭터 수명마다 연계/예약 상태를 새로 만든다.
+		    self._T.pending = {}
+		    self._T.cooldowns = {}
+		    self._T.busyUntil = 0
+		    self.bunkerBuffUntil = 0
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TryCast(string key, Vector2 aim)
+		    -- Core의 소유권 검사가 끝난 요청만 받는다. 보상 키는 직접 입력할 수 없다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if core == nil or core:GetSelectedHeroId() ~= "blaster" or _CombatTeamLogic:IsDead(self.Entity) then return end
+		    if key ~= "Q" and key ~= "W" and key ~= "E" and key ~= "R" and key ~= "T" then return end
+		    local now = _UtilLogic.ElapsedSeconds
+		    if now < (self._T.busyUntil or 0) then return end
+		    if now < (self._T.cooldowns[key] or 0) then
+		        return
+		    end
+		    if now > (self._T.chainUntil or 0) then self._T.chainKey = nil self._T.afterDuck = false end
+		    local kit = self:BuildKit()
+		    local skill = kit[key]
+		    local pos = self.Entity.TransformComponent.WorldPosition
+		    local dir = core:GetResolvedSkillDirection(skill, core:GetAimDirection(Vector2(pos.x, pos.y), aim))
+		    local scale = self.Entity.TransformComponent.Scale
+		    self.Entity.TransformComponent.Scale = Vector3(math.abs(scale.x) * (dir.x >= 0 and -1 or 1), scale.y, scale.z)
+		    core:AcceptActorCast(key, skill)
+		    self._T.cooldowns[key] = now + skill.cooldown
+		    self._T.activeMap = self.Entity.CurrentMap
+		    if key == "Q" or key == "E" then
+		        self:PlayPunchCast(key, dir, now < self.bunkerBuffUntil)
+		    else
+		        self.lastAction = key .. ":" .. tostring(now)
+		    end
+		    if key == "T" then
+		        -- T 자체는 공격하지 않는다. 준비 동작 뒤 Q/E 강화 버프만 켠다.
+		        self._T.busyUntil = now + skill.castWindup
+		        table.insert(self._T.pending, { key = "T", skill = skill, due = self._T.busyUntil })
+		        return
+		    end
+		    if key == "W" then
+		        -- 합본 더킹은 Q/E 재사용만 초기화한다. 진행 중 시전 잠금은 해제하지 않는다.
+		        if self.Entity:GetComponent("script.HeroUnitSkill") ~= nil then
+		            self._T.cooldowns.Q = 0
+		            self._T.cooldowns.E = 0
+		        end
+		        self._T.afterDuck = self._T.chainKey ~= nil and self._T.afterDuck ~= true
+		        if not self._T.afterDuck then self._T.chainKey = nil end
+		        self._T.chainUntil = now + self.comboWindow
+		        self._T.busyUntil = now + skill.duration
+		        local adapter = self.Entity:GetComponent("script.HeroUnitSkill")
+		        if adapter ~= nil then adapter:Dash(dir, skill.dashDistance, skill.duration)
+		        else self:StartDucking(dir, skill.duration, skill.dashDistance) end
+		        return
+		    end
+		    local completes = (key == "Q" or key == "E") and self._T.afterDuck == true
+		        and self._T.chainKey ~= nil and self._T.chainKey ~= key
+		    self._T.chainKey = nil
+		    self._T.afterDuck = false
+		    local count = skill.tickCount or 1
+		    local sequence = { hit = false }
+		    self._T.busyUntil = now + skill.castWindup + (count - 1) * (skill.tickInterval or 0)
+		    for index = 1, count do
+		        table.insert(self._T.pending, { key = key, skill = skill, dir = dir, aim = aim,
+		            due = now + skill.castWindup + (index - 1) * (skill.tickInterval or 0), completes = completes,
+		            sequence = sequence, finalTick = index == count })
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ResolveAttack(table request)
+		    -- 엔진 hook과 피격 처리는 Core에 그대로 두고 반환된 적중 목록으로만 연계를 확정한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local context = core:BuildRuntimeHitContext(request.skill, request.aim, request.dir)
+		    local visual = self:BuildVfx()[request.key]
+		    if visual ~= nil then
+		        local visualPosition = context.casterPos + Vector2(0, visual.effectVerticalOffset or 0)
+		        local measured = core:GetAttackLogicComponent():BuildMeasuredEffectBox(visual.effect, visualPosition, request.dir, visual.castVisualScaleMultiplier or 1)
+		        if measured ~= nil then context.shape = measured end
+		    end
+		    core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		    local info = request.key .. ":" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(request.skill.damage)
+		    core:BeginAttackTargetFilter(info, request.skill.maxTargets or 0)
+		    local hits = core:PerformAttack(context.shape, info)
+		    core:EndAttackTargetFilter(info)
+		    local bunkerActive = (request.key == "Q" or request.key == "E")
+		        and _UtilLogic.ElapsedSeconds < self.bunkerBuffUntil
+		    if #hits > 0 and not bunkerActive then core:EmitImpactBatchSync(request.key, hits, #hits) end
+		    if request.key ~= "Q" and request.key ~= "E" then return end
+		    if bunkerActive then
+		        self:ResolveBunkerBonus(request, context, hits)
+		    end
+		    if request.sequence ~= nil and #hits > 0 then request.sequence.hit = true end
+		    if request.finalTick == false then return end
+		    if #hits == 0 and not (request.sequence ~= nil and request.sequence.hit) then return end
+		    self._T.chainKey = request.key
+		    self._T.chainUntil = _UtilLogic.ElapsedSeconds + self.comboWindow
+		    if not request.completes then return end
+		    self._T.cooldowns.W = 0
+		    self.comboCount = self.comboCount + 1
+		    if self.comboCount < 5 then return end
+		    self.comboCount = 0
+		    self.lastAction = "RELEASE:" .. tostring(_UtilLogic.ElapsedSeconds)
+		    local reward = self:BuildKit().RELEASE
+		    table.insert(self._T.pending, { key = "RELEASE", skill = reward, dir = request.dir,
+		        aim = request.aim, due = _UtilLogic.ElapsedSeconds + reward.castWindup, completes = false })
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ResolveBunkerBonus(table request, table context, table baseHits)
+		    -- 버프 중 Q/E마다 T 연출 크기의 전방 영역에 추가 공격한다. 기본 적중/연계와 독립이다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if core == nil then return end
+		    local buff = self:BuildKit().T
+		    local bonus = math.floor(buff.bonusDamage / math.max(1, request.skill.tickCount or 1))
+		    local length = buff.effectBaseLength * buff.effectScaleMultiplier
+		    local width = buff.effectBaseWidth * buff.effectScaleMultiplier
+		    local shape = core:BuildFrontBox(context.casterPos, request.dir, length, width)
+		    local visual = self:BuildVfx().T
+		    local measured = core:GetAttackLogicComponent():BuildMeasuredEffectBox(visual.effect,
+		        context.casterPos + Vector2(0, visual.effectVerticalOffset or 0), request.dir, visual.castVisualScaleMultiplier or 1)
+		    if measured ~= nil then shape = measured end
+		    core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		    local info = "BUNKER:" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(bonus)
+		    core:BeginAttackTargetFilter(info, request.skill.maxTargets or 0)
+		    local hits = core:PerformAttack(shape, info)
+		    core:EndAttackTargetFilter(info)
+		    local positions = {}
+		    for _, hit in ipairs(baseHits) do
+		        if isvalid(hit.Entity) then
+		            table.insert(positions, hit.Entity.TransformComponent.WorldPosition)
+		        end
+		    end
+		    local bonusPositions = {}
+		    for _, hit in ipairs(hits) do
+		        if isvalid(hit.Entity) then table.insert(bonusPositions, hit.Entity.TransformComponent.WorldPosition) end
+		    end
+		    -- 기본/추가타 대상이 다를 수 있으므로 실제로 맞은 위치에만 각각의 impact를 재생한다.
+		    self:PlayBunkerBonus(request.key, positions, bonusPositions)
+	end
+
+	@ExecSpace("Client")
+	method void PlayPunchCast(string key, Vector2 dir, boolean bunkerActive)
+		    -- Q/E 공격 연출과 버프 추가 연출을 같은 시전 원점에서 각각 한 번 재생한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if core == nil or core:GetSelectedHeroId() ~= "blaster" or _CombatTeamLogic:IsDead(self.Entity) then return end
+		    local vfx = self:BuildVfx()
+		    local source = vfx[key]
+		    if source == nil then return end
+		    local pos = self.Entity.TransformComponent.WorldPosition
+		    local sign = dir.x >= 0 and -1 or 1
+		    local scale = source.castVisualScaleMultiplier
+		    _FogOfWarLogic:PlayEffectSeen(source.effect, self.Entity, pos, 0, Vector3(sign * scale, scale, 1), false, { PlayRate = 1.1 })
+		    if bunkerActive then
+		        local bonusScale = vfx.T.castVisualScaleMultiplier
+		        local bonusPos = Vector3(pos.x, pos.y + vfx.T.effectVerticalOffset, pos.z)
+		        _FogOfWarLogic:PlayEffectSeen(vfx.T.effect, self.Entity, bonusPos, 0, Vector3(sign * bonusScale, bonusScale, 1), false, nil)
+		    end
+	end
+
+	@ExecSpace("Client")
+	method void PlayBunkerBonus(string sourceKey, table positions, table bonusPositions)
+		    -- 버프 중 Q/E와 T 타격 연출을 맞은 적 위치에 동시에 재생한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if core == nil or core:GetSelectedHeroId() ~= "blaster" or _CombatTeamLogic:IsDead(self.Entity) then return end
+		    local vfx = self:BuildVfx().T
+		    local sourceVfx = self:BuildVfx()[sourceKey]
+		    if sourceVfx == nil then return end
+		    local sign = self.Entity.TransformComponent.Scale.x < 0 and -1 or 1
+		    local scale = vfx.impactScaleMultiplier
+		    for _, pos in ipairs(positions) do
+		        local impactPos = Vector3(pos.x, pos.y, 0)
+		        local sourceScale = sourceVfx.impactScaleMultiplier or 1
+		        _FogOfWarLogic:PlayEffectSeen(sourceVfx.impact, self.Entity, impactPos, 0, Vector3(sign * sourceScale, sourceScale, 1), false, nil)
+		    end
+		    for _, pos in ipairs(bonusPositions) do
+		        _FogOfWarLogic:PlayEffectSeen(vfx.impact, self.Entity, Vector3(pos.x, pos.y, 0), 0, Vector3(sign * scale, scale, 1), false, nil)
+		    end
+	end
+
+	method void OnUpdate(number delta)
+		    -- 서버는 예약된 판정만, 클라이언트는 더킹 이동과 연출 수명만 처리한다.
+		    if self:IsClient() then self:UpdatePresentation(delta) return end
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if core == nil then return end
+		    if core:GetSelectedHeroId() ~= "blaster" or _CombatTeamLogic:IsDead(self.Entity)
+		        or (self._T.activeMap ~= nil and self._T.activeMap ~= self.Entity.CurrentMap) then
+		        if self._T.activeMap ~= nil then self:ResetCombo() end
+		        return
+		    end
+		    if self.bunkerBuffUntil > 0 and _UtilLogic.ElapsedSeconds >= self.bunkerBuffUntil then
+		        self.bunkerBuffUntil = 0
+		    end
+		    local queue = self._T.pending or {}
+		    local index = 1
+		    while index <= #queue do
+		        if _UtilLogic.ElapsedSeconds >= queue[index].due then
+		            local request = table.remove(queue, index)
+		            if request.key == "T" then
+		                self.bunkerBuffUntil = _UtilLogic.ElapsedSeconds + request.skill.buffDuration
+		            else
+		                self:ResolveAttack(request)
+		            end
+		        else index = index + 1 end
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ResetCombo()
+		    -- 영웅 변경/사망/맵 이탈 시 예약 공격을 취소한다. 쿨타임은 우회하지 못하게 보존한다.
+		    self._T.pending = {}
+		    self._T.chainKey = nil
+		    self._T.afterDuck = false
+		    self._T.chainUntil = 0
+		    self._T.busyUntil = 0
+		    self._T.activeMap = nil
+		    self.comboCount = 0
+		    self.bunkerBuffUntil = 0
+	end
+
+	@ExecSpace("Client")
+	method void StartDucking(Vector2 dir, number duration, number distance)
+		    -- 기존 로컬 이동 권한을 따른다. 클릭 이동은 더킹 동안만 정지시킨다.
+		    if self.Entity ~= _UserService.LocalPlayer then return end
+		    self:StopDucking()
+		    local movement = self.Entity.MovementComponent
+		    if movement == nil then return end
+		    local click = self.Entity:GetComponent("script.ClickToMoveComponent")
+		    self._T.duck = { dir = dir, untilTime = _UtilLogic.ElapsedSeconds + duration,
+		        speed = movement.InputSpeed, click = click, clickEnabled = click ~= nil and click.Enable }
+		    if click ~= nil then click:StopMovement() click.Enable = false end
+		    movement.InputSpeed = distance / duration * 1.2
+		    movement:MoveToDirection(dir, 0)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void StopDucking()
+		    -- 시작 시 보관한 이동값만 복원한다.
+		    local duck = self._T.duck
+		    if duck == nil then return end
+		    local movement = self.Entity.MovementComponent
+		    if movement ~= nil then movement:Stop() movement.InputSpeed = duck.speed end
+		    if isvalid(duck.click) then duck.click.Enable = duck.clickEnabled end
+		    self._T.duck = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method integer PlayVisual(string ruid, number scale, boolean loop)
+		    -- 블래스터 연출 전용 배율이며 판정 데이터에는 전달하지 않는다.
+		    if ruid == nil or ruid == "" then return 0 end
+		    local duckVfx = self:BuildVfx().W
+		    local rate = (ruid == duckVfx.effect or ruid == duckVfx.preEffect) and 1.1 or 1
+		    local serial = _FogOfWarLogic:PlayEffectAttachedSeen(ruid, self.Entity, Vector3(0, 0, 0),
+		        0, Vector3(scale, scale, 1), loop, { SyncFlip = true, PlayRate = rate })
+		    return serial
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSyncProperty(string name, any value)
+		    -- 승인된 서버 시전만 시작/유지/종료 연출로 변환한다.
+		    if name ~= "lastAction" or value == "" then return end
+		    local key = string.match(value, "^([^:]+)")
+		    local vfx = self:BuildVfx()[key]
+		    if vfx == nil then return end
+		    local scale = vfx.castVisualScaleMultiplier or 1
+		    if key == "RELEASE" then
+		        -- 릴리즈의 시전 원점을 캐릭터에 고정한다. 이미지 중심을 맞추는 전방/하방 이동은 하지 않는다.
+		        local sign = self.Entity.TransformComponent.Scale.x < 0 and -1 or 1
+		        local pos = self.Entity.TransformComponent.WorldPosition
+		        local effectPos = Vector3(pos.x, pos.y, pos.z)
+		        _FogOfWarLogic:PlayEffectSeen(vfx.effect, self.Entity, effectPos, 0, Vector3(sign * scale, scale, 1), false, nil)
+		        return
+		    end
+		    if vfx.preEffect ~= nil then self:PlayVisual(vfx.preEffect, scale, false) end
+		    if key == "R" then
+		        self._T.loopSerial = self:PlayVisual(vfx.effect, scale, true)
+		        self._T.loopUntil = _UtilLogic.ElapsedSeconds + 3.1
+		    elseif key == "T" then
+		        -- 활성화 때는 preEffect만 재생한다. effect는 Q/E 추가타 때만 재생한다.
+		        return
+		    elseif key == "W" then
+		        self._T.delayedVisual = { key = key, due = _UtilLogic.ElapsedSeconds + 0.08 }
+		    else self:PlayVisual(vfx.effect, scale, false) end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdatePresentation(number delta)
+		    -- 더킹은 매 프레임 이동하고 루프 VFX는 종료 시 serial을 제거한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if core == nil or core:GetSelectedHeroId() ~= "blaster" or _CombatTeamLogic:IsDead(self.Entity) then
+		        self:ClearPresentation()
+		        return
+		    end
+		    local now = _UtilLogic.ElapsedSeconds
+		    local duck = self._T.duck
+		    if duck ~= nil then
+		        if now >= duck.untilTime then self:StopDucking()
+		        else self.Entity.MovementComponent:MoveToDirection(duck.dir, delta) end
+		    end
+		    local delayed = self._T.delayedVisual
+		    if delayed ~= nil and now >= delayed.due then
+		        local vfx = self:BuildVfx()[delayed.key]
+		        self:PlayVisual(vfx.effect, vfx.castVisualScaleMultiplier or 1, false)
+		        self._T.delayedVisual = nil
+		    end
+		    if self._T.loopSerial ~= nil and now >= self._T.loopUntil then
+		        _EffectService:RemoveEffect(self._T.loopSerial)
+		        self._T.loopSerial = nil
+		        local vfx = self:BuildVfx().R
+		        self:PlayVisual(vfx.effect2, vfx.castVisualScaleMultiplier or 1, false)
+		    end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ClearPresentation()
+		    -- 취소된 시전의 후속 연출은 재생하지 않는다.
+		    self:StopDucking()
+		    self._T.delayedVisual = nil
+		    if self._T.loopSerial ~= nil then
+		        _EffectService:RemoveEffect(self._T.loopSerial)
+		        self._T.loopSerial = nil
+		    end
+	end
+
+	method void OnMapLeave(Entity map)
+		    -- 맵별 예약과 이동을 정리한다.
+		    if self:IsServer() then self:ResetCombo() else self:ClearPresentation() end
+	end
+
+	method void OnEndPlay()
+		    -- 엔티티 종료 시 루프와 이동 상태를 복원한다.
+		    if self:IsServer() then self:ResetCombo() else self:ClearPresentation() end
+	end
+
+end

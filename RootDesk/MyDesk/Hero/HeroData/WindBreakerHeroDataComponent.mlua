@@ -1,0 +1,357 @@
+@Component
+script WindBreakerHeroDataComponent extends Component
+
+	method table BuildKit()
+		    return {
+		    
+		                name = "윈드브레이커",
+		    
+		                -- 브리즈 애로우(1차): 최대 5명, 3타, 120%. "전방에 바람의 힘을 실은 화살을 날린다".
+		                        -- 화살 투사체 RUID가 아직 없어서 투사체 없이 즉발 전방 판정으로 간다.
+		                        Q = {
+		                 name = "브리즈 애로우",
+		                 skillClass = "front_burst",
+		                 targetIntent = "few",
+		    
+		                      projectileCount = 0,
+		                 hitCount = 3,
+		                 burstCount = 0,
+		                 tickCount = 3,
+		                 tickInterval = 0.07,
+		    
+		                      shape = "front",
+		                 length = 6.4,
+		                 width = 1.4,
+		    
+		                      telegraphShape = "front",
+		                 telegraphLength = 6.4,
+		                 telegraphWidth = 1.4,
+		    
+		                      hitShape = "front",
+		                 hitLength = 6.4,
+		                 hitWidth = 1.4,
+		    
+		                      visualVsHitDelta = 0,
+		                 damage = 55,
+		                 cooldown = 1,
+		                 castWindup = 0.08,
+		                 projectile = false,
+		    
+		                      emitImpactPerTarget = true,
+		                 maxTargets = 5,
+		                 maxImpactFxCount = 5,
+		    
+		                      effectForwardOffset = 0.62,
+		                 telegraph = false,
+		                 telegraphTime = 0.08,
+		    
+		                      effectBaseLength = 3.404,
+		                 effectBaseWidth = 0.745,
+		    
+		                      effectScaleMultiplier = 0.94,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                -- 거스트 샷(2차): 6명, 2타, 260%. "빠른 속도로 화살을 난사한다" -> 2연사 투사체.
+		                        W = {
+		                 name = "거스트 샷",
+		                 skillClass = "burst_fire",
+		                 targetIntent = "few",
+		    
+		                      projectileCount = 2,
+		                 hitCount = 2,
+		                 burstCount = 2,
+		                 shotInterval = 0.08,
+		                 burstDuration = 0.16,
+		                 tickCount = 0,
+		    
+		                      shape = "front",
+		                 length = 7.2,
+		                 width = 1.6,
+		    
+		                      telegraphShape = "front",
+		                 telegraphLength = 7.2,
+		                 telegraphWidth = 1.6,
+		    
+		                      hitShape = "front",
+		                 hitLength = 7.2,
+		                 hitWidth = 1.6,
+		    
+		                      visualVsHitDelta = 0,
+		                 damage = 130,
+		                 cooldown = 6,
+		                 projectile = true,
+		    
+		                      castWindup = 0.1,
+		                 projectileFireDelay = 0.04,
+		                 projectileSpeed = 15.5,
+		    
+		                      projectileStartForwardOffset = 0.66,
+		                 projectileLateralStep = 0.06,
+		    
+		                      emitImpactPerTarget = true,
+		                 maxTargets = 6,
+		                 maxImpactFxCount = 6,
+		    
+		                      telegraph = false,
+		                 telegraphTime = 0.1,
+		    
+		                      effectBaseLength = 3.913,
+		                 effectBaseWidth = 0.87,
+		    
+		                      effectScaleMultiplier = 0.92,
+		                 projectileScaleMultiplier = 0.92,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                -- 페어리 턴(2차): 6명, 3타, 175%. "제자리에서 몸을 돌려 전방의 적들을 밀어내는 바람" -> 자기중심 + 넉백.
+		                        E = {
+		                 name = "페어리 턴",
+		                 skillClass = "self_burst",
+		                 targetIntent = "many",
+		    
+		                      projectileCount = 0,
+		                 hitCount = 3,
+		                 burstCount = 0,
+		                 tickCount = 3,
+		                 tickInterval = 0.09,
+		    
+		                      shape = "self",
+		                 length = 2.8,
+		    
+		                      telegraphShape = "self",
+		                 telegraphRadius = 2.8,
+		    
+		                      hitShape = "self",
+		                 hitRadius = 2.8,
+		    
+		                      visualVsHitDelta = 0,
+		                 damage = 88,
+		                 cooldown = 8,
+		                 castWindup = 0.1,
+		                 projectile = false,
+		    
+		                      knockback = true,
+		                 knockbackSpeed = 4.6,
+		                 knockbackDuration = 0.16,
+		    
+		                      emitImpactPerTarget = true,
+		                 maxTargets = 6,
+		                 maxImpactFxCount = 6,
+		    
+		                      telegraph = false,
+		                 telegraphTime = 0.1,
+		    
+		                      effectBaseLength = 1.458,
+		    
+		                      effectScaleMultiplier = 0.96,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                -- 천공의 노래(4차): 4명, 초당 8.5회 연사, 쿨타임 없음(여기서는 밸런스상 12초).
+		                        -- 시전 이펙트는 7초 동안 캐릭터에 붙어서 끊기지 않고 유지된다(sustainedEffect).
+		                        R = {
+		                 name = "천공의 노래",
+		                 skillClass = "short_channel",
+		                 targetIntent = "few",
+		    
+		                      projectileCount = 59,
+		                 hitCount = 59,
+		                 burstCount = 0,
+		                 tickCount = 59,
+		                 tickInterval = 0.118,
+		    
+		                      shape = "front",
+		                 length = 7.0,
+		                 width = 1.6,
+		    
+		                      telegraphShape = "front",
+		                 telegraphLength = 7.0,
+		                 telegraphWidth = 1.6,
+		    
+		                      hitShape = "front",
+		                 hitLength = 7.0,
+		                 hitWidth = 1.6,
+		    
+		                      visualVsHitDelta = 0,
+		                 damage = 51,
+		                 cooldown = 12,
+		                 projectile = true,
+		    
+		                      castWindup = 0.12,
+		                 projectileFireDelay = 0.02,
+		                 projectileSpeed = 17.2,
+		    
+		                      projectileStartForwardOffset = 0.7,
+		    
+		                      useCurrentFacing = true,
+		                 followCasterDuringChannel = true,
+		                 followCasterAimDuringChannel = true,
+		    
+		                      maxTargets = 4,
+		                 maxImpactFxCount = 4,
+		    
+		                      telegraph = false,
+		                 telegraphTime = 0.12,
+		    
+		                      effectBaseLength = 3.889,
+		                 effectBaseWidth = 0.889,
+		    
+		                      effectScaleMultiplier = 0.9,
+		                 projectileScaleMultiplier = 0.9,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                -- 하울링 게일(5차): 키를 누른 시간에 따라 작은/큰 회오리를 소환하고,
+		                        -- 회오리가 5초 동안 시전 방향으로 앞뒤 왕복하며 주기적으로 타격한다.
+		                        T = {
+		                 name = "하울링 게일",
+		                 skillClass = "wind_gale",
+		                 targetIntent = "many",
+		    
+		                      projectileCount = 0,
+		                 hitCount = 0,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		    
+		                      shape = "self",
+		                 length = 1.0,
+		    
+		                      hitShape = "self",
+		                 hitRadius = 1.0,
+		    
+		                      visualVsHitDelta = 0,
+		                 damage = 0,
+		                 cooldown = 90,
+		                 castWindup = 0.14,
+		                 projectile = false,
+		    
+		                      castMotionDuration = 0.4,
+		                    -- 키를 뗀 뒤 시전 모션이 다 나오고 회오리가 나간다
+		                                  galeChargeThreshold = 1.0,
+		                   -- 이 시간(초) 이상 누르면 큰 회오리
+		                                  galeDuration = 5.0,
+		    
+		                      galeSmallRadius = 2.2,
+		                 galeSmallDamage = 150,
+		                 galeSmallTickInterval = 0.4,
+		    
+		                      galeSmallTravelDistance = 5.0,
+		                 galeSmallTravelSpeed = 3.2,
+		                 galeSmallMaxTargets = 6,
+		    
+		                      galeLargeRadius = 3.6,
+		                 galeLargeDamage = 260,
+		                 galeLargeTickInterval = 0.35,
+		    
+		                      galeLargeTravelDistance = 7.5,
+		                 galeLargeTravelSpeed = 2.4,
+		                 galeLargeMaxTargets = 10,
+		    
+		                      telegraph = false,
+		                 telegraphTime = 0.14,
+		    
+		                      effectBaseLength = 0.52,
+		    
+		                      effectScaleMultiplier = 0.96,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		    
+		        }
+	end
+
+	method table BuildVfx()
+		    return {
+		    
+		                Q = {
+		                 effect = "c6c958f1171d4cf7ab3799e54034623c",
+		    
+		                      impact = "ee5acf09f4a24ea2b3e4d1a75133efde",
+		    
+		                      multiImpactEffect = "ee5acf09f4a24ea2b3e4d1a75133efde",
+		    
+		                      playCastEffectOnInput = true
+		            },
+		    
+		                W = {
+		                 effect = "ecb222dddf2f4a50855d77fe133f1677",
+		    
+		                      effect0 = "621d165eaf1c48e7b262809c66c89c3d",
+		    
+		                      ball = "621d165eaf1c48e7b262809c66c89c3d",
+		    
+		                      impact = "b104343625614076a918e20671fba6d7",
+		    
+		                      multiImpactEffect = "b104343625614076a918e20671fba6d7",
+		    
+		                      playCastEffectOnInput = true
+		            },
+		    
+		                E = {
+		                 effect = "a18362751d9a4ea78c16d25109ec6088",
+		    
+		                      impact = "aab58163af4742e8a6f94f6517445fee",
+		    
+		                      multiImpactEffect = "aab58163af4742e8a6f94f6517445fee",
+		    
+		                      playCastEffectOnInput = true
+		            },
+		    
+		                -- R은 시전 이펙트를 매 틱 새로 띄우지 않고, 캐릭터에 붙여서 7초간 루프로 유지한다.
+		                        -- 그래야 이동해도 잔상이 안 남고 끊기지도 않는다(sustainedEffect 경로).
+		                        R = {
+		                 sustainedEffect = "a59b9339cc7e4d579e8d3389e1c95149",
+		    
+		                      sustainedDuration = 7.0,
+		    
+		                      sustainedLocalOffsetY = 0.35,
+		    
+		                      sustainedScaleMultiplier = 1.0,
+		    
+		                      effect0 = "b8e2ca8812f04ed0a9d6545aa0cdce36",
+		    
+		                      ball = "b8e2ca8812f04ed0a9d6545aa0cdce36",
+		    
+		                      impact = "d8cbacc0ed7545d4afa1a948fafca99b",
+		    
+		                      multiImpactEffect = "d8cbacc0ed7545d4afa1a948fafca99b",
+		    
+		                      playCastEffectOnInput = true
+		            },
+		    
+		                -- T는 시전 이펙트 + 소환되는 회오리 두 종류(작은/큰) + 회오리 타격 이펙트로 나뉜다.
+		                        T = {
+		                 effect = "2f6323999f174f62bf40a5e051ecf104",
+		    
+		                      impact = "c86d591fff414e7eb3f571321afd9754",
+		    
+		                      multiImpactEffect = "c86d591fff414e7eb3f571321afd9754",
+		    
+		                      galeSmallEffect = "03ec645ecea048d3a8d1db147cbc1072",
+		    
+		                      galeLargeEffect = "904626af9078493caa41fca8fe9786c9",
+		    
+		                      -- 차징하는 동안 붙여서 유지할 이펙트(활을 든 모션). 없으면 effect를 그대로 쓴다.
+		                                  chargeEffect = "2f6323999f174f62bf40a5e051ecf104",
+		    
+		                      chargeLocalOffsetY = 0.35,
+		    
+		                      chargeScaleMultiplier = 1.0,
+		    
+		                      chargeMaxDuration = 6,
+		    
+		                      galeSmallScaleMultiplier = 0.95,
+		    
+		                      galeLargeScaleMultiplier = 1.35,
+		    
+		                      galeVisualInterval = 0.5,
+		    
+		                      playCastEffectOnInput = true
+		            },
+		    
+		    
+		        }
+	end
+
+end

@@ -1,0 +1,409 @@
+@Logic
+script UnitAbilityLogic extends Logic
+
+	@DisplayName("버프 이펙트(비우면 CombatConfig.HealRUID)")
+	property string BuffEffectRuid = ""
+
+	@DisplayName("타격 이펙트 크기 배율")
+	property number StrikeFxScale = 1.4
+
+	method table Def(string abilityName)
+		-- 능력 이름 → 정의. kind: strike/chain/charge/taunt/guard/barrier/stealth/aura/siege.
+		-- cd 재사용 대기(초), aim = 위치 지정형, mult = 유닛 공격력(업그레이드 포함) 배율, radius = 효과 반경(월드),
+		-- reach = 사거리에 더해지는 시전 거리, structures = 건물도 맞힘.
+		local t = {
+			["돌진"] = { kind = "charge", cd = 12, aim = true, dist = 3.0, mult = 2.0, radius = 1.0 },
+			["강타"] = { kind = "strike", cd = 10, aim = true, radius = 0.9, mult = 2.5, reach = 1.0 },
+			["사격"] = { kind = "strike", cd = 10, aim = true, radius = 0.6, mult = 3.0, reach = 1.5 },
+			["폭발"] = { kind = "strike", cd = 14, aim = true, radius = 1.6, mult = 2.0, reach = 1.0, structures = true },
+			["포격"] = { kind = "strike", cd = 16, aim = true, radius = 2.0, mult = 2.5, reach = 2.0, structures = true },
+			["폭격"] = { kind = "strike", cd = 16, aim = true, radius = 2.0, mult = 2.5, reach = 2.0, structures = true },
+			["투척"] = { kind = "strike", cd = 12, aim = true, radius = 1.2, mult = 1.5, reach = 1.0 },
+			["감소"] = { kind = "strike", cd = 14, aim = true, radius = 1.8, mult = 0.5, reach = 1.0 },
+			["전격"] = { kind = "chain", cd = 12, aim = true, mult = 1.6, jumps = 4, jumpRange = 2.0, reach = 1.0 },
+			["도발"] = { kind = "taunt", cd = 15, radius = 3.5, def = 4, dur = 5 },
+			["방어"] = { kind = "guard", cd = 14, def = 6, dur = 6, slow = 0.5 },
+			["방어막"] = { kind = "barrier", cd = 18, radius = 3.0, def = 3, dur = 6 },
+			["은신"] = { kind = "stealth", cd = 2, toggle = true },
+			["오라"] = { kind = "aura", cd = 1, toggle = true },
+			["시즈모드"] = { kind = "siege", cd = 3, toggle = true, rangeMult = 1.8, dmgMult = 1.5 },
+		}
+		return t[abilityName]
+	end
+
+	method boolean IsSupported(string abilityName)
+		-- 이 능력이 구현돼 있는지(커맨드카드 잠금 여부).
+		return self:Def(abilityName) ~= nil
+	end
+
+	method boolean NeedsAim(string abilityName)
+		-- 위치 지정형 능력인지(버튼이면 다음 클릭 위치, 단축키면 커서 위치).
+		local def = self:Def(abilityName)
+		return def ~= nil and def.aim == true
+	end
+
+	method boolean IsToggle(string abilityName)
+		-- 켜고 끄는 능력인지.
+		local def = self:Def(abilityName)
+		return def ~= nil and def.toggle == true
+	end
+
+	method table FindAbility(Unit_Info info, string abilityName)
+		-- info 유닛의 시트 능력 항목({ Key, Name, Desc, Icon })을 찾는다. 없으면 nil.
+		if info == nil then return nil end
+		local data = _UnitCommandData:GetUnitData(info.UnitModelKey)
+		if data == nil or data.Abilities == nil then return nil end
+		for _, ab in ipairs(data.Abilities) do
+			if ab.Name == abilityName then return ab end
+		end
+		return nil
+	end
+
+	method string ToggleStateText(Unit_Info info, string abilityName)
+		-- 툴팁용 현재 상태("켜짐"/"꺼짐"). 오라는 기본이 켜짐, 은신은 시트 기본값, 시즈모드는 기본이 꺼짐.
+		local def = self:Def(abilityName)
+		if def == nil or not def.toggle or info == nil then return "" end
+		local on = false
+		if def.kind == "stealth" then on = info.IsStealth
+		elseif def.kind == "aura" then on = not info.AbilityToggle
+		elseif def.kind == "siege" then on = info.AbilityToggle end
+		return on and "켜짐" or "꺼짐"
+	end
+
+	method table ThrowStatuses(string desc)
+		-- 투척 능력 설명 → 거는 상태이상 목록 { kind, value, duration }(Weapon.ApplyStatusTo 형식).
+		if desc == nil then return {} end
+		if string.find(desc, "복합", 1, true) ~= nil then
+			return { { "poison", 3, 5 }, { "atkslow", 0.3, 4 } }
+		end
+		if string.find(desc, "독", 1, true) ~= nil then return { { "poison", 3, 5 } } end
+		if string.find(desc, "냉기", 1, true) ~= nil then return { { "slow", 0.4, 3 } } end
+		if string.find(desc, "저주", 1, true) ~= nil then return { { "atkslow", 0.3, 4 } } end
+		return {}
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Cast(Unit_Info info, string abilityName, Vector2 aim)
+		-- 능력 시전(Unit_Info.RequestAbility가 소유 검증 후 호출). 재사용 대기·행동 잠금을 확인하고 종류별로 처리한다.
+		local def = self:Def(abilityName)
+		if def == nil or info == nil or info.IsDead then return end
+		local ab = self:FindAbility(info, abilityName)
+		if ab == nil then
+			return
+		end
+		if _CombatTeamLogic:IsActionLocked(info.Entity) then return end
+		local now = _UtilLogic.ServerElapsedSeconds
+		if info._T.abCd == nil then info._T.abCd = {} end
+		local readyAt = info._T.abCd[abilityName] or 0
+		if readyAt > now then
+			_UIToast_:ShowMessage(abilityName .. " 재사용 대기 중 (" .. tostring(math.ceil(readyAt - now)) .. "초)", info.PlayerID)
+			return
+		end
+		local ok = false
+		local kind = def.kind
+		if kind == "strike" then ok = self:CastStrike(info, def, ab, aim)
+		elseif kind == "chain" then ok = self:CastChain(info, def, aim)
+		elseif kind == "charge" then ok = self:CastCharge(info, def, aim)
+		elseif kind == "taunt" then ok = self:CastTaunt(info, def)
+		elseif kind == "guard" then ok = self:CastGuard(info, def)
+		elseif kind == "barrier" then ok = self:CastBarrier(info, def)
+		elseif kind == "stealth" or kind == "aura" or kind == "siege" then ok = self:Toggle(info, def)
+		end
+		if not ok then return end
+		info._T.abCd[abilityName] = now + def.cd
+		if not def.toggle then
+			-- 커맨드카드 쿨타임 덮개용(마지막으로 쓴 시전형 능력 하나만 동기화).
+			info.AbilityCdName = abilityName
+			info.AbilityCdTotal = def.cd
+			info.AbilityReadyAt = now + def.cd
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method Weapon WeaponOf(Unit_Info info)
+		-- 유닛의 무기(Weapon) 컴포넌트. 피해·상태이상 적용과 대상 수집에 재사용한다.
+		if info == nil or not isvalid(info.Weapon) then return nil end
+		---@type Weapon
+		local w = info.Weapon:GetComponent("script.Weapon")
+		return w
+	end
+
+	@ExecSpace("ServerOnly")
+	method Vector2 PosOf(Entity e)
+		-- 엔티티 월드 위치(2D).
+		local p = e.TransformComponent.WorldPosition
+		return Vector2(p.x, p.y)
+	end
+
+	@ExecSpace("ServerOnly")
+	method Vector2 ClampAim(Unit_Info info, Vector2 aim, number reach)
+		-- 조준점이 시전 거리(사거리 + reach)보다 멀면 그 방향으로 시전 거리까지 당긴다.
+		local pos = self:PosOf(info.Entity)
+		local range = math.max(info.AttackRange, 0.6) + (reach or 1.0)
+		local d = aim - pos
+		local m = d:Magnitude()
+		if m > range and m > 0.0001 then
+			return pos + d:Normalize() * range
+		end
+		return aim
+	end
+
+	@ExecSpace("ServerOnly")
+	method integer AbilityDamage(Unit_Info info, number mult)
+		-- 능력 피해 = (유닛 공격력 + 공격 업그레이드) × mult(최소 1).
+		local base = info.damage + _UpgradeLogic:AttackBonus(info)
+		return math.max(1, math.floor(base * mult + 0.5))
+	end
+
+	@ExecSpace("ServerOnly")
+	method table CollectTargets(Unit_Info info, Weapon weapon, Vector2 center, number radius, boolean structures)
+		-- center 반경 안의 공격 가능한 적(유닛, structures면 건물까지).
+		local list = {}
+		if weapon == nil then return list end
+		for _, e in ipairs(weapon:GetAreaUnitTargets(center, radius)) do table.insert(list, e) end
+		if structures then
+			local sim = _CollisionService:GetSimulator(info.Entity)
+			local hits = (sim ~= nil) and sim:OverlapCircleAll("Structure", center, radius) or nil
+			if hits ~= nil then
+				for i = 1, #hits do
+					local e = hits[i].Entity
+					if isvalid(e) and e:GetComponent("script.Structure_Info") ~= nil and info:CanTargetForCombat(e) then
+						table.insert(list, e)
+					end
+				end
+			end
+		end
+		return list
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean CastStrike(Unit_Info info, table def, table ab, Vector2 aim)
+		-- 즉발 타격: 조준점 반경 안의 적 전체에 피해 + (투척/감소) 상태이상.
+		local weapon = self:WeaponOf(info)
+		if weapon == nil then return false end
+		local center = self:ClampAim(info, aim, def.reach)
+		local dmg = self:AbilityDamage(info, def.mult)
+		local statuses = self:ThrowStatuses(ab.Desc)
+		if ab.Name == "감소" then statuses = { { "slow", 0.4, 4 }, { "atkslow", 0.2, 4 } } end
+		local targets = self:CollectTargets(info, weapon, center, def.radius, def.structures == true)
+		for _, e in ipairs(targets) do
+			weapon:ApplyDamageToTarget(e, dmg)
+			for _, st in ipairs(statuses) do weapon:ApplyStatusTo(e, st[1], st[2], st[3]) end
+		end
+		weapon:PlayAttackFx(false, Vector3(center.x, center.y, 0))
+		self:PlayFx(info.Entity, Vector3(center.x, center.y + 0.2, 0), info.HitEffectRUID, self.StrikeFxScale * math.max(1, def.radius))
+		return true
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean CastChain(Unit_Info info, table def, Vector2 aim)
+		-- 연쇄 전격: 조준점에 가장 가까운 적부터 jumpRange 안의 다음 적으로 jumps번 튄다(튈 때마다 피해 15% 감소).
+		local weapon = self:WeaponOf(info)
+		if weapon == nil then return false end
+		local center = self:ClampAim(info, aim, def.reach)
+		local hit = {}
+		local cur = center
+		local dmg = self:AbilityDamage(info, def.mult)
+		local count = 0
+		for _ = 1, def.jumps do
+			local best = nil
+			local bestD = math.huge
+			for _, e in ipairs(weapon:GetAreaUnitTargets(cur, (count == 0) and 1.2 or def.jumpRange)) do
+				if not hit[e] then
+					local d = Vector2.Distance(cur, self:PosOf(e))
+					if d < bestD then
+						best = e
+						bestD = d
+					end
+				end
+			end
+			if best == nil then break end
+			hit[best] = true
+			count += 1
+			weapon:ApplyDamageToTarget(best, dmg)
+			cur = self:PosOf(best)
+			self:PlayFx(info.Entity, Vector3(cur.x, cur.y + 0.3, 0), info.HitEffectRUID, self.StrikeFxScale)
+			dmg = math.max(1, math.floor(dmg * 0.85))
+		end
+		weapon:PlayAttackFx(false, Vector3(center.x, center.y, 0))
+		return true
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean CastCharge(Unit_Info info, table def, Vector2 aim)
+		-- 돌진: 조준 방향으로 dist만큼 3배 속도로 달려가 도착 지점 주변 적에게 mult배 피해.
+		local move = info.Entity.UnitMoveComponent
+		local weapon = self:WeaponOf(info)
+		if not isvalid(move) or weapon == nil or info.MoveSpeed <= 0 then return false end
+		if info._T.siege ~= nil then return false end
+		local pos = self:PosOf(info.Entity)
+		local d = aim - pos
+		local m = d:Magnitude()
+		if m < 0.0001 then return false end
+		local dest = pos + d:Normalize() * math.min(m, def.dist)
+		info:Stop()
+		info.target = nil
+		info._T.amDest = nil
+		local base = info.MoveSpeed
+		info._T.chargeBase = base
+		info.MoveSpeed = base * 3
+		move:FindTarget(dest)
+		local travel = math.min(1.0, math.min(m, def.dist) / (base * 3) + 0.1)
+		local me = info.Entity
+		_TimerService:SetTimerOnce(function()
+			if not isvalid(me) then return end
+			---@type Unit_Info
+			local u = me:GetComponent("script.Unit_Info")
+			if u == nil then return end
+			if u._T.chargeBase ~= nil then
+				u.MoveSpeed = u._T.chargeBase
+				u._T.chargeBase = nil
+			end
+			if u.IsDead then return end
+			local w = self:WeaponOf(u)
+			if w == nil then return end
+			local at = self:PosOf(me)
+			local dmg = self:AbilityDamage(u, def.mult)
+			local targets = w:GetAreaUnitTargets(at, def.radius)
+			for _, e in ipairs(targets) do w:ApplyDamageToTarget(e, dmg) end
+			w:PlayAttackFx(false, Vector3(at.x, at.y, 0))
+			self:PlayFx(me, Vector3(at.x, at.y + 0.2, 0), u.HitEffectRUID, self.StrikeFxScale)
+		end, travel)
+		return true
+	end
+
+	@ExecSpace("ServerOnly")
+	method void AddDefenseBuff(Unit_Info info, number amount, number duration)
+		-- 일정 시간 방어력 +amount(Unit_Info.GetDamage가 _T.buffDef/_T.buffDefUntil을 본다). 더 큰 값이 우선.
+		local now = _UtilLogic.ServerElapsedSeconds
+		local active = (info._T.buffDefUntil or 0) > now
+		if active and (info._T.buffDef or 0) > amount then return end
+		info._T.buffDef = amount
+		info._T.buffDefUntil = now + duration
+	end
+
+	@ExecSpace("ServerOnly")
+	method string BuffFx()
+		-- 버프 연출 RUID.
+		if self.BuffEffectRuid ~= "" then return self.BuffEffectRuid end
+		return _CombatConfig.HealRUID
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean CastTaunt(Unit_Info info, table def)
+		-- 도발: 반경 안 적 유닛이 모두 나를 공격하게 하고, 나는 잠시 방어력 +def.
+		local center = self:PosOf(info.Entity)
+		local count = 0
+		local weapon = self:WeaponOf(info)
+		if weapon == nil then return false end
+		for _, e in ipairs(weapon:GetAreaUnitTargets(center, def.radius)) do
+			---@type Unit_Info
+			local enemy = e:GetComponent("script.Unit_Info")
+			-- 위치 고수(H) 중인 적은 도발에도 끌려가지 않는다(홀드 = 공격·추격 전혀 안 함, 2026-10-07).
+			if enemy ~= nil and enemy.PlayerID ~= "" and enemy._T.hold ~= true and enemy:CanTargetForCombat(info.Entity) then
+				local ew = self:WeaponOf(enemy)
+				if ew ~= nil then
+					enemy.target = info.Entity
+					enemy._T.amDest = nil
+					ew:AttackTarget(info.Entity)
+					count += 1
+				end
+			end
+		end
+		self:AddDefenseBuff(info, def.def, def.dur)
+		self:PlayFx(info.Entity, Vector3(center.x, center.y + 0.5, 0), self:BuffFx(), 1.2)
+		return true
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean CastGuard(Unit_Info info, table def)
+		-- 방어 자세: 잠시 방어력 +def, 이동 속도 감소.
+		self:AddDefenseBuff(info, def.def, def.dur)
+		---@type StatusEffectComponent
+		local se = info.Entity:GetComponent("script.StatusEffectComponent")
+		if se ~= nil and def.slow ~= nil then se:ApplySlow(def.slow, def.dur) end
+		local p = self:PosOf(info.Entity)
+		self:PlayFx(info.Entity, Vector3(p.x, p.y + 0.5, 0), self:BuffFx(), 1.0)
+		return true
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean CastBarrier(Unit_Info info, table def)
+		-- 방어막: 반경 안 아군(나 포함) 전원 잠시 방어력 +def.
+		local center = self:PosOf(info.Entity)
+		local map = info.Entity.CurrentMap
+		local group = isvalid(map) and map:GetChildByName("MyUnits") or nil
+		local count = 0
+		if isvalid(group) then
+			for _, child in ipairs(group.Children:ToTable()) do
+				---@type Unit_Info
+				local ally = child:GetComponent("script.Unit_Info")
+				if ally ~= nil and not ally.IsDead and ally.PlayerID == info.PlayerID
+					and Vector2.Distance(center, self:PosOf(child)) <= def.radius then
+					self:AddDefenseBuff(ally, def.def, def.dur)
+					count += 1
+				end
+			end
+		end
+		self:PlayFx(info.Entity, Vector3(center.x, center.y + 0.3, 0), self:BuffFx(), 2.0)
+		return true
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean Toggle(Unit_Info info, table def)
+		-- 켜고 끄는 능력. AbilityToggle(@Sync)은 "기본 상태에서 바뀌었는지"를 뜻한다.
+		local kind = def.kind
+		if kind == "stealth" then
+			info.IsStealth = not info.IsStealth
+			info.AbilityToggle = not info.AbilityToggle
+			_UIToast_:ShowMessage("은신 " .. (info.IsStealth and "켜짐" or "꺼짐"), info.PlayerID)
+			return true
+		end
+		if kind == "aura" then
+			-- 오라(기본 켜짐): 로얄 페어리 공격 오라는 SpecialAbilityComponent가 AbilityToggle을 보고 끄고,
+			-- 소울 시야 공유 오라는 은신 탐지(IsDetector)를 끈다.
+			info.AbilityToggle = not info.AbilityToggle
+			if info.RoleKey ~= "RangedSupport" then info.IsDetector = not info.AbilityToggle end
+			_UIToast_:ShowMessage("오라 " .. (info.AbilityToggle and "꺼짐" or "켜짐"), info.PlayerID)
+			return true
+		end
+		if kind == "siege" then
+			local weapon = self:WeaponOf(info)
+			if info._T.siege == nil then
+				-- 시즈모드 켜기: 이동 불가, 사거리 ×rangeMult, 공격력 ×dmgMult, 광역 공격.
+				info._T.siege = { range = info.AttackRange, damage = info.damage, style = info.AttackStyle, aoe = info.AoeRadius }
+				local move = info.Entity.UnitMoveComponent
+				if isvalid(move) then move:Stop() end
+				info._T.amDest = nil
+				info.AttackRange = info.AttackRange * def.rangeMult
+				info.damage = math.floor(info.damage * def.dmgMult + 0.5)
+				info.AttackStyle = "aoe"
+				info.AoeRadius = math.max(info.AoeRadius, 1.2)
+				info.AbilityToggle = true
+			else
+				local saved = info._T.siege
+				info.AttackRange = saved.range
+				info.damage = saved.damage
+				info.AttackStyle = saved.style
+				info.AoeRadius = saved.aoe
+				info._T.siege = nil
+				info.AbilityToggle = false
+			end
+			if weapon ~= nil then
+				weapon:CancelAttack()
+				weapon._rangeApplied = false
+			end
+			_UIToast_:ShowMessage("시즈모드 " .. (info.AbilityToggle and "켜짐" or "꺼짐"), info.PlayerID)
+			return true
+		end
+		return false
+	end
+
+	@ExecSpace("Multicast")
+	method void PlayFx(Entity caster, Vector3 pos, string ruid, number scale)
+		-- 모든 클라: 능력 연출 1회(안개 속이면 그 클라에선 안 보임).
+		if ruid == nil or ruid == "" or not isvalid(caster) then return end
+		_FogOfWarLogic:PlayEffectSeen(ruid, caster, pos, 0, Vector3(scale, scale, 1), false, { SortingLayer = "MapLayer0", OrderInLayer = 30 })
+	end
+
+end

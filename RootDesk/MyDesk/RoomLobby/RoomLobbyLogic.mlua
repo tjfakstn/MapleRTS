@@ -1,0 +1,448 @@
+@Logic
+script RoomLobbyLogic extends Logic
+
+	@DisplayName("로비 맵 이름(정적 맵)")
+	property string LobbyMapName = "lobby"
+
+	@DisplayName("방 대기실 맵 이름(인스턴스 맵)")
+	property string WaitingMapName = "map01"
+
+	@DisplayName("방 게임 맵 이름(인스턴스 맵)")
+	property string GameMapName = "map02"
+
+	@DisplayName("방 최대 인원")
+	property integer MaxMembers = 4
+
+	@DisplayName("최대 방 개수")
+	property integer MaxRooms = 8
+
+	@DisplayName("시작 최소 인원(제출 전 2)")
+	property integer MinMembersToStart = 1
+
+	@DisplayName("방 이름 최대 글자 수")
+	property integer MaxNameChars = 16
+
+	@DisplayName("게임 중 방 정리 확인 주기(초)")
+	property number CleanupInterval = 3
+
+	@DisplayName("게임 시작 후 정리 유예(초)")
+	property number CleanupGrace = 20
+
+	@DisplayName("방 노점 모델")
+	property string BoothModelId = "roombooth"
+
+	@DisplayName("노점 스프라이트(A 무지개 천막 76d57067)")
+	property string BoothRuid = "76d570675c764394ab2173a8244cb118"
+
+	@DisplayName("노점 배율")
+	property number BoothScale = 0.7
+
+	@DisplayName("광장 장식 모델")
+	property string DecorModelId = "lobbydecor"
+
+	@DisplayName("광장 바닥 높이(월드 y)")
+	property number FloorY = 0
+
+	@DisplayName("노점 자리 x 좌표(쉼표, 앞에서부터 채움)")
+	property string BoothSlotsX = "-3.4,3.4,-6.6,6.6,-3.4,3.4,-6.6,6.6"
+
+	@DisplayName("노점별 바닥 높이(FloorY 기준, 쉼표 구분, 비어 있으면 기존 바닥 높이)")
+	property string BoothSlotsY = "0,0,0,0,4.8,4.8,4.8,4.8"
+
+	@DisplayName("자유시장 관문 스프라이트")
+	property string GateRuid = "d4128e565f3e40cdbbe2383ee7ff8880"
+
+	@DisplayName("관문 x 좌표(사다리 사이 가운데)")
+	property number GateX = 0
+
+	@DisplayName("관문 배율")
+	property number GateScale = 0.7
+
+	@Sync
+	property string RoomListText = ""
+
+	@Sync
+	property integer RoomListVersion = 0
+
+	@HideFromInspector
+	property table _rooms = {}
+
+	@HideFromInspector
+	property integer _nextId = 0
+
+	@HideFromInspector
+	property number _cleanupTimer = 0
+
+	@HideFromInspector
+	property any _hLeave = nil
+
+	@ExecSpace("ServerOnly")
+	method void OnBeginPlay()
+		-- 정적 룸에서만 유저 퇴장 이벤트를 구독한다(대기 중인 방에서 빠진 사람 정리).
+		if _RoomService:IsInstanceRoom() then return end
+		self._rooms = {}
+		self._T.decorDone = false
+		self._hLeave = _UserService:ConnectEvent(UserLeaveEvent, function(event) self:OnUserLeave(event.UserId) end)
+		self:Publish()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnEndPlay()
+		-- 이벤트 연결을 푼다.
+		if self._hLeave ~= nil then _UserService:DisconnectEvent(UserLeaveEvent, self._hLeave) end
+		self._hLeave = nil
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnUpdate(number delta)
+		-- 게임 중인 방 중에서 인원이 모두 빠졌거나(로비 복귀·종료) 룸이 사라진 방을 목록에서 지운다.
+		if _RoomService:IsInstanceRoom() then return end
+		if not self._T.decorDone then self:SpawnDecor() end
+		self._T.strayTimer = (self._T.strayTimer or 0) + delta
+		if self._T.strayTimer >= 0.25 then
+			self._T.strayTimer = 0
+			self:PullStraysToLobby()
+		end
+		self._cleanupTimer += delta
+		if self._cleanupTimer < self.CleanupInterval then return end
+		self._cleanupTimer = 0
+		local now = _UtilLogic.ServerElapsedSeconds
+		local removed = false
+		for id, room in pairs(self._rooms) do
+			if room.state == "playing" and now - room.startedAt >= self.CleanupGrace then
+				local alive = room.inst ~= nil and room.inst:IsValid() and room.inst:GetUserCount() > 0
+				if not alive then
+					self:DestroyBooth(room)
+					self._rooms[id] = nil
+					removed = true
+				end
+			end
+		end
+		if removed then self:Publish() end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void PullStraysToLobby()
+		-- 정적 룸인데 로비가 아닌 맵(예: 시작 맵 설정이 map01로 남아 있을 때)에 들어온 유저를 로비로 보낸다.
+		-- Maker의 DefaultUserEnterLeaveLogic.StartPoint를 /maps/lobby로 바꾸면 이 코드는 할 일이 없다(안전망).
+		if not isvalid(self:LobbyMap()) then return end
+		for _, user in pairs(_UserService.UserEntities.Values) do
+			if isvalid(user) and isvalid(user.CurrentMap) and user.CurrentMap.Name ~= self.LobbyMapName then
+				_TeleportService:TeleportToMapPosition(user, Vector3(0, self.FloorY + 1, 0), self.LobbyMapName)
+			end
+		end
+	end
+
+	@ExecSpace("Server")
+	method void RequestCreateRoom(string name)
+		-- 방 만들기. 이미 대기 중인 방에 있으면 거절. 이름이 비면 "<닉네임>의 방".
+		local uid = senderUserId
+		if _RoomService:IsInstanceRoom() then return end
+		if self:FindRoomOf(uid) ~= nil then
+			_UIToast_:ShowMessage("이미 방에 들어가 있습니다", uid)
+			return
+		end
+		if self:CountRooms() >= math.min(self.MaxRooms, #self:SlotXs()) then
+			_UIToast_:ShowMessage("방이 가득 찼습니다(최대 " .. tostring(self.MaxRooms) .. "개)", uid)
+			return
+		end
+		local clean = self:CleanName(name)
+		if clean == "" then clean = self:NickOf(uid) .. "의 방" end
+		self._nextId += 1
+		local room = { id = self._nextId, name = clean, host = uid, members = { uid }, state = "waiting", key = "", inst = nil, startedAt = 0 }
+		self._rooms[room.id] = room
+		self:SpawnBooth(room)
+		self:Publish()
+	end
+
+	@ExecSpace("Server")
+	method void RequestJoinRoom(integer roomId)
+		-- 방 입장. 대기 중이고 자리가 있어야 한다. 다른 방에 있으면 먼저 나와야 한다.
+		local uid = senderUserId
+		if _RoomService:IsInstanceRoom() then return end
+		local room = self._rooms[roomId]
+		if room == nil then
+			_UIToast_:ShowMessage("없어진 방입니다", uid)
+			return
+		end
+		if room.state ~= "waiting" then
+			_UIToast_:ShowMessage("이미 게임 중인 방입니다", uid)
+			return
+		end
+		local mine = self:FindRoomOf(uid)
+		if mine ~= nil then
+			if mine.id == roomId then return end
+			_UIToast_:ShowMessage("지금 방에서 먼저 나와 주세요", uid)
+			return
+		end
+		if #room.members >= self.MaxMembers then
+			_UIToast_:ShowMessage("방이 꽉 찼습니다", uid)
+			return
+		end
+		table.insert(room.members, uid)
+		self:Publish()
+	end
+
+	@ExecSpace("Server")
+	method void RequestLeaveRoom()
+		-- 방 나가기(대기 중인 방만).
+		if _RoomService:IsInstanceRoom() then return end
+		self:RemoveMember(senderUserId)
+	end
+
+	@ExecSpace("Server")
+	method void RequestStartRoom()
+		-- 방장만 시작할 수 있다. 새 인스턴스 룸(대기실 + 게임 맵)을 만들고 방 인원 전원을 그 룸의 대기실로 보낸다.
+		local uid = senderUserId
+		if _RoomService:IsInstanceRoom() then return end
+		local room = self:FindRoomOf(uid)
+		if room == nil or room.state ~= "waiting" then return end
+		if room.host ~= uid then
+			_UIToast_:ShowMessage("방장만 시작할 수 있습니다", uid)
+			return
+		end
+		if #room.members < self.MinMembersToStart then
+			_UIToast_:ShowMessage(tostring(self.MinMembersToStart) .. "명 이상 모여야 시작할 수 있습니다", uid)
+			return
+		end
+		-- 게임마다 새 key: 방 삭제 API가 없어 같은 key를 다시 쓰면 지난 판의 룸이 재사용될 수 있다.
+		local key = "camp_" .. tostring(room.id) .. "_" .. tostring(math.floor(_UtilLogic.ServerElapsedSeconds * 1000))
+		local inst = _RoomService:CreateInstanceRoom(key, { self.WaitingMapName, self.GameMapName }, 30)
+		if inst == nil then
+			for _, m in ipairs(room.members) do _UIToast_:ShowMessage("게임 방을 만들지 못했습니다. 다시 시도해 주세요", m) end
+			return
+		end
+		room.state = "playing"
+		room.key = key
+		room.inst = inst
+		room.startedAt = _UtilLogic.ServerElapsedSeconds
+		self:Publish()
+		local members = {}
+		for _, m in ipairs(room.members) do table.insert(members, m) end
+		local moved = _RoomService:MoveUsersToInstanceRoom(key, members, self.WaitingMapName)
+		if moved <= 0 then
+			-- 아무도 못 옮겼다 = 방만 "게임 중"으로 남는 상태. 되돌리고 원인을 알린다.
+			-- 흔한 원인: Maker에서 map01·map02 MapComponent의 IsInstanceMap이 꺼져 있음(정적 맵은 인스턴스 룸에 못 넣는다).
+			room.state = "waiting"
+			room.key = ""
+			room.inst = nil
+			self:Publish()
+			for _, m in ipairs(room.members) do
+				_UIToast_:ShowMessage("게임 방으로 이동하지 못했습니다 (map01·map02 InstanceMap 설정 확인)", m)
+			end
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnUserLeave(string uid)
+		-- 정적 룸을 떠난 유저(접속 종료 또는 게임 방으로 이동). 대기 중인 방에서만 뺀다 — 게임 중인 방 인원은 표시용으로 남긴다.
+		self:RemoveMember(uid)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void RemoveMember(string uid)
+		-- 대기 중인 방에서 uid를 뺀다. 방장이 나가면 다음 사람이 방장, 아무도 없으면 방을 지운다.
+		local room = self:FindRoomOf(uid)
+		if room == nil then return end
+		for i, m in ipairs(room.members) do
+			if m == uid then
+				table.remove(room.members, i)
+				break
+			end
+		end
+		if #room.members == 0 then
+			self:DestroyBooth(room)
+			self._rooms[room.id] = nil
+		elseif room.host == uid then
+			room.host = room.members[1]
+		end
+		self:Publish()
+	end
+
+	method table SlotXs()
+		-- BoothSlotsX 문자열 → 숫자 배열.
+		return self:ParseNumbers(self.BoothSlotsX)
+	end
+
+	method table ParseNumbers(string text)
+		-- "1,-2.5,3" → {1, -2.5, 3}.
+		local out = {}
+		for v in string.gmatch(text, "[^,%s]+") do
+			local n = tonumber(v)
+			if n ~= nil then table.insert(out, n) end
+		end
+		return out
+	end
+
+	method number SlotFloor(integer slot)
+		-- 높이가 지정되지 않은 자리는 기존 FloorY를 사용한다.
+		local ys = self:ParseNumbers(self.BoothSlotsY)
+		return self.FloorY + (ys[slot] or 0)
+	end
+
+	@ExecSpace("ServerOnly")
+	method Entity LobbyMap()
+		-- 로비 맵 엔티티(정적 룸).
+		return _EntityService:GetEntityByPath("/maps/" .. self.LobbyMapName)
+	end
+
+	@ExecSpace("ServerOnly")
+	method number LiftToFloor(string ruid, number scale)
+		-- 스프라이트 아랫단이 바닥에 닿도록 피벗을 얼마나 올려야 하는지(월드). 못 읽으면 "피벗이 가운데"로 보고 높이의 절반.
+		local m = _StructureSizeLogic:MeasureSprite(ruid)
+		if m ~= nil then return -(m.cy - m.h / 2) * scale end
+		return 1.4 * scale
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SpawnDecor()
+		-- 광장 가운데 "FREE MARKET" 관문을 한 번 세운다(로비 맵이 아직 없으면 다음 프레임에 다시 시도).
+		local map = self:LobbyMap()
+		if not isvalid(map) then return end
+		self._T.decorDone = true
+		local y = self.FloorY + self:LiftToFloor(self.GateRuid, self.GateScale)
+		local gate = _SpawnService:SpawnByModelId(self.DecorModelId, "FreeMarketGate", Vector3(self.GateX, y, 5), map)
+		if gate == nil then
+			return
+		end
+		gate.SpriteRendererComponent.SpriteRUID = self.GateRuid
+		gate.TransformComponent.Scale = Vector3(self.GateScale, self.GateScale, 1)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SpawnBooth(table room)
+		-- 빈 노점 자리에 이 방의 노점을 세운다(자리는 BoothSlotsX 앞에서부터).
+		local map = self:LobbyMap()
+		if not isvalid(map) then return end
+		local used = {}
+		for _, r in pairs(self._rooms) do
+			if r ~= room and r.slot ~= nil then used[r.slot] = true end
+		end
+		local xs = self:SlotXs()
+		local slot = nil
+		for i = 1, #xs do
+			if not used[i] then
+				slot = i
+				break
+			end
+		end
+		if slot == nil then return end
+		room.slot = slot
+		local booth = _SpawnService:SpawnByModelId(self.BoothModelId, "RoomBooth_" .. tostring(room.id), Vector3(xs[slot], self:SlotFloor(slot), 3), map)
+		if booth == nil then
+			return
+		end
+		-- 노점 그림·배율은 이 Logic 값으로 맞춘다(모델 값보다 우선 — 인스펙터에서 바로 바꿀 수 있게).
+		if self.BoothRuid ~= "" then booth.SpriteRendererComponent.SpriteRUID = self.BoothRuid end
+		if self.BoothScale > 0 then booth.TransformComponent.Scale = Vector3(self.BoothScale, self.BoothScale, 1) end
+		local scale = math.abs(booth.TransformComponent.Scale.y)
+		local ruid = booth.SpriteRendererComponent.SpriteRUID
+		booth.TransformComponent.Position = Vector3(xs[slot], self:SlotFloor(slot) + self:LiftToFloor(ruid, scale), 3)
+		room.booth = booth
+		self:UpdateBooth(room)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void UpdateBooth(table room)
+		-- 노점의 @Sync 정보(이름·인원·상태·방장)를 방 표에 맞춘다 → 클라 RoomBooth가 말풍선·이름표를 다시 그린다.
+		local booth = room.booth
+		if not isvalid(booth) then return end
+		---@type RoomBooth
+		local rb = booth:GetComponent("script.RoomBooth")
+		if rb == nil then return end
+		rb.RoomId = room.id
+		rb.Title = room.name
+		rb.Count = #room.members
+		rb.MaxCount = self.MaxMembers
+		rb.State = room.state
+		rb.HostNick = self:NickOf(room.host)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void DestroyBooth(table room)
+		-- 방이 없어질 때 노점도 치운다.
+		if isvalid(room.booth) then room.booth:Destroy() end
+		room.booth = nil
+	end
+
+	@ExecSpace("ServerOnly")
+	method table FindRoomOf(string uid)
+		-- uid가 들어가 있는 "대기 중" 방(없으면 nil). 게임 중인 방 인원은 이미 그 방의 룸으로 떠났으므로 찾지 않는다.
+		for _, room in pairs(self._rooms) do
+			if room.state == "waiting" then
+				for _, m in ipairs(room.members) do
+					if m == uid then return room end
+				end
+			end
+		end
+		return nil
+	end
+
+	@ExecSpace("ServerOnly")
+	method integer CountRooms()
+		-- 현재 방 개수(대기 + 게임 중).
+		local n = 0
+		for _, _ in pairs(self._rooms) do n += 1 end
+		return n
+	end
+
+	@ExecSpace("ServerOnly")
+	method string NickOf(string uid)
+		-- 닉네임(없으면 UserId).
+		local user = _UserService:GetUserEntityByUserId(uid)
+		if isvalid(user) and isvalid(user.PlayerComponent) then
+			local nick = user.PlayerComponent.Nickname
+			if nick ~= nil and nick ~= "" then return nick end
+		end
+		return uid
+	end
+
+	method string CleanName(string name)
+		-- 방 이름 정리: 구분 문자·줄바꿈 제거, 앞뒤 공백 제거, MaxNameChars 글자로 자르기(한글 깨지지 않게 utf8 단위).
+		if name == nil then return "" end
+		local s = (string.gsub(name, "[%c\30\31]", ""))
+		s = (string.gsub(s, "^%s+", ""))
+		s = (string.gsub(s, "%s+$", ""))
+		local ok, n = pcall(function() return utf8.len(s) end)
+		if ok and n ~= nil and n > self.MaxNameChars then
+			local cut = utf8.offset(s, self.MaxNameChars + 1)
+			if cut ~= nil then s = string.sub(s, 1, cut - 1) end
+		end
+		return s
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Publish()
+		-- 방 표를 클라용 한 줄 문자열로 만들어 동기화한다(id 순).
+		local ids = {}
+		for id, _ in pairs(self._rooms) do table.insert(ids, id) end
+		table.sort(ids)
+		local lines = {}
+		for _, id in ipairs(ids) do
+			local room = self._rooms[id]
+			local nicks = {}
+			for _, m in ipairs(room.members) do table.insert(nicks, (string.gsub(self:NickOf(m), "[,\30\31]", " "))) end
+			table.insert(lines, table.concat({ tostring(room.id), room.name, room.state, room.host, table.concat(room.members, ","), table.concat(nicks, ",") }, "\31"))
+		end
+		self.RoomListText = table.concat(lines, "\30")
+		for _, room in pairs(self._rooms) do self:UpdateBooth(room) end
+		self.RoomListVersion += 1
+	end
+
+	method table ParseRooms(string text)
+		-- RoomListText → { { id, name, state, host, members = {uid...}, nicks = {nick...} }, ... } (클라에서 사용).
+		local out = {}
+		if text == nil or text == "" then return out end
+		for line in string.gmatch(text, "[^\30]+") do
+			local f = {}
+			for field in string.gmatch(line .. "\31", "([^\31]*)\31") do table.insert(f, field) end
+			local members = {}
+			for m in string.gmatch(f[5] or "", "[^,]+") do table.insert(members, m) end
+			local nicks = {}
+			for n in string.gmatch(f[6] or "", "[^,]+") do table.insert(nicks, n) end
+			table.insert(out, { id = tonumber(f[1]) or 0, name = f[2] or "", state = f[3] or "", host = f[4] or "", members = members, nicks = nicks })
+		end
+		return out
+	end
+
+end

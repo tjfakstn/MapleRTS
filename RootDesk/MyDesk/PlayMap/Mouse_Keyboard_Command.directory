@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "directory://1c35ed6f8a784b939c6065477fc0e1e9",
+  "ContentType": "x-mod/directory",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "entry_id": "directory://1c35ed6f8a784b939c6065477fc0e1e9",
+      "name": "Mouse_Keyboard_Command",
+      "lock": false,
+      "folding": false,
+      "nameEditable": true
+    }
+  }
+}

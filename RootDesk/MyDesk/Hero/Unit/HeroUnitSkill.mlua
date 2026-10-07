@@ -1,0 +1,554 @@
+@Component
+script HeroUnitSkill extends Component
+
+	property number RangeScale = 0.5
+
+	property number DamageScale = 0.4
+
+	property number MinCooldown = 0.3
+
+	property number MaxGroundCastDistance = 5
+
+	property number EffectScale = 0.8
+
+	property integer MaxProjectileFx = 3
+
+	property number CastPoseTime = 0.45
+
+	property number HitPadding = 0.25
+
+	property number CastTimeScale = 0.85
+
+	property number RecoveryTime = 0.1
+
+	@Sync
+	property string LastCastInfo = ""
+
+	@Sync
+	property string SkillCooldowns = ""
+
+	@HideFromInspector
+	property number cooldownPublishTimer = 0
+
+	method void OnBeginPlay()
+		-- 클라: 이미 동기화돼 있는 쿨타임 문자열이 있으면(늦게 접속/맵 진입) 바로 반영한다.
+		if self:IsClient() then
+			self:ApplyCooldownSync(self.SkillCooldowns)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void PublishCooldowns()
+		-- Q~T 각 키의 준비 시각(readyAt)을 HeroSkillComponent 쿨다운표에서 읽어, 지난번 발행 때와 달라진 키가 있을 때만
+		-- "Q:남은초:전체초|W:...|..." 문자열을 @Sync로 보낸다. 클라이언트는 받은 시점부터 스스로 카운트다운하므로
+		-- 매 틱 보낼 필요가 없다. 연계 영웅(소울마스터 6·스트라이커 9)은 공유 쿨다운 키도 함께 본다.
+		local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		if core == nil then return end
+		local table_ = core._T.cooldownEndAt
+		if table_ == nil then return end
+		local idx = core:GetSelectedHeroIndex()
+		if idx == nil or idx <= 0 then return end
+		local chain = nil
+		if idx == 6 or idx == 9 then chain = core:GetSelectedHeroSkill(idx) end
+		local now = _UtilLogic.ElapsedSeconds
+		self._T.cdReadyAt = self._T.cdReadyAt or {}
+		self._T.cdTotal = self._T.cdTotal or {}
+		local changed = false
+		local parts = {}
+		for _, k in ipairs({ "Q", "W", "E", "R", "T" }) do
+			local readyAt = table_[tostring(idx) .. ":" .. k] or 0
+			if chain ~= nil then
+				local ck = chain:GetCooldownKey(k)
+				if ck ~= nil then readyAt = math.max(readyAt, table_[ck] or 0) end
+			end
+			local prev = self._T.cdReadyAt[k] or 0
+			if math.abs(readyAt - prev) > 0.01 then
+				changed = true
+				-- 새 쿨다운이 시작됐으면 그 길이를 전체 길이로 기억한다(라디얼 게이지 분모).
+				if readyAt > prev then self._T.cdTotal[k] = math.max(readyAt - now, 0.1) end
+				self._T.cdReadyAt[k] = readyAt
+			end
+			local remain = math.max(0, readyAt - now)
+			local total = (remain > 0) and (self._T.cdTotal[k] or remain) or 0
+			table.insert(parts, k .. ":" .. string.format("%.1f", remain) .. ":" .. string.format("%.1f", total))
+		end
+		if changed then
+			self.SkillCooldowns = table.concat(parts, "|")
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSyncProperty(string name, any value)
+		if name == "SkillCooldowns" then
+			self:ApplyCooldownSync(tostring(value))
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ApplyCooldownSync(string text)
+		-- "Q:3.2:6.0|W:0.0:0.0|..." → 로컬 시계 기준 종료 시각으로 바꿔 저장한다.
+		self._T.cdClient = self._T.cdClient or {}
+		if text == nil or text == "" then return end
+		local now = _UtilLogic.ElapsedSeconds
+		for key, remainStr, totalStr in string.gmatch(text, "(%a):([%d%.]+):([%d%.]+)") do
+			local remain = tonumber(remainStr) or 0
+			local total = tonumber(totalStr) or 0
+			self._T.cdClient[key] = { endAt = now + remain, total = total }
+		end
+	end
+
+	method number GetCooldownRemaining(string key)
+		-- 클라이언트 표시용: 남은 초(0이면 사용 가능).
+		local rec = self._T.cdClient and self._T.cdClient[key] or nil
+		if rec == nil then return 0 end
+		return math.max(0, rec.endAt - _UtilLogic.ElapsedSeconds)
+	end
+
+	method number GetCooldownTotal(string key)
+		-- 클라이언트 표시용: 이번 쿨다운의 전체 길이(초). 0이면 쿨다운 없음.
+		local rec = self._T.cdClient and self._T.cdClient[key] or nil
+		if rec == nil then return 0 end
+		return rec.total or 0
+	end
+
+	@ExecSpace("ServerOnly")
+	method Component EnsureRuntime()
+		-- 영웅 지정이 끝난 뒤 원본 실행기를 연결한다. 원본의 테스트용 무쿨다운은 적용하지 않는다.
+		local hero = self.Entity:GetComponent("script.HeroUnit")
+		if hero == nil or hero.HeroId == "" then return nil end
+		local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		if core == nil then core = self.Entity:AddComponent("script.HeroSkillComponent") end
+		if core == nil then return nil end
+		core.heroId = hero.HeroId
+		core.heroIndex = core:GetSelectedHeroIndex()
+		core.rangeScale = self.RangeScale
+		core.designNoCooldown = false
+		if not self._T.runtimeReady then
+			self._T.runtimeReady = true
+			core:EnsureAdventureHeroDataComponents()
+		end
+		return core
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnUpdate(number delta)
+		-- 재규어/박쥐 같은 상시 동작은 첫 스킬 입력 전부터 존재해야 한다.
+		if not self._T.runtimeReady then self:EnsureRuntime() end
+		-- 커맨드카드 쿨타임 표시용: 0.2초마다 Q~T 준비 시각이 바뀌었으면 클라이언트에 알린다.
+		self.cooldownPublishTimer += delta
+		if self.cooldownPublishTimer >= 0.2 then
+			self.cooldownPublishTimer = 0
+			self:PublishCooldowns()
+		end
+		local info = self.Entity:GetComponent("script.Unit_Info")
+		local pending = self._T.queuedStrikerCast
+		if pending ~= nil then
+			local hero = self.Entity:GetComponent("script.HeroUnit")
+			local now = _UtilLogic.ElapsedSeconds
+			if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= pending.map
+				or hero.HeroId ~= "striker" or hero.OwnerUserId ~= pending.owner or now > pending.expires
+				or info._T.stunState ~= nil or now < (info._T.forcedMoveUntil or 0) then
+				self._T.queuedStrikerCast = nil
+			elseif now >= (self._T.castLockUntil or 0) and not _CombatTeamLogic:IsActionLocked(self.Entity) then
+				self._T.queuedStrikerCast = nil
+				local accepted = self:CastSkill(pending.key, pending.aim)
+			end
+		end
+		local queued = self._T.queuedMove
+		if queued ~= nil then
+			if _CombatTeamLogic:IsDead(self.Entity) or queued.map ~= self.Entity.CurrentMap
+				or (info ~= nil and info._T.stunState ~= nil) then
+				self._T.queuedMove = nil
+			elseif not _CombatTeamLogic:IsMovementLocked(self.Entity) then
+				self._T.queuedMove = nil
+				self.Entity:GetComponent("script.UnitMoveComponent"):FindTarget(queued.point)
+			end
+		end
+		local move = self.Entity:GetComponent("script.UnitMoveComponent")
+		if move ~= nil and move.IsMove and not _CombatTeamLogic:IsMovementLocked(self.Entity) then
+			local scale = self.Entity.TransformComponent.Scale
+			self.Entity.TransformComponent.Scale = Vector3(move._facing > 0 and -math.abs(scale.x) or math.abs(scale.x), scale.y, scale.z)
+		end
+	end
+
+	@ExecSpace("Server")
+	method void RequestCast(string skillKey, Vector2 aimWorldPos)
+		-- RPC의 실제 발신자와 영웅/일반 유닛 소유자가 모두 일치해야 한다.
+		local hero = self.Entity:GetComponent("script.HeroUnit")
+		local info = self.Entity:GetComponent("script.Unit_Info")
+		if hero == nil or info == nil or hero.OwnerUserId ~= senderUserId or not info:IsOwnedBy(senderUserId) then return end
+		-- 전직으로 아직 열리지 않은 스킬은 거부한다(커맨드카드 잠금을 우회한 요청 포함 — JobAdvanceLogic).
+		if not _JobAdvanceLogic:IsKeyUnlocked(senderUserId, skillKey) then
+			_UIToast_:ShowMessage(_JobAdvanceLogic:LockText(skillKey) .. " 필요", senderUserId)
+			return
+		end
+		self:CastSkill(skillKey, aimWorldPos)
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean CastSkill(string skillKey, Vector2 aimWorldPos)
+		-- QWERT를 직업별 원본 실행기에 전달한다. 일반 공격/이동 큐와 시전을 동시에 진행하지 않는다.
+		if skillKey ~= "Q" and skillKey ~= "W" and skillKey ~= "E" and skillKey ~= "R" and skillKey ~= "T" then return false end
+		-- 전직 단계 잠금(예약 시전 등 RequestCast를 거치지 않는 경로도 막는다).
+		local owner = self.Entity:GetComponent("script.HeroUnit")
+		if owner ~= nil and not _JobAdvanceLogic:IsKeyUnlocked(owner.OwnerUserId, skillKey) then return false end
+		if _CombatTeamLogic:IsDead(self.Entity) then return false end
+		-- AcceptCast가 리소스 측정으로 yield 중이면(accepting) 아직 잠금 값이 확정되지 않았으므로 바쁜 것으로 본다.
+		if self._T.accepting == true then return false end
+		local core = self:EnsureRuntime()
+		if core == nil then return false end
+		if _UtilLogic.ElapsedSeconds < (self._T.castLockUntil or 0) then
+			local now = _UtilLogic.ElapsedSeconds
+			local hero = self.Entity:GetComponent("script.HeroUnit")
+			local info = self.Entity:GetComponent("script.Unit_Info")
+			if core:GetSelectedHeroIndex() == 9 and self._T.queuedStrikerCast == nil
+				and self._T.castLockUntil - now <= 0.3 and info._T.stunState == nil
+				and now >= (info._T.forcedMoveUntil or 0) then
+				self._T.queuedStrikerCast = {key=skillKey, aim=aimWorldPos, map=self.Entity.CurrentMap,
+					owner=hero.OwnerUserId, expires=self._T.castLockUntil + 0.15}
+			end
+			return false
+		end
+		local before = self._T.acceptedSerial or 0
+		core:CastForActor(skillKey, aimWorldPos)
+		return (self._T.acceptedSerial or 0) > before
+	end
+
+	method table PrepareKit(table kit, integer heroIndex)
+		-- 원본 데이터는 보존하고 합본의 준비 시간/밸런스/타격 리듬을 양쪽 실행 공간에 동일하게 적용한다.
+		local factor = math.max(0.5, math.min(1, self.CastTimeScale))
+		for key, skill in pairs(kit) do
+			if type(skill) == "table" and skill._rtsTimingScale == nil then
+				local fixedTimeline = (skill.moveLockDuration or 0) > 0
+					or (heroIndex == 11 and key ~= "Q") or (heroIndex == 12 and (key == "W" or key == "R" or key == "T"))
+					or (heroIndex == 14 and (key == "R" or key == "T"))
+				local scale = fixedTimeline and 1 or factor
+				skill._rtsTimingScale = scale
+				if skill.castWindup ~= nil then skill.castWindup = skill.castWindup * scale end
+				if skill.castMotionDuration ~= nil then skill.castMotionDuration = skill.castMotionDuration * scale end
+				if skill.chainCastUnlockDelay ~= nil then skill.chainCastUnlockDelay = skill.chainCastUnlockDelay * scale end
+				local balance = self:GetBalance(heroIndex, key)
+				if balance ~= nil then
+					skill.cooldown = balance[1]
+					skill.damage = balance[2]
+					if skill.sharedCooldown ~= nil then skill.sharedCooldown = balance[1] end
+				end
+				if heroIndex == 4 and key == "T" then skill.throwBlastingReducedCooldown = 0 end
+				if heroIndex == 8 and key == "R" then skill.dominionReducedCooldown = 0 end
+				if heroIndex == 15 and key == "T" then skill.bonusDamage = 20 end
+				if heroIndex == 1 and key == "T" then skill.finalBurstDamage = 100 end
+				if heroIndex == 10 and key == "T" then skill.galeLargeDamage = 35 skill.galeSmallDamage = 25 end
+				if heroIndex == 9 then
+					if key == "EB" or key == "RB" then skill.chainFollowupWindow = 0.5 end
+					if key == "W" then skill.waveResetStrikerCombo = false end
+				end
+				self:PrepareHitRhythm(skill, heroIndex, key)
+				-- 이동형 연사만 명시적으로 허용한다. 제자리 궁극기/돌진은 기존 제약을 유지한다.
+				skill.rtsMobileChannel = (heroIndex == 3 and (key == "R" or key == "T"))
+					or (heroIndex == 5 and (key == "R" or key == "T")) or (heroIndex == 10 and key == "R")
+				if heroIndex == 5 and key == "T" then skill.followCasterDuringChannel = true end
+			end
+		end
+		return kit
+	end
+
+	method void PrepareHitRhythm(table skill, integer heroIndex, string key)
+		-- 연출 성격에 맞춰 총 피해를 분배한다. 방어력은 기존 합본의 타격당 경감을 그대로 따른다.
+		if heroIndex == 1 and key == "Q" then skill.stunDuration = 0.12 skill.pullDuration = 0.1 end
+		if heroIndex == 1 and key == "W" then skill.damage = 25 skill.finalShotDamage = 55 end
+		if heroIndex == 2 and key == "W" then skill.healAmount = 55 end
+		if heroIndex == 2 and key == "T" then skill.supportHealAmount = 80 end
+		if heroIndex == 3 and key == "R" then skill.damage = 10 skill.finalShotDamage = 60 end
+		if heroIndex == 5 and key == "W" then
+			skill.damage = 40 skill.tickCount = 2 skill.hitCount = 2 skill.tickInterval = 0.1 skill.finalShotDamage = 45
+		end
+		if heroIndex == 7 and key == "R" then skill.damage = 55 skill.finalShotDamage = 130 end
+		if heroIndex == 7 and key == "T" then skill.damage = 16 skill.finalShotDamage = 76 end
+		if heroIndex == 8 and key == "T" then skill.damage = 75 skill.markMultiplier = 1.2 end
+		-- 상어 T는 castLead 3 + projectile 5로 실제 8회 실행된다.
+		if heroIndex == 9 and key == "T" then skill.damage = 45 end
+		if heroIndex == 10 and key == "E" then skill.damage = 25 skill.finalShotDamage = 55 end
+		if heroIndex == 13 then
+			if key == "Q" or key == "E" then
+				-- 시전 이펙트와 측정 판정, 리소스 측정 실패 시 기본 판정을 같은 비율로 확대한다.
+				skill.effectScaleMultiplier = (skill.effectScaleMultiplier or 1) * 1.15
+				skill.effectForwardOffset = (skill.effectForwardOffset or 0) * 1.15
+				for _, field in ipairs({"length", "width", "hitLength", "hitWidth", "telegraphLength", "telegraphWidth"}) do
+					if skill[field] ~= nil then skill[field] = skill[field] * 1.15 end
+				end
+			end
+			if key == "Q" then skill.damage = 10 skill.finalShotDamage = 25 end
+			if key == "E" then skill.damage = 20 skill.finalShotDamage = 60 end
+			if key == "R" then skill.damage = 32 skill.finalShotDamage = 96 end
+		end
+		if heroIndex == 15 and key == "E" then
+			skill.damage = 20 skill.tickCount = 2 skill.hitCount = 2 skill.tickInterval = 0.09
+		end
+	end
+
+	method table GetBalance(integer heroIndex, string key)
+		-- 합본 HP 450/600 기준 1차 조정. 값은 {쿨타임, 1타 피해}; 제논 T만 총 피해이다.
+		local rows = {
+			[1] = { Q={0,30}, W={6,35}, E={8,90}, R={14,150}, T={75,55} },
+			[2] = { Q={0,20}, W={18,0}, E={8,80}, R={16,150}, T={45,120} },
+			[3] = { Q={0,25}, W={6,85}, E={9,100}, R={20,12}, T={90,6} },
+			[4] = { Q={0,10}, W={7,18}, E={12,50}, R={14,22}, T={90,0} },
+			[5] = { Q={0,25}, W={6,85}, E={10,150}, R={24,5}, T={90,13} },
+			[6] = { Q={0,30}, W={6,65}, WB={6,65}, WC={6,80}, E={9,70}, EB={9,70}, EC={9,90}, R={14,85}, RB={14,85}, RC={14,110}, T={75,65} },
+			[7] = { Q={0,25}, W={9,100}, E={14,150}, R={40,70}, T={90,18} },
+			[8] = { Q={0,8}, W={8,12}, E={12,14}, R={75,0}, T={90,90} },
+			[9] = { QB={0,30}, QC={0,35}, W={7,80}, EB={6,65}, EC={6,85}, RB={9,85}, RC={9,110}, T={45,350} },
+			[10] = { Q={0,10}, W={7,40}, E={10,35}, R={24,6}, T={90,0} },
+			[11] = { Q={0,25}, W={35,10}, E={20,180}, R={60,7}, T={90,5} },
+			[12] = { Q={0,12}, W={8,60}, E={9,25}, R={18,110}, T={90,20} },
+			[13] = { Q={0,15}, W={8,70}, E={12,28}, R={20,40}, T={75,75} },
+			[14] = { Q={0,30}, W={10,100}, E={14,150}, R={28,180}, T={90,550} },
+			[15] = { Q={0,30}, W={4,0}, E={5,40}, R={30,15}, T={60,0}, RELEASE={0,100} }
+		}
+		local row = rows[heroIndex]
+		return row ~= nil and row[key] or nil
+	end
+
+	@ExecSpace("ServerOnly")
+	method number GetCastVisualDuration(table skill, string key)
+		-- 단발/짧은 연격의 시전 클립만 측정한다. 설치물·투사체·버프의 수명은 몸 동작이 아니다.
+		local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		local index = core:GetSelectedHeroIndex()
+		if skill.rtsMobileChannel or skill.skillClass == "install_zone" or skill.skillClass == "wind_gale"
+			or skill.skillClass == "self_buff" or skill.skillClass == "buff_self"
+			or (index == 11 and key ~= "Q")
+			or (index == 12 and key ~= "Q" and key ~= "E")
+			or (index == 14 and (key == "R" or key == "T")) then return 0 end
+		local vfx = core:BuildHeroVfx(index)[key]
+		if vfx == nil or vfx.effect == nil or vfx.effect == "" then return 0 end
+		if self._T.castClipDurations == nil then self._T.castClipDurations = {} end
+		local cached = self._T.castClipDurations[vfx.effect]
+		if cached == nil then
+			cached = 0
+			if _ResourceService:GetTypeAndWait(vfx.effect) == ResourceType.AnimationClip then
+				local clip = _ResourceService:LoadAnimationClipAndWait(vfx.effect)
+				if clip ~= nil then
+					for _, frame in ipairs(clip.Frames:ToTable()) do cached = cached + frame.Delay end
+					cached = cached / math.max(0.01, clip.PlayRate)
+				end
+			end
+			self._T.castClipDurations[vfx.effect] = cached
+		end
+		-- 입력 즉시 재생하지 않는 클립은 선딜 후 시작한다.
+		return cached + (vfx.playCastEffectOnInput == true and 0 or core:ResolveCastMotionDelay(skill))
+	end
+
+	@ExecSpace("ServerOnly")
+	method void AcceptCast(string key, table skill)
+		-- 직업별 쿨다운/충전/대상 검사를 통과한 뒤에만 이동을 끊고 시전 잠금을 건다.
+		local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		local windup = core:ResolveCastMotionDelay(skill)
+		local repeats = core:ResolveRepeatCount(skill)
+		local interval = skill.shotInterval or skill.tickInterval or 1
+		local active = repeats > 1 and ((skill.repeatStartDelay or interval) + math.max(0, repeats - 2) * interval) or 0
+		if skill.projectile == true and skill.simultaneousVolley == true then active = 0 end
+		if skill.skillClass == "install_zone" then active = 0 end
+		if skill.finalBurstDamage ~= nil then active = math.max(active, skill.finalBurstDelay or active) end
+		local duration = windup + active + (skill.projectileFireDelay or 0) + self.RecoveryTime * self.CastTimeScale
+		-- 재규어 궁극기는 직업 실행기가 duration 안에 타수를 배분한다. 공통 틱 간격 기본값을 적용하지 않는다.
+		if core:GetSelectedHeroIndex() == 12 and (key == "R" or key == "T") then
+			duration = (skill.duration or duration) + self.RecoveryTime * self.CastTimeScale
+		end
+		duration = math.max(duration, string.sub(key, 1, 1) == "Q" and 0.4 or 0.3)
+		if skill.dashDistance ~= nil then duration = math.max(duration, skill.duration or 0) end
+		-- GetCastVisualDuration은 첫 시전 때 리소스 로드(GetTypeAndWait/LoadAnimationClipAndWait)로 yield한다.
+		-- 그 사이 두 번째 RequestCast가 잠금 없이 통과하지 않도록, 측정 전에 임시 잠금(0.5초)과 accepting 플래그를 먼저 세우고
+		-- 측정이 끝나면 아래에서 실제 값으로 덮어쓴다. rtsLockUntil은 임시값이 남지 않게 측정 전 값을 기억해 둔다.
+		local prevRtsLock = core._T.rtsLockUntil or 0
+		local provisionalUntil = _UtilLogic.ElapsedSeconds + 0.5
+		self._T.accepting = true
+		self._T.castLockUntil = math.max(self._T.castLockUntil or 0, provisionalUntil)
+		core._T.rtsLockUntil = math.max(prevRtsLock, provisionalUntil)
+		duration = math.max(duration, self:GetCastVisualDuration(skill, key))
+		self._T.accepting = false
+		core._T.rtsLockUntil = prevRtsLock
+		if skill.clientAttackMotion then duration = math.max(duration, 0.45) end
+		-- 스커의 잔광은 연계 잠금이 아니다. 타격/이동 완료 이후 짧은 회복만 기다린다.
+		if core:GetSelectedHeroIndex() == 9 and key ~= "T" then
+			duration = math.max(0.2, windup + active + 0.06, skill.chainCastUnlockDelay or 0)
+			if key == "EB" then duration = math.max(duration, (skill.castWindup or 0) + (skill.ascendTravelDuration or 0.11) + 0.02) end
+			if key == "EC" then duration = math.max(duration, (skill.castWindup or 0) + (skill.thunderTravelDuration or 0.14) + 0.06) end
+		end
+		local movementDuration = duration
+		if skill.rtsMobileChannel then movementDuration = windup + (skill.projectileFireDelay or 0) end
+		self._T.mobileChannel = skill.rtsMobileChannel == true
+		self._T.movementLockUntil = _UtilLogic.ElapsedSeconds + movementDuration
+		self._T.castLockUntil = _UtilLogic.ElapsedSeconds + duration
+		core._T.rtsLockUntil = math.max(core._T.rtsLockUntil or 0, self._T.castLockUntil)
+		self._T.acceptedSerial = (self._T.acceptedSerial or 0) + 1
+		self._T.queuedMove = nil
+		self._T.queuedStrikerCast = nil
+		local info = self.Entity:GetComponent("script.Unit_Info")
+		info:Stop()
+		self.Entity:GetComponent("script.UnitMoveComponent"):Stop()
+		self.LastCastInfo = key .. ":" .. tostring(_UtilLogic.ElapsedSeconds)
+		self:PlayCastPoseFor(movementDuration)
+		-- Hero_Skill_Asset_DataSet의 사용시/사용중/사용끝 소리를 시전 시간에 맞춰 낸다.
+		_HeroSkillAssetLogic:OnCastAccepted(self.Entity, key, duration)
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean QueueMove(Vector2 point)
+		self._T.queuedStrikerCast = nil
+		-- 시전 중의 마지막 이동 요청 하나만 기억한다. 스킬 자체의 돌진 이동과 섞지 않는다.
+		if _CombatTeamLogic:IsDead(self.Entity) then return false end
+		local info = self.Entity:GetComponent("script.Unit_Info")
+		if info._T.stunState ~= nil then self._T.queuedMove = nil return true end
+		if not _CombatTeamLogic:IsMovementLocked(self.Entity) then self._T.queuedMove = nil return false end
+		self._T.queuedMove = { point = point, map = self.Entity.CurrentMap }
+		return true
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ClearQueuedMove()
+		self._T.queuedStrikerCast = nil
+		-- 정지/공격 등 새 명령은 이전 예약 이동보다 우선한다.
+		self._T.queuedMove = nil
+	end
+
+	@ExecSpace("Client")
+	method void PlayCastPoseFor(number duration)
+		-- 서버가 승인한 시전 시간과 같은 길이로 아바타 동작을 유지한다.
+		local visual = self.Entity:GetComponent("script.HeroUnitVisual")
+		if visual ~= nil then visual:PlayCastPose(duration, self.Entity.TransformComponent.Scale.x < 0) end
+	end
+
+	@ExecSpace("ServerOnly")
+	method table AttackShape(any shape, string attackInfo)
+		-- 판정의 형태와 최대 대상/중복 필터는 원본을 사용한다. 합본 HP를 별도로 복제하지 않는다.
+		local result = {}
+		if _CombatTeamLogic:IsDead(self.Entity) then return result end
+		local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		local sim = _CollisionService:GetSimulator(self.Entity)
+		if core == nil or sim == nil then return result end
+		-- 공중 유닛 타격은 의도된 설계다: 영웅 스킬은 근접 직업이라도 Unit_Info.CanTargetForCombat의 대공 조건을 거치지 않고
+		-- 공중 유닛을 맞춘다(기본값). 스킬 데이터에 canHitAerial = false를 명시한 스킬만 공중 유닛을 제외한다.
+		local skipAerial = self:SkillCannotHitAerial(core, attackInfo)
+		-- 은신 판정용 시전자 소유자(Vision-Spec-20261004.md §8-1): 소유자의 탐지기 반경 밖에 있는 은신 유닛은 스킬도 맞히지 못한다.
+		local hero = self.Entity:GetComponent("script.HeroUnit")
+		local ownerId = (hero ~= nil) and hero.OwnerUserId or ""
+		local seen = {}
+		for _, group in ipairs({"Unit", "Monster", "Structure"}) do
+			for _, collider in ipairs(sim:OverlapAll(group, shape)) do
+				local target = self:ResolveCombatRoot(collider.Entity)
+				if target ~= nil and not seen[target.Id] then
+					seen[target.Id] = true
+					local targetInfo = target:GetComponent("script.Unit_Info")
+					if skipAerial and targetInfo ~= nil and targetInfo.IsAerial then
+						continue
+					end
+					if targetInfo ~= nil and targetInfo.IsStealth and not _VisionLogic:IsDetectedBy(ownerId, target) then
+						continue
+					end
+					if _CombatTeamLogic:IsEnemy(self.Entity, target) then
+						local receiver = _CombatTeamLogic:GetReceiver(target)
+						if receiver ~= nil and _UtilLogic.ElapsedSeconds >= (receiver._T.immuneUntil or 0)
+							and core:GetAttackLogicComponent():AcceptAttackTarget(target, attackInfo) then
+							local damage = math.max(0, math.floor(core:CalcDamage(self.Entity, target, attackInfo) * self.DamageScale))
+							if damage > 0 then
+								-- 결과표 처치·파괴 집계(공격자 = 영웅 소유자).
+								local heroOwner = self.Entity:GetComponent("script.HeroUnit")
+								_MatchStatsLogic:SetAttacker(heroOwner ~= nil and heroOwner.OwnerUserId or "")
+								receiver:GetDamage(damage)
+								_MatchStatsLogic:ClearAttacker()
+								table.insert(result, receiver)
+								_HeroSkillAssetLogic:OnSkillHit(self.Entity, target, attackInfo)
+							end
+						end
+					end
+				end
+			end
+		end
+		-- 재규어와 원본 HitComponent 대상은 엔진 HitEvent/사망 경로를 유지한다.
+		for _, hit in ipairs(core:Attack(shape, attackInfo)) do
+			table.insert(result, hit)
+			if hit ~= nil and isvalid(hit.Entity) then _HeroSkillAssetLogic:OnSkillHit(self.Entity, hit.Entity, attackInfo) end
+		end
+		return result
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean SkillCannotHitAerial(Component core, string attackInfo)
+		-- attackInfo("스킬키:시리얼:피해")의 스킬 키로 현재 영웅 킷에서 스킬 데이터를 찾아 canHitAerial == false인지 본다.
+		-- 킷 생성(BuildHeroKit)은 비용이 있어 영웅별로 한 번만 만들어 캐시한다(판정에 필요한 플래그만 읽는다).
+		if core == nil or attackInfo == nil then return false end
+		local skillKey = string.match(attackInfo, "^(%w+):")
+		if skillKey == nil then return false end
+		local idx = core:GetSelectedHeroIndex()
+		if idx == nil or idx <= 0 then return false end
+		self._T.aerialKitCache = self._T.aerialKitCache or {}
+		local kit = self._T.aerialKitCache[idx]
+		if kit == nil then
+			kit = core:BuildHeroKit(idx) or {}
+			self._T.aerialKitCache[idx] = kit
+		end
+		local skill = kit[skillKey]
+		return type(skill) == "table" and skill.canHitAerial == false
+	end
+
+	method Entity ResolveCombatRoot(Entity actor)
+		-- 자식 무기/트리거를 실제 체력 보관자까지 올려 중복 피해를 막는다.
+		for i = 1, 4 do
+			if not isvalid(actor) then return nil end
+			if actor:GetComponent("script.Unit_Info") ~= nil or actor:GetComponent("script.Structure_Info") ~= nil then return actor end
+			actor = actor.Parent
+		end
+		return nil
+	end
+
+	@ExecSpace("ServerOnly")
+	method void MoveForSkill(Vector2 destination)
+		-- 스킬 이동도 합본의 건물/벽/맵 경계 검사를 거친다.
+		if _CombatTeamLogic:IsDead(self.Entity) then return end
+		local move = self.Entity:GetComponent("script.UnitMoveComponent")
+		if move == nil then return end
+		local origin = self.Entity.TransformComponent.WorldPosition:ToVector2()
+		move.CurrentPos = origin
+		local offset = destination - origin
+		local count = math.max(1, math.ceil(offset:Magnitude() / 0.1))
+		local point = origin
+		for i = 1, count do
+			move.CurrentPos = point
+			local nextPoint = move:AvoidStructures(origin + offset * (i / count))
+			if (nextPoint - point):Magnitude() < 0.001 then break end
+			point = nextPoint
+		end
+		move:SetWorldPos(point.x, point.y)
+		move:Stop()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Dash(Vector2 direction, number distance, number duration)
+		-- 더킹은 서버에서 이동시킨다. 클라이언트 기본 플레이어에게 이동을 보내지 않는다.
+		local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		local started = _UtilLogic.ElapsedSeconds
+		local origin = self.Entity.TransformComponent.WorldPosition:ToVector2()
+		local map = self.Entity.CurrentMap
+		core._T.rtsLockUntil = math.max(core._T.rtsLockUntil or 0, started + duration)
+		local token = (self._T.dashToken or 0) + 1
+		self._T.dashToken = token
+		local timer = nil
+		timer = _TimerService:SetTimerRepeat(function()
+			if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= map or self._T.dashToken ~= token then
+				_TimerService:ClearTimer(timer)
+				return
+			end
+			local ratio = math.min(1, (_UtilLogic.ElapsedSeconds - started) / math.max(0.02, duration))
+			self:MoveForSkill(origin + direction * distance * ratio)
+			if ratio >= 1 then _TimerService:ClearTimer(timer) end
+		end, 0.02)
+	end
+
+	@ExecSpace("Client")
+	method void PlayCastPose()
+		-- 원본 월드 이펙트와 별개로 합본 아바타 선택자를 유지한다.
+		local visual = self.Entity:GetComponent("script.HeroUnitVisual")
+		if visual ~= nil then visual:PlayCastPose(self.CastPoseTime, self.Entity.TransformComponent.Scale.x < 0) end
+	end
+
+end

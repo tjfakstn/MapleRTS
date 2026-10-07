@@ -1,0 +1,27 @@
+@Component
+script BattleMageHeroDataComponent extends Component
+
+	method table BuildKit()
+		    return {
+		        name = "배틀메이지",
+		        passive = "데스: 적 유닛 처치 8회마다 처치 지점에 자동 공격한다. E/R 사용 후에는 데스가 강화된다.",
+		        Q = { name = "트리플 블로우", skillClass = "heavy_line", targetIntent = "few", projectileCount = 0, hitCount = 3, burstCount = 0, tickCount = 3, tickInterval = 0.21, shape = "front", length = 2.35, width = 1.8, telegraphShape = "front", telegraphLength = 2.35, telegraphWidth = 1.8, hitShape = "front", hitLength = 2.35, hitWidth = 1.8, visualVsHitDelta = 0, damage = 150, cooldown = 1, castWindup = 0.15, clientAttackMotion = true, emitImpactPerTarget = true, maxTargets = 5, maxImpactFxCount = 5, effectForwardOffset = 0.52, telegraph = false, telegraphTime = 0.08, effectScaleMultiplier = 0.92, impactScaleMultiplier = 0.9 },
+		        W = { name = "다크 체인", skillClass = "heavy_line", targetIntent = "many", projectileCount = 0, hitCount = 1, burstCount = 0, tickCount = 1, shape = "front", length = 3.8, width = 2.1, telegraphShape = "front", telegraphLength = 3.8, telegraphWidth = 2.1, hitShape = "front", hitLength = 3.8, hitWidth = 2.1, visualVsHitDelta = 0, damage = 200, cooldown = 6, castWindup = 0.42, clientAttackMotion = true, pull = true, pullSpeed = 16, pullDuration = 0.42, pullToFront = true, emitImpactPerTarget = true, maxTargets = 0, maxImpactFxCount = 0, effectForwardOffset = 0.82, telegraph = false, telegraphTime = 0.12, effectScaleMultiplier = 0.9 },
+		        E = { name = "피니쉬 블로우", skillClass = "heavy_line", targetIntent = "many", projectileCount = 0, hitCount = 5, burstCount = 0, tickCount = 5, tickInterval = 0.135, shape = "front", length = 3.0, width = 2.35, telegraphShape = "front", telegraphLength = 3.0, telegraphWidth = 2.35, hitShape = "front", hitLength = 3.0, hitWidth = 2.35, visualVsHitDelta = 0, damage = 280, cooldown = 7, castWindup = 0.13, clientAttackMotion = true, deathEnhanceTier = 2, emitImpactPerTarget = true, maxTargets = 8, maxImpactFxCount = 8, effectForwardOffset = 0.65, telegraph = false, telegraphTime = 0.13, effectScaleMultiplier = 0.94, impactScaleMultiplier = 0.9 },
+		        R = { name = "제네시스", skillClass = "heavy_line", targetIntent = "many", projectileCount = 0, hitCount = 8, burstCount = 0, tickCount = 8, tickInterval = 0.24, shape = "front", length = 4.4, width = 3.15, telegraphShape = "front", telegraphLength = 4.4, telegraphWidth = 3.15, hitShape = "front", hitLength = 4.4, hitWidth = 3.15, visualVsHitDelta = 0, damage = 370, cooldown = 6, castWindup = 0.2, clientAttackMotion = true, deathEnhanceTier = 3, emitImpactPerTarget = true, maxTargets = 12, maxImpactFxCount = 12, effectForwardOffset = 1.18, telegraph = false, telegraphTime = 0.2, effectScaleMultiplier = 0.88, impactScaleMultiplier = 0.92 },
+		        T = { name = "그림 리퍼", skillClass = "install_zone", targetIntent = "many", projectileCount = 0, hitCount = 5, burstCount = 0, tickCount = 5, tickInterval = 2.0, shape = "self", length = 3.2, width = 3.2, telegraphShape = "self", telegraphRadius = 3.2, hitShape = "self", hitRadius = 3.2, fixedPlacementDistance = 0, visualVsHitDelta = 0, damage = 210, cooldown = 120, castWindup = 0.16, clientAttackMotion = true, emitImpactPerTarget = false, maxTargets = 12, effectForwardOffset = 0, telegraph = true, telegraphTime = 0.16, effectScaleMultiplier = 0.78, impactScaleMultiplier = 0.78 },
+		    }
+	end
+
+	method table BuildVfx()
+		    return {
+		        Q = { effect = "7af910a276e64dafbb148fd795aaeb0b", impact = "64abdef0d1da4f199ab726639db6d645", multiImpactEffect = "64abdef0d1da4f199ab726639db6d645", playCastEffectOnInput = true, impactScaleMultiplier = 0.9 },
+		        W = { effect = "7a5d0bc440ac4db585add4cbc0eac154", playCastEffectOnInput = true },
+		        E = { effect = "45c35ff093674a23a9f7a609916383cd", impact = "c699017cc5824921a13b5e4b88c77dfb", multiImpactEffect = "c699017cc5824921a13b5e4b88c77dfb", playCastEffectOnInput = true, impactScaleMultiplier = 0.9 },
+		        R = { effect = "b5285001066a41729177af91c222eb73", castSecondaryEffect = "322e4ca68d09446688d687f06bb0bd5c", castSecondaryDelay = 0.08, impact = "94801681de0c4b98bba4fb7bd54c44bc", multiImpactEffect = "94801681de0c4b98bba4fb7bd54c44bc", playCastEffectOnInput = true, effectScaleMultiplier = 0.88, impactScaleMultiplier = 0.92 },
+		        T = { effect = "0cd9fd9a21c44229a8421da7f3e1b883", telegraph = "388a80dc386f485ba5b18e6b8ebd972f", persistentTelegraphDuration = 10.0, persistentTelegraphInterval = 0.9, persistentTelegraphDelay = 0.08, tickEffect = "ce55606c96d94c059227f2956a1ae786", tickEffectDelay = 0, visualTickCount = 5, visualTickInterval = 2.0, effect2 = "131faeee275941aea6a1ef0378babab8", endEffectDelay = 10.0, skipDefaultEffect2 = true, playCastEffectOnInput = true, effectUseWorldAnchor = true, effectScaleMultiplier = 0.78 },
+		        DEATH = { appear = "c73c227497b5478bb34389628467923e", baseStrike = "d71a28905db74073946fa560165dbee4", finishEnhanceStrike = "5e83172ebd224d768fefdccaf9c0fee3", genesisEnhanceStrike = "d71a28905db74073946fa560165dbee4" },
+		    }
+	end
+
+end

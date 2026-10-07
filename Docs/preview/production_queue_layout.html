@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>생산 대기열 목업</title>
+<style>
+  :root { --bg:#111; --panel:#1d2230; --edge:#4a5570; --slot:rgba(43,47,60,.95); --slotEdge:#556; --ink:#fff; --sub:#9ab; --hp:#3a8f3a; --hk:#FFD54A; }
+  body { background:var(--bg); color:#ddd; font:14px/1.5 sans-serif; margin:0; padding:16px; }
+  h1 { font-size:18px; margin:0 0 4px; color:#fff; }
+  p.note { margin:0 0 14px; color:#aab; }
+  .wrap { overflow-x:auto; }
+  .panel { position:relative; width:760px; height:225px; background:var(--panel); border:2px solid var(--edge); border-radius:8px; flex:none; }
+  .name { position:absolute; left:24px; top:10px; color:#fff; font:bold 24px sans-serif; }
+  .role { position:absolute; right:24px; top:16px; color:var(--sub); font:18px sans-serif; }
+  .hp { position:absolute; left:24px; top:52px; width:692px; height:22px; background:var(--hp); border-radius:4px; color:#fff; font:13px sans-serif; text-align:center; line-height:22px; }
+  .status { position:absolute; left:24px; bottom:4px; color:#ccc; font:16px sans-serif; }
+  .slot { position:absolute; background:var(--slot); border:1px solid var(--slotEdge); box-sizing:border-box; transition:opacity .15s; }
+  .slot.empty { opacity:0; }
+  .icon { position:absolute; border-radius:8px; display:flex; align-items:center; justify-content:center; color:#fff; font:bold 15px sans-serif; text-align:center; }
+  .time { position:absolute; text-align:center; color:#fff; white-space:pre; }
+  .bar { position:absolute; left:0; bottom:0; height:4px; background:var(--hk); }
+  .controls { margin:16px 0 8px; display:flex; flex-wrap:wrap; gap:8px; }
+  button { background:#2b3550; color:#fff; border:1px solid #556; border-radius:6px; padding:8px 12px; font:14px sans-serif; cursor:pointer; }
+  button:hover { background:#36426a; }
+  button kbd { color:var(--hk); font:bold 13px sans-serif; margin-left:4px; }
+  .toast { height:24px; color:#ffb4a0; font:15px sans-serif; }
+  .log { color:#9ab; font:13px sans-serif; }
+</style>
+</head>
+<body>
+<h1>생산 대기열 목업 (정보창 760×225 실제 크기)</h1>
+<p class="note">스타식 대기열 최대 5마리. 1번 큰 칸 = 지금 만드는 유닛(남은 시간). 2~5번 작은 칸 = 대기. 실제 게임과 같은 좌표·크기로 그렸어요(유닛 그림 대신 색 상자).</p>
+
+<div class="wrap"><div class="panel" id="panel">
+  <div class="name">기사단 병영</div>
+  <div class="role">건물</div>
+  <div class="hp">850 / 850</div>
+  <div class="status" id="status">정식기사 E·C·D·B 생산</div>
+</div></div>
+
+<div class="controls">
+  <button data-u="0">정식기사E 생산<kbd>Z</kbd></button>
+  <button data-u="1">정식기사C 생산<kbd>X</kbd></button>
+  <button data-u="2">정식기사D 생산<kbd>C</kbd></button>
+  <button data-u="3">정식기사B 생산<kbd>V</kbd></button>
+  <button id="fast">시간 ×10 빠르게: 끔</button>
+  <button id="research">업그레이드 연구 중 표시 보기</button>
+  <button id="clear">건물 파괴(전액 환불)</button>
+</div>
+<div class="toast" id="toast"></div>
+<div class="log" id="log">메소 1000</div>
+
+<script>
+const UNITS = [
+  { name:"정식기사E", color:"#5b7fc7", time:18, meso:100 },
+  { name:"정식기사C", color:"#7a5bc7", time:18, meso:100 },
+  { name:"정식기사D", color:"#3f9a8a", time:21, meso:110 },
+  { name:"정식기사B", color:"#c7865b", time:21, meso:110 },
+];
+const MAX = 5;
+// 실제 UI 좌표(게임 기준: 정보창 왼쪽 아래가 원점, 칸 중심 좌표)
+const H = 104, Y = 88, BIG = 232, SMALL = 104, GAP = 16, X0 = 24;
+const panel = document.getElementById("panel");
+const slots = [];
+for (let i = 0; i < MAX; i++) {
+  const big = i === 0, w = big ? BIG : SMALL;
+  const cx = big ? X0 + BIG / 2 : X0 + BIG + GAP + SMALL / 2 + (i - 1) * (SMALL + GAP);
+  const el = document.createElement("div");
+  el.className = "slot empty";
+  Object.assign(el.style, { left:(cx - w / 2) + "px", top:(225 - Y - H / 2) + "px", width:w + "px", height:H + "px" });
+  const icon = document.createElement("div"); icon.className = "icon";
+  const isz = big ? 84 : 76, icx = big ? 56 : 52, icy = 52;
+  Object.assign(icon.style, { left:(icx - isz / 2) + "px", top:(H - icy - isz / 2) + "px", width:isz + "px", height:isz + "px" });
+  const time = document.createElement("div"); time.className = "time";
+  if (big) Object.assign(time.style, { left:(164 - 62) + "px", top:(H - 52 - 32) + "px", width:"124px", height:"64px", font:"22px sans-serif", display:"flex", alignItems:"center", justifyContent:"center" });
+  else Object.assign(time.style, { left:"2px", top:(H - 14 - 11) + "px", width:"100px", font:"14px sans-serif" });
+  el.append(icon, time);
+  if (big) { const bar = document.createElement("div"); bar.className = "bar"; el.append(bar); }
+  panel.append(el); slots.push(el);
+}
+
+let queue = [], headEnd = 0, meso = 1000, speed = 1, research = false, last = performance.now(), now = 0;
+const toast = document.getElementById("toast"), log = document.getElementById("log");
+function say(t) { toast.textContent = t; clearTimeout(say.t); say.t = setTimeout(() => toast.textContent = "", 2200); }
+function enqueue(u) {
+  research = false;
+  if (queue.length >= MAX) { say(`생산 대기열이 가득 찼습니다 (최대 ${MAX}마리)`); return; }
+  if (meso < UNITS[u].meso) { say("메소가 부족합니다"); return; }
+  meso -= UNITS[u].meso;
+  queue.push(u);
+  if (queue.length === 1) headEnd = now + UNITS[u].time;
+}
+function render() {
+  for (let i = 0; i < MAX; i++) {
+    const el = slots[i], icon = el.children[0], time = el.children[1];
+    let u = queue[i];
+    if (research && i === 0) {
+      el.classList.remove("empty");
+      icon.style.background = "#8a6fd1"; icon.textContent = "공격\n2단계";
+      const total = 60, remain = Math.max(0, headEnd - now), pct = Math.floor((1 - remain / total) * 100);
+      time.textContent = `${pct}%\n${(Math.ceil(remain * 10) / 10).toFixed(1)}s`;
+      el.querySelector(".bar").style.width = pct + "%";
+      continue;
+    }
+    if (research) u = undefined;
+    if (u === undefined) { el.classList.add("empty"); continue; }
+    el.classList.remove("empty");
+    icon.style.background = UNITS[u].color;
+    icon.textContent = UNITS[u].name.replace("정식기사", "정식\n기사");
+    icon.style.whiteSpace = "pre";
+    if (i === 0) {
+      const remain = Math.max(0, headEnd - now);
+      time.textContent = (Math.ceil(remain * 10) / 10).toFixed(1) + "s";
+      el.querySelector(".bar").style.width = (100 * (1 - remain / UNITS[u].time)) + "%";
+    } else time.textContent = "";
+  }
+  log.textContent = `메소 ${meso} · 대기열 ${research ? "연구 중" : queue.length + "/" + MAX}`;
+}
+function tick(t) {
+  const dt = (t - last) / 1000 * speed; last = t; now += dt;
+  if (research) { if (now >= headEnd) { research = false; say("공격 2단계 연구 완료"); } }
+  else while (queue.length && now >= headEnd) {
+    const done = queue.shift();
+    say(`${UNITS[done].name} 생산 완료`);
+    if (queue.length) headEnd += UNITS[queue[0]].time;
+  }
+  render(); requestAnimationFrame(tick);
+}
+document.querySelectorAll("button[data-u]").forEach(b => b.onclick = () => enqueue(+b.dataset.u));
+document.addEventListener("keydown", e => { const i = "zxcv".indexOf(e.key.toLowerCase()); if (i >= 0) enqueue(i); });
+document.getElementById("fast").onclick = e => { speed = speed === 1 ? 10 : 1; e.target.textContent = `시간 ×10 빠르게: ${speed === 1 ? "끔" : "켬"}`; };
+document.getElementById("research").onclick = () => { queue = []; research = true; headEnd = now + 60 * 0.55; };
+document.getElementById("clear").onclick = () => { const refund = queue.reduce((a, u) => a + UNITS[u].meso, 0); meso += refund; queue = []; research = false; say(`건물 파괴 — 대기열 전액 환불 +${refund}`); };
+[0, 0, 2, 3].forEach(enqueue);
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

@@ -1,0 +1,205 @@
+@Component
+script PlayerInfo extends Component
+
+	@Sync
+	property string SelectedCamp = ""
+
+	@Sync
+	property string SelectedHeroId = ""
+
+	@Sync
+	property boolean IsReady = false
+
+	@Sync
+	property integer Meso = 0
+
+	@Sync
+	property integer Erda = 0
+
+	@Sync
+	property integer ColorIndex = 0
+
+	@Sync
+	property integer JobTier = 1
+
+	@Sync
+	property integer ResearchTier = 0
+
+	@Sync
+	property number ResearchEndTime = 0
+
+	@Sync
+	property number ResearchTotal = 0
+
+	@Sync
+	property SyncTable<string, integer> UpgradeLevels
+
+	property table MyUnitData = {}
+
+	property TextGUIRendererComponent MesoText = "d0756cb9-5dd2-4db3-9eb3-77823dd71662"
+
+	property TextGUIRendererComponent ErdaText = "a723151e-e640-4be6-bee9-676a3b4ffd52"
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		-- 로컬 플레이어 본인일 때만 재화 UI를 현재 값으로 초기화한다.
+		if not self:IsLocalPlayerOwner() then return end
+		self:RefreshCurrencyUI()
+	end
+
+	method boolean IsLocalPlayerOwner()
+		-- 이 컴포넌트가 로컬(나 자신) 플레이어 엔티티에 붙어있는지 확인한다.
+		-- Meso/Erda는 @Sync라 모든 클라이언트가 다른 플레이어의 PlayerInfo도 함께 받으므로,
+		-- 이 체크 없이 UI를 갱신하면 다른 플레이어의 재화 값이 내 HUD를 덮어쓸 수 있다.
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) or not isvalid(lp.PlayerComponent) then return false end
+		if not isvalid(self.Entity.PlayerComponent) then return false end
+		return lp.PlayerComponent.UserId == self.Entity.PlayerComponent.UserId
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshCurrencyUI()
+		-- MesoText/ErdaText 현재 값을 그대로 표시한다.
+		if isvalid(self.MesoText) then self.MesoText.Text = tostring(self.Meso) end
+		if isvalid(self.ErdaText) then self.ErdaText.Text = tostring(self.Erda) end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSyncProperty(string name, any value)
+		-- Meso/Erda 값이 서버로부터 동기화될 때마다 우측 상단 재화 UI를 갱신한다.
+		if not self:IsLocalPlayerOwner() then return end
+		if name == "Meso" then
+			if isvalid(self.MesoText) then self.MesoText.Text = tostring(value) end
+		elseif name == "Erda" then
+			if isvalid(self.ErdaText) then self.ErdaText.Text = tostring(value) end
+		elseif name == "JobTier" or name == "ResearchTier" then
+			-- 전직 단계·연구 상태가 바뀌면 영웅 스킬 잠금과 전직관 버튼이 달라지므로 커맨드카드를 다시 만든다.
+			_CommandCardLogic:RefreshCard()
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SetUnitData()
+		-- 선택된 진영(SelectedCamp)의 유닛 데이터를 로드해 클라에 전달한다. LobbyController가 진영 확정 후 호출.
+		if self.SelectedCamp == "" then
+			return
+		end
+		self.MyUnitData = _SetCampManager_Logic:SelectedCampUnit(self.SelectedCamp)
+		local UserId = self.Entity.PlayerComponent.UserId
+		self:UpdateCampData(self.MyUnitData, UserId)
+	end
+
+	@ExecSpace("Client")
+	method void UpdateCampData(table UnitData)
+		-- 서버에서 받은 진영 유닛 데이터를 클라이언트 쪽 MyUnitData에도 저장한다.
+		-- MyUnitData는 @Sync가 아니라 서버/클라가 각자 별도로 들고 있는 값이라, 서버에서만
+		-- 세팅하면 클라(StructureAction 등)는 계속 빈 테이블만 보게 된다 — 명시적 전달이 필요하다.
+		if UnitData == nil then
+			return
+		end
+		self.MyUnitData = UnitData
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean CanAfford(number meso, number erda)
+		-- 유닛 생산/건물 건설 비용(메소, 에르다)을 지금 재화로 낼 수 있는지 확인한다(소수 비용은 올림).
+		return self.Meso >= math.ceil(meso or 0) and self.Erda >= math.ceil(erda or 0)
+	end
+
+	@ExecSpace("ServerOnly")
+	method string ShortageMessage(number meso, number erda)
+		-- 부족한 재화를 알리는 토스트 문구를 만든다(둘 다 부족하면 함께 표시).
+		local parts = {}
+		local needMeso = math.ceil(meso or 0)
+		local needErda = math.ceil(erda or 0)
+		if self.Meso < needMeso then
+			table.insert(parts, "메소가 부족합니다 (필요 " .. tostring(needMeso) .. " / 보유 " .. tostring(self.Meso) .. ")")
+		end
+		if self.Erda < needErda then
+			table.insert(parts, "에르다가 부족합니다 (필요 " .. tostring(needErda) .. " / 보유 " .. tostring(self.Erda) .. ")")
+		end
+		return table.concat(parts, " · ")
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean TrySpend(number meso, number erda)
+		-- 재화가 충분하면 메소/에르다를 차감하고 true, 부족하면 아무것도 차감하지 않고 false.
+		-- Meso/Erda는 @Sync라 서버에서 바꿔야 재화 HUD(OnSyncProperty)가 갱신된다.
+		if not self:CanAfford(meso, erda) then
+			return false
+		end
+		self.Meso = self.Meso - math.ceil(meso or 0)
+		self.Erda = self.Erda - math.ceil(erda or 0)
+		return true
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Refund(number meso, number erda, number rate)
+		-- 취소(환불) 시 원래 비용(메소/에르다)의 rate 배를 내림해 돌려준다.
+		local m = math.floor((meso or 0) * rate)
+		local e = math.floor((erda or 0) * rate)
+		self.Meso = self.Meso + m
+		self.Erda = self.Erda + e
+	end
+
+	@ExecSpace("ServerOnly")
+	method integer GetPopulationUsed(Entity map)
+		-- 현재 사용 인구(서버 권위): map의 MyUnits 아래 이 플레이어 소유의 살아있는 유닛들의 CSV '인구' 합
+		-- + 아직 스폰되지 않은 생산 대기 유닛의 인구(SpawnUnit.GetPendingPopulation). 데이터 행이 없는 유닛(영웅·소환물)은 0.
+		-- 0.5 인구(물량형)가 있어 합이 소수가 될 수 있으므로 올림해 정수로 돌려준다. PopulationHUD.Refresh(클라 표시)와 같은 기준.
+		if not isvalid(map) then return 0 end
+		local me = self.Entity.PlayerComponent.UserId
+		local unitData = self.MyUnitData or {}
+		local total = 0
+		local group = map:GetChildByName("MyUnits")
+		if isvalid(group) then
+			for _, child in ipairs(group.Children:ToTable()) do
+				---@type Unit_Info
+				local info = child:GetComponent("script.Unit_Info")
+				if info ~= nil and not info.IsDead and info.PlayerID == me then
+					local row = unitData[info.UnitModelKey]
+					if row ~= nil and row["인구"] ~= nil then
+						total = total + (tonumber(row["인구"]) or 0)
+					end
+				end
+			end
+		end
+		---@type SpawnUnit
+		local spawner = self.Entity:GetComponent("script.SpawnUnit")
+		if spawner ~= nil then
+			total = total + spawner:GetPendingPopulation()
+		end
+		return math.ceil(total)
+	end
+
+	@ExecSpace("ServerOnly")
+	method integer GetPopulationMax(Entity map)
+		-- 최대 인구(서버 권위): map 안의 이 플레이어 소유 건물 중 완공됐고 파괴되지 않은 것들의 Structure_Info.PopulationProvide 합.
+		-- PopulationHUD.Refresh(클라 표시)와 같은 기준(GetChildComponentsByTypeName으로 MyStructures 유무와 무관하게 전부 센다).
+		if not isvalid(map) then return 0 end
+		local me = self.Entity.PlayerComponent.UserId
+		local maximum = 0
+		local structures = map:GetChildComponentsByTypeName("script.Structure_Info", true)
+		if structures ~= nil then
+			for _, s in ipairs(structures) do
+				---@type Structure_Info
+				local si = s
+				if si.PlayerID == me and not si.IsDestroyed then
+					-- 건설 중인 변환 건물은 변환 전 건물에서 물려받은 인구(PopulationCarry)만 먼저 인정한다.
+					if si.IsUnderConstruction then
+						maximum = maximum + si.PopulationCarry
+					else
+						maximum = maximum + si.PopulationProvide
+					end
+				end
+			end
+		end
+		return maximum
+	end
+
+	@ExecSpace("Server")
+	method void GetDamage()
+		-- 전투 데미지 처리 지점(미구현).
+	end
+
+end

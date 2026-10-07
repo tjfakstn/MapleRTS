@@ -1,0 +1,644 @@
+@Component
+script Weapon extends Component
+
+	property Entity target = nil
+
+	property TriggerComponent AttackTriggerComponent = nil
+
+	@Sync
+	property number AttackCoolTime = 0
+
+	property number deltaTime = 0
+
+	@Sync
+	property number damage = 0
+
+	@Sync
+	property boolean IsAttack = false
+
+	@Sync
+	property boolean ShouldMove = false
+
+	property UnitMoveComponent UnitMove = nil
+
+	property number MeleeRange = 1.0
+
+	property number AttackMotionLock = 0.5
+
+	@HideFromInspector
+	property boolean _rangeApplied = false
+
+	@HideFromInspector
+	property boolean _swingLocked = false
+
+	@HideFromInspector
+	property number _swingTimer = 0
+
+	@HideFromInspector
+	property boolean _firstStrike = true
+
+	property string WeaponAni = ""
+
+	@DisplayName("자동 교전 탐색 주기(초)")
+	property number AcquireInterval = 0.3
+
+	method void OnBeginPlay()
+		--초기 Initialize: 사거리 콜라이더는 서버(전투 판정)와 클라이언트 양쪽에서 맞춘다--
+		if not isvalid(self.AttackTriggerComponent) then
+			self.AttackTriggerComponent = self.Entity.TriggerComponent
+		end
+		
+		if not isvalid(self.UnitMove) then
+			local parent = self.Entity.Parent
+			self.UnitMove = parent.UnitMoveComponent
+		end
+		
+		-- 사거리에 맞춰 자식 TriggerComponent 콜라이더 크기 조정
+		self:ApplyAttackRange()
+	end
+
+	method void ApplyAttackRange()
+		-- Unit_Info.AttackRange(사거리, world unit)로 이 Weapon 의 TriggerComponent 콜라이더 크기를 맞춘다.
+		-- 데이터 동기화 전이면 MeleeRange 로 임시 세팅하고 OnUpdate 에서 재시도한다.
+		local trigger = self.AttackTriggerComponent
+		if not isvalid(trigger) then return end
+		
+		local range = self.MeleeRange
+		local parent = self.Entity.Parent
+		if isvalid(parent) then
+			local info = parent.Unit_Info
+			if isvalid(info) and info.AttackRange ~= nil and info.AttackRange > 0 then
+				range = info.AttackRange
+				self._rangeApplied = true
+			end
+		end
+		
+		-- range = 중심에서 대상까지 닿는 거리. Box 는 전체 크기라 2배, Circle 은 반지름 그대로.
+		trigger.ColliderType = ColliderType.Box
+		trigger.BoxSize = Vector2(range * 2, range * 2)
+		trigger.CircleRadius = range
+		trigger.ColliderOffset = Vector2(0, 0)
+	end
+
+	method void OnUpdate(number delta)
+		-- AttackRange 동기화가 늦게 도착할 수 있으므로 반영될 때까지 재시도(서버/클라 공통)
+		if not self._rangeApplied then
+			self:ApplyAttackRange()
+		end
+		
+		-- 이하 전투 판정(쿨타임/추격/피해)은 서버 권위로만 돌린다. 클라이언트는 @Sync된
+		-- IsAttack/ShouldMove와 Multicast(PlayAttackFx)로 애니메이션·이펙트만 재생한다.
+		if not self:IsServer() then return end
+		
+		-- 공격 쿨타임 처리: delta 누적 및 자동 공격 처리
+		self.deltaTime = self.deltaTime + delta
+		
+		-- 직전 공격 모션이 화면에 표시되는 동안은 잠금을 유지하다가 시간이 다 되면 해제한다.
+		if self._swingLocked then
+			self._swingTimer = self._swingTimer - delta
+			if self._swingTimer <= 0 then
+				self._swingLocked = false
+			end
+		end
+		
+		-- 내가 죽었거나 대상이 이미 죽었으면(사망 모션 중) 공격/추격을 멈춘다.
+		local myInfo = self.Entity.Parent.Unit_Info
+		if (myInfo ~= nil and myInfo.IsDead) or (self.target ~= nil and not self:IsTargetAlive(self.target)) then
+			if self.IsAttack or self.ShouldMove then
+				self:initAttack()
+			end
+			return
+		end
+		
+		-- 자동 교전으로 쫓던 대상이 리시 거리 밖으로 달아나면 추격을 포기한다(명령으로 지정한 대상은 끝까지 쫓음).
+		if self._T.autoAcq and self.ShouldMove and isvalid(self.target) then
+			local tp = self.target.TransformComponent.WorldPosition
+			local mp = self.Entity.Parent.TransformComponent.WorldPosition
+			if Vector2.Distance(Vector2(tp.x, tp.y), Vector2(mp.x, mp.y)) > (self._T.leash or 6) then
+				self:initAttack()
+				if isvalid(self.UnitMove) then self.UnitMove:Stop() end
+			end
+		end
+		
+		-- 자동 교전(스타식): 공격/추격 중이 아니면 주기적으로 주변 적을 찾는다. 대기 중·어택땅 중·위치 고수 중에만 동작.
+		if not self.IsAttack and not self.ShouldMove then
+			self._T.scanAcc = (self._T.scanAcc or 0) + delta
+			if self._T.scanAcc >= self.AcquireInterval then
+				self._T.scanAcc = 0
+				self:AutoAcquire(myInfo)
+			end
+		end
+		
+		-- 이동 중 사거리 재확인은 HandleTriggerEnterEvent(트리거 진입 순간)에만 의존하는데,
+		-- 그 이벤트가 최종 정지 위치보다 먼저(이동 도중) 한 번만 발생하면 그 시점엔 아직 사거리 밖이라
+		-- 판정에 실패하고, 이후 목표 지점(사거리*0.9)에 도착해 멈춰도 그걸 다시 확인해줄 트리거가 더는
+		-- 없어 IsAttack이 영원히 false로 남는 문제가 있었다(실측 확인: 정확히 사거리 안에 멈췄는데도
+		-- 공격이 시작되지 않음). 이동이 끝났는데 아직 공격 시작 전(ShouldMove만 true)이면 여기서
+		-- 사거리를 다시 확인한다.
+		if self.ShouldMove and not self.IsAttack and isvalid(self.target) and isvalid(self.UnitMove) and not self.UnitMove.IsMove then
+			self:AttackTarget(self.target)
+		end
+		
+		if self.IsAttack then
+			if not isvalid(self.target) then
+				self.IsAttack = false
+				return
+			else
+				self:Attack()
+			end
+		end
+	end
+
+	method void SetTarget(Entity enemy)
+		self.target = enemy
+	end
+
+	method boolean IsTargetAlive(Entity enemy)
+		-- 대상이 유효하고, 유닛이면 사망 전(IsDead=false), 건물이면 파괴 전(IsDestroyed=false)인지 확인한다.
+		if not isvalid(enemy) then return false end
+		if _CombatTeamLogic:IsDead(enemy) then return false end
+		---@type Unit_Info
+		local uinfo = enemy:GetComponent("script.Unit_Info")
+		if uinfo ~= nil then return not uinfo.IsDead end
+		---@type Structure_Info
+		local sinfo = enemy:GetComponent("script.Structure_Info")
+		if sinfo ~= nil then return not sinfo.IsDestroyed end
+		return true
+	end
+
+	@ExecSpace("ServerOnly")
+	method void AttackTarget(Entity enemy)
+		-- 대상을 향해 사거리 검사 → 사거리 안이면 공격 시작, 밖이면 접근.
+		self:initAttack()
+		
+		local Unitinfo = self.Entity.Parent.Unit_Info
+		if Unitinfo == nil or not Unitinfo:CanTargetForCombat(enemy) then return end
+		self.AttackCoolTime = Unitinfo.AttackCoolTime
+		self.damage = Unitinfo.damage
+		
+		self.target = enemy
+		
+		--target이 존재하고 A 공격을 누르면 실행--
+		if self.target == nil then
+			return
+		end
+		
+		-- 지상/공중 상성: 대공 능력이 없는 유닛은 공중 유닛을 공격/추격하지 않는다(Unit_Info.RequestSetTarget에서
+		-- 이미 한 번 걸러지지만, target이 다른 경로로 설정될 수도 있으므로 여기서도 다시 확인한다).
+		if not Unitinfo:CanTargetForCombat(self.target) then
+			self:initAttack()
+			return
+		end
+		
+		if self:IsTargetInRange() then
+			self.IsAttack = true
+		end
+		
+		if not self.IsAttack then
+			if self:IsHolding() then
+				-- 위치 고수 중에는 사거리 밖 대상을 쫓지 않는다.
+				self:initAttack()
+				return
+			end
+			self.ShouldMove = true
+			self:MoveToTarget()
+		end
+	end
+
+	method boolean IsHolding()
+		-- 부모 유닛이 위치 고수(H) 상태인지(Unit_Info._T.hold, 서버 값).
+		-- 시즈모드(UnitAbilityLogic)도 이동하지 않으므로 위치 고수와 똑같이 취급한다.
+		local info = self.Entity.Parent.Unit_Info
+		return info ~= nil and (info._T.hold == true or info._T.siege ~= nil)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void AutoAcquire(Unit_Info info)
+		-- 주변의 적을 찾아 자동으로 공격한다. 공격력 없는 유닛·일반 이동 중인 유닛은 하지 않는다.
+		-- 적이 없고 어택땅 중이면 목적지(_T.amDest)로 이동을 이어 가고, 도착하면 어택땅을 끝낸다.
+		-- 일꾼은 어택땅(A+땅) 중일 때만 자동 교전한다(2026-10-07 — 예전엔 일꾼을 아예 빼서 어택땅이 그냥 이동이 됐다).
+		-- 대기·채집 중인 일꾼은 스타처럼 스스로 싸우지 않는다.
+		if info == nil or info.IsDead or info.damage <= 0 then return end
+		if info.RoleKey == "Worker" and info._T.amDest == nil then return end
+		if not isvalid(self.UnitMove) then return end
+		local unit = self.Entity.Parent
+		-- 영웅은 기본 공격이 없다(스킬 전용) — 자동 교전 안 함.
+		if unit:GetComponent("script.HeroUnitSkill") ~= nil then return end
+		if _CombatTeamLogic:IsActionLocked(unit) or _BuildModeLogic:IsWorkerBusy(unit) then return end
+		-- 위치 고수(H, 2026-10-07 사용자 확정): 공격도 하지 않고 그 자리에 멈춰 있는다(시즈모드는 계속 자동 교전).
+		if info._T.hold == true then return end
+		local amDest = info._T.amDest
+		if self.UnitMove.IsMove and amDest == nil then return end
+		
+		local range = info.AttackRange
+		if range <= 0 then range = self.MeleeRange end
+		local acquire = math.max(range + 1.0, math.min(info.Vision, range + 3.0))
+		if self:IsHolding() then acquire = range + 0.15 end   -- 시즈모드: 사거리 안만
+		
+		local enemy = self:FindNearestEnemy(info, acquire, range + 0.5)
+		if enemy ~= nil then
+			info.target = enemy
+			info._T.amRetry = 0
+			if self.UnitMove.IsMove then self.UnitMove:Stop() end
+			self:AttackTarget(enemy)
+			if self.IsAttack or self.ShouldMove then
+				self._T.autoAcq = true
+				self._T.leash = acquire + 3.0
+			end
+			return
+		end
+		
+		if amDest ~= nil and not self.UnitMove.IsMove then
+			local p = unit.TransformComponent.WorldPosition
+			local retry = info._T.amRetry or 0
+			if Vector2.Distance(Vector2(p.x, p.y), amDest) > 0.5 and retry < 3 then
+				-- 교전으로 멈췄거나 막혀 섰으면 목적지로 다시 출발한다(막힘이 반복되면 3회 후 포기).
+				info._T.amRetry = retry + 1
+				self.UnitMove:FindTarget(amDest)
+			else
+				info._T.amDest = nil
+				info._T.amRetry = 0
+			end
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method Entity FindNearestEnemy(Unit_Info info, number radius, number neutralRadius)
+		-- radius 안에서 가장 가까운 공격 가능한 적을 고른다. 유닛 우선, 없으면 건물.
+		-- 중립 몬스터(소유자 없는 Unit_Info)는 neutralRadius(거의 사거리) 안에 붙었을 때만 반격 대상으로 삼는다.
+		local unit = self.Entity.Parent
+		local wp = unit.TransformComponent.WorldPosition
+		local center = Vector2(wp.x, wp.y)
+		local best = nil
+		local bestD = math.huge
+		for _, e in ipairs(self:GetAreaUnitTargets(center, radius)) do
+			local ep = e.TransformComponent.WorldPosition
+			local d = Vector2.Distance(center, Vector2(ep.x, ep.y))
+			local einfo = e.Unit_Info
+			local neutral = einfo ~= nil and einfo.PlayerID == ""
+			if (not neutral or d <= neutralRadius) and d < bestD then
+				best = e
+				bestD = d
+			end
+		end
+		if best ~= nil then return best end
+		
+		local sim = _CollisionService:GetSimulator(self.Entity)
+		if sim == nil then return nil end
+		local hits = sim:OverlapCircleAll("Structure", center, radius)
+		if hits == nil then return nil end
+		for i = 1, #hits do
+			local e = hits[i].Entity
+			if isvalid(e) then
+				---@type Structure_Info
+				local sinfo = e:GetComponent("script.Structure_Info")
+				if sinfo ~= nil and sinfo.PlayerID ~= "" and info:CanTargetForCombat(e) then
+					local ep = e.TransformComponent.WorldPosition
+					local d = Vector2.Distance(center, Vector2(ep.x, ep.y))
+					if d < bestD then
+						best = e
+						bestD = d
+					end
+				end
+			end
+		end
+		return best
+	end
+
+	method boolean IsTargetInRange()
+		-- 현재 target 이 이 Weapon 의 사거리 박스(트리거 콜라이더 크기 × 스케일)와 겹치는지 확인한다.
+		-- 공격 시작(AttackTarget)과 매 타격(Attack)에서 같은 기준으로 쓴다.
+		if not isvalid(self.target) then return false end
+		local trigger = self.AttackTriggerComponent
+		if not isvalid(trigger) then return false end
+		
+		local WorldScale = self.Entity.TransformComponent.Scale
+		local TriggerBoxSize = trigger.BoxSize
+		local boxCenter = self.Entity.TransformComponent.WorldPosition:ToVector2()
+		local AttackSize = Vector2(math.abs(TriggerBoxSize.x * WorldScale.x), math.abs(TriggerBoxSize.y * WorldScale.y))
+		
+		local collisionService = _CollisionService:GetSimulator(self.Entity)
+		-- ⚠ 플레이어가 조작하는 유닛(스폰된 진영 유닛)의 CollisionGroup은 "Unit"이다(Mouse_Command의
+		-- 클릭 판정 로직에서 이미 확인됨). "Monster"만 넣으면 상대 플레이어의 유닛을 사거리 안에
+		-- 들어와도 절대 인식하지 못해 IsAttack이 영원히 true가 되지 않는 버그가 있었다(실측 확인:
+		-- 유닛이 상대 코앞까지 다가가도 공격이 시작되지 않음). "Structure"(건물)도 함께 포함해
+		-- 건물을 공격 대상으로 삼았을 때도 사거리 판정이 되도록 한다.
+		-- ⚠ OverlapAll(table groups, Shape)는 .d.mlua에 선언돼 있고 컴파일도 되지만, 실측 결과 테이블을
+		-- 넘기면 항상 0건을 반환한다(같은 위치/크기를 단일 문자열 그룹으로 호출하면 정상 히트됨 —
+		-- 실측 확인: "Unit" 단일 문자열은 2건, {"Unit","Monster","Structure"} 테이블은 0건).
+		-- OverlapBoxAll은 이미 Mouse_Command/BuildGhostComponent에서 테이블 그룹이 정상 동작함이
+		-- 검증되었으므로, Shape 대신 OverlapBoxAll(위치+크기)로 바꿔 이 버그를 피한다.
+		local getResult = _CollisionQueryLogic:OverlapBoxAllGroups(collisionService, { "Unit", "Monster", "Structure" }, boxCenter, AttackSize, 0)
+		for idx = 1, #getResult do
+			if getResult[idx].Entity == self.target then
+				return true
+			end
+		end
+		return false
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Attack()
+		if _CombatTeamLogic:IsActionLocked(self.Entity.Parent) then return end
+		local attackerInfo = self.Entity.Parent.Unit_Info
+		if attackerInfo == nil or not attackerInfo:CanTargetForCombat(self.target) then
+			self:CancelAttack()
+			return
+		end
+		self.ShouldMove = false
+		
+		if self.UnitMove.IsMove then
+			self.IsAttack = false
+			return
+		end
+		
+		-- 직전 모션이 아직 표시 중이면(스윙 잠금) 쿨타임이 다 찼어도 새 피해를 넣지 않는다.
+		-- → 공격 진행 시 "피해 1회 적용 + 모션 재생" 이 끝난 뒤에야 다음 쿨타임 판정을 받아들인다.
+		if self._swingLocked then
+			return
+		end
+		
+		if self.deltaTime >= self.AttackCoolTime and isvalid(self.target) then
+			-- 타격 직전마다 사거리를 다시 확인한다: 대상이 사거리를 벗어났으면 피해를 넣지 않고 추격으로 전환한다.
+			if not self:IsTargetInRange() then
+				if self:IsHolding() then
+					self:initAttack()
+					return
+				end
+				self.IsAttack = false
+				self.ShouldMove = true
+				self:MoveToTarget()
+				return
+			end
+			self.deltaTime = 0
+			self._swingLocked = true
+			self._swingTimer = self.AttackMotionLock
+		
+			local info = self.Entity.Parent.Unit_Info
+			local style = info.AttackStyle
+		
+			-- AssaultBasic(돌진): 교전 시작 후 첫 타격만 AbilityValue배(예: 1.5배) 피해.
+			-- 공격 업그레이드(UpgradeLogic) 보너스를 먼저 더한다.
+			local dmg = self.damage + _UpgradeLogic:AttackBonus(info)
+			if info.RoleKey == "AssaultBasic" and self._firstStrike and info.AbilityValue > 0 then
+				dmg = math.floor(dmg * info.AbilityValue)
+			end
+			self._firstStrike = false
+		
+			-- 피해 적용: 스윙 잠금 덕분에 모션 1회당 정확히 1회만 실행된다. aoe 만 대상 + 주변까지.
+			if style == "aoe" then
+				self:ApplyAoeDamage(info.AoeRadius)
+			else
+				self:ApplyDamageToTarget(self.target, dmg)
+			end
+		
+			-- 즉발형 특수능력(스플래시/독/냉기/저주 등): RoleKey에 따라 대상에게 추가 효과를 건다.
+			self:TriggerOnHitAbility(info, self.target)
+		
+			self:AttackMotion(style, info)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplyDamageToTarget(Entity target, integer dmg)
+		-- 대상이 유닛(Unit_Info)인지 건물(Structure_Info)인지에 따라 알맞은 컴포넌트에 피해를 위임한다.
+		local info = self.Entity.Parent.Unit_Info
+		if info == nil or not info:CanTargetForCombat(target) or dmg <= 0 then return end
+		local companion = target:GetComponent("script.UnitHitComponent")
+		if target.Unit_Info == nil and companion ~= nil then
+			if companion:IsHitTarget("basic") then companion:OnHit(self.Entity.Parent, dmg, false, "basic", 1) end
+			return
+		end
+		
+		-- 결과표 처치·파괴 집계: 이 피해로 대상이 죽거나 부서지면 공격자(이 유닛 소유자)에게 기록된다.
+		_MatchStatsLogic:SetAttacker(info.PlayerID)
+		if isvalid(target.Unit_Info) then
+			target.Unit_Info:GetDamage(dmg)
+		else
+			---@type Structure_Info
+			local structInfo = target:GetComponent("script.Structure_Info")
+			if structInfo ~= nil then
+				structInfo:GetDamage(dmg)
+			end
+		end
+		_MatchStatsLogic:ClearAttacker()
+	end
+
+	method void TriggerOnHitAbility(Unit_Info info, Entity target)
+		-- 피해가 실제로 들어간 직후 호출된다. RoleKey에 따라 대상에게 추가 효과를 건다(피해 없이 상태이상만 있는 것도 포함).
+		if not isvalid(target) then return end
+		local roleKey = info.RoleKey
+		
+		if roleKey == "FireAssault" then
+			self:ApplySplash(target)
+		elseif roleKey == "RangedPoison" then
+			self:ApplyStatusTo(target, "poison", info.AbilityValue, info.AbilityDuration)
+		elseif roleKey == "RangedFrost" then
+			self:ApplyStatusTo(target, "slow", info.AbilityValue, info.AbilityDuration)
+		elseif roleKey == "RangedCurse" then
+			self:ApplyStatusTo(target, "atkslow", info.AbilityValue, info.AbilityDuration)
+		elseif roleKey == "EliteAfflictor" then
+			-- 복합 상태이상(독+저주). PDF 기준 고정 수치: 독 2/초 5초, 저주(공속-20%) 3초.
+			self:ApplyStatusTo(target, "poison", 2, 5)
+			self:ApplyStatusTo(target, "atkslow", 0.2, 3)
+		end
+	end
+
+	method void ApplyStatusTo(Entity target, string kind, number value, number duration)
+		-- 대상의 StatusEffectComponent를 찾아 상태이상을 위임한다. 컴포넌트가 없는 대상(구조물 등)은 조용히 무시.
+		if value <= 0 or duration <= 0 then return end
+		---@type StatusEffectComponent
+		local se = target:GetComponent("script.StatusEffectComponent")
+		if se == nil then return end
+		if kind == "poison" then
+			se:ApplyPoison(value, duration)
+		elseif kind == "slow" then
+			se:ApplySlow(value, duration)
+		elseif kind == "atkslow" then
+			se:ApplyAttackSlow(value, duration)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method table GetAreaUnitTargets(Vector2 center, number radius)
+		local sim = _CollisionService:GetSimulator(self.Entity)
+		local result = {}
+		local seen = {}
+		if sim == nil then return result end
+		local info = self.Entity.Parent.Unit_Info
+		for _, group in ipairs({"Monster", "Unit", "HitBox"}) do
+			local hits = sim:OverlapCircleAll(group, center, radius)
+			if hits ~= nil then
+				for i = 1, #hits do
+					local e = hits[i].Entity
+					if isvalid(e) and not seen[e] and (e.Unit_Info ~= nil or e:GetComponent("script.UnitHitComponent") ~= nil) and info:CanTargetForCombat(e) then
+						seen[e] = true
+						table.insert(result, e)
+					end
+				end
+			end
+		end
+		return result
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplySplash(Entity primaryTarget)
+		-- FireAssault: 주 대상 외 주변 'Monster' 그룹 유닛에게 splash 비율(AbilityValue) 만큼 추가 피해.
+		if not isvalid(primaryTarget) then return end
+		local info = self.Entity.Parent.Unit_Info
+		local splashDamage = math.floor(self.damage * info.AbilityValue)
+		if splashDamage <= 0 then return end
+		
+		local center = primaryTarget.TransformComponent.WorldPosition:ToVector2()
+		for _, e in ipairs(self:GetAreaUnitTargets(center, 1.5)) do
+			if e ~= primaryTarget then self:ApplyDamageToTarget(e, splashDamage) end
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplyAoeDamage(number radius)
+		-- 대상 위치를 중심으로 반경 안의 'Monster' 그룹 유닛 전체에 피해.
+		if not isvalid(self.target) then return end
+		
+		local center = self.target.TransformComponent.WorldPosition:ToVector2()
+		local dealt = {}
+		local dmg = self.damage + _UpgradeLogic:AttackBonus(self.Entity.Parent.Unit_Info)
+		for _, e in ipairs(self:GetAreaUnitTargets(center, radius)) do
+			dealt[e] = true
+			self:ApplyDamageToTarget(e, dmg)
+		end
+		
+		-- 콜라이더 필터로 대상이 빠졌으면 최소한 대상은 맞춘다.
+		if isvalid(self.target) and not dealt[self.target] then
+			self:ApplyDamageToTarget(self.target, dmg)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void AttackMotion(string style, Unit_Info info)
+		-- 서버: 스타일별 연출을 결정해 전 클라이언트에 방송한다(스윙 애니메이션 + 임팩트 이펙트).
+		-- ranged 는 서버가 투사체를 직접 스폰(전역 동기화)하고, 클라이언트에는 스윙 모션만 알린다.
+		if not isvalid(self.target) then
+			self:PlayAttackFx(false, Vector3(0, 0, 0))
+			return
+		end
+		
+		local hitPos = self.target.TransformComponent.WorldPosition + Vector3(0, 0.3, 0)
+		if style == "ranged" and info.ProjectileRUID ~= "" then
+			self:FireProjectile(info)
+			self:PlayAttackFx(false, hitPos)
+			return
+		end
+		
+		-- melee / aoe (또는 투사체 외형이 없는 ranged): 대상 위치에 임팩트 이펙트 1회.
+		self:PlayAttackFx(true, hitPos)
+	end
+
+	@ExecSpace("Multicast")
+	method void PlayAttackFx(boolean withImpact, Vector3 hitPos)
+		-- 모든 클라이언트: 공격 스윙 애니메이션을 다시 재생하고, 필요하면 대상 위치에 임팩트 이펙트를 재생한다.
+		if not isvalid(self.Entity) or not isvalid(self.Entity.Parent) then return end
+		---@type UnitStateComponent
+		local st = self.Entity.Parent:GetComponent("script.UnitStateComponent")
+		if st ~= nil then st:NotifyAttackSwing() end
+		
+		if withImpact then
+			local info = self.Entity.Parent.Unit_Info
+			if info ~= nil then self:PlayHitEffect(info, hitPos) end
+		end
+	end
+
+	method void PlayHitEffect(Unit_Info info, Vector3 pos)
+		-- EffectService 는 클립을 처음부터 끝까지 1회 재생하고 자동 제거한다. (PlayAttackFx Multicast 문맥 → 각 클라 로컬 재생)
+		if info.HitEffectRUID == "" then
+			return
+		end
+		local s = info.HitEffectScale
+		_FogOfWarLogic:PlayEffectSeen(
+			info.HitEffectRUID, self.Entity, pos, 0, Vector3(s, s, 1), false,
+			{ SortingLayer = "MapLayer0", OrderInLayer = 30 })
+	end
+
+	@ExecSpace("ServerOnly")
+	method void FireProjectile(Unit_Info info)
+		-- 전투는 서버에서만 돌므로 공격 1회당 투사체도 정확히 1발만 서버에서 스폰된다(전역 동기화).
+		local from = self.Entity.TransformComponent.WorldPosition
+		_ProjectileLogic:Fire(
+			info.ProjectileRUID, info.HitEffectRUID,
+			from, self.target,
+			info.ProjectileSpeed, info.HitEffectScale, info.ProjectileScale)
+	end
+
+	method void MoveToTarget()
+		-- 목표의 "정확한 위치"가 아니라, 이 유닛의 공격 사거리(AttackRange)만큼 떨어진 지점까지만
+		-- 이동하도록 한다. 예전에는 목표 위치까지 그대로 이동을 명령하고, 도중에 사거리 트리거에
+		-- 걸리면(HandleTriggerEnterEvent) 멈추는 것에만 의존했는데 — 그 판정이 늦게 들어오면
+		-- (예: 사거리 동기화 타이밍) 원거리 유닛도 근접 유닛과 똑같이 상대 코앞까지 걸어가버리는
+		-- 문제가 있었다(실측 확인: 사거리 1.8인 원거리 유닛이 근접 유닛과 동일하게 0.7까지 붙음).
+		-- 이동 목표 자체를 사거리 지점으로 잡으면 그 판정이 늦어도 더 이상 걸어가지 않는다.
+		local parent = self.Entity.Parent
+		local targetPos = self.target.TransformComponent.WorldPosition:ToVector2()
+		local myPos = parent.TransformComponent.WorldPosition:ToVector2()
+		
+		local info = parent.Unit_Info
+		local range = (info ~= nil and info.AttackRange) or 0
+		if range <= 0 then range = self.MeleeRange end
+		
+		local toTarget = targetPos - myPos
+		local dist = toTarget:Magnitude()
+		
+		-- 이미 사거리 안이면(박스 판정과 이 유클리드 거리 판정이 미세하게 어긋날 수 있음) 절대
+		-- 더 다가가지 않는다 — 여기서 목표 위치로 기본값을 잡아버리면(예전 버그) 사거리 판정이
+		-- 어긋난 순간마다 코앞(거리 0)까지 계속 다가가버린다.
+		if dist <= range or dist <= 0.0001 then
+			return
+		end
+		
+		-- 사거리의 90%까지만 접근해, 트리거 경계에 딱 걸쳐 판정이 애매해지는 것을 피한다.
+		local stopPos = targetPos - toTarget:Normalize() * (range * 0.9)
+		parent.UnitMoveComponent:FindTarget(stopPos)
+	end
+
+	method void initAttack()
+		-- 새 공격 시퀀스 시작 전 상태 초기화. deltaTime도 함께 리셋해 쿨타임이 이전 유휴/이동 시간을 반영해 즉발되지 않도록 하고,
+		-- 스윙 잠금도 해제해 이전 모션이 다음 교전을 막지 않도록 한다.
+		self.ShouldMove = false
+		self.target = nil
+		self.IsAttack = false
+		-- 2026-10-07: 예전엔 0으로 리셋해 사거리에 들어가고도 쿨타임 1회만큼 서 있다가 첫 타를 쳤다(모션만 먼저 나오고
+		-- 피해는 늦게 들어가 "후딜" 느낌 — 카트베어 피드백). 이제 마지막 타격 뒤 흐른 시간을 유지한다(스타처럼 쿨이 찼으면 바로 친다).
+		-- 대상을 바꿔도 시간이 다시 채워지지는 않으므로 대상 바꾸기로 쿨타임을 건너뛸 수는 없다.
+		self.deltaTime = math.min(self.deltaTime, math.max(self.AttackCoolTime, 0))
+		self._swingLocked = false
+		self._swingTimer = 0
+		self._firstStrike = true
+		self._T.autoAcq = false
+	end
+
+	method void CancelAttack()
+		-- 정지(S) 등 외부 명령으로 공격/추격을 완전히 취소할 때 호출한다.
+		self:initAttack()
+	end
+
+	@EventSender("Self")
+	handler HandleTriggerEnterEvent(TriggerEnterEvent event)
+		--------------- Native Event Sender Info ----------------
+		-- Sender: TriggerComponent
+		-- Space: Server, Client
+		---------------------------------------------------------
+		
+		-- Parameters
+		local TriggerBodyEntity = event.TriggerBodyEntity
+		---------------------------------------------------------
+		-- 추격/공격 판정은 서버에서만 한다(클라이언트의 트리거 이벤트는 무시).
+		if not self:IsServer() then return end
+		if self.ShouldMove then
+			if TriggerBodyEntity == self.target then
+				local parent = self.Entity.Parent
+				parent.UnitMoveComponent:Stop()
+				self:AttackTarget(self.target)
+			end
+		end
+	end
+
+end

@@ -1,0 +1,60 @@
+@Component
+script MechanicHeroDataComponent extends Component
+
+	method table BuildKit()
+		    -- 피해/공격 주기/수명과 시각 배율을 분리한 메카닉 초기 밸런스 데이터다.
+		    return {
+		        name = "메카닉",
+		        Q = { name = "매시브 파이어", shape = "front", length = 10, width = 4, damage = 90,
+		            effectBaseLength = 4.25, effectBaseWidth = 2, cooldown = 2, castWindup = 0.18, maxTargets = 8 },
+		        W = { name = "로봇 런처", shape = "point", damage = 25, cooldown = 35, maxCharges = 2,
+		            recharge = 35, duration = 20, maxLaunchers = 2, range = 6, attackInterval = 1.2,
+		            fireDelay = 0.27, fireDuration = 0.45, projectileSpeed = 8, hitRadius = 0.35,
+		            projectileLifetime = 4, visualScale = 1.35, projectileScale = 0.8, placementRange = 5 },
+		        E = { name = "워머신 : 타이탄", shape = "point", damage = 450, cooldown = 18,
+		            length = 6.7, width = 4.9, summonDuration = 2.88, frameDuration = 0.06,
+		            fallDuration = 1.89, fallFrameDuration = 0.09, visualScale = 0.7,
+		            behindOffset = 1.2, sequenceHitFrames = { 8, 17 }, fallHitFrames = { 5, 11, 17 },
+		            hitsPerBurst = 5, fallVisualCenter = Vector2(3.825, -2.56), maxTargets = 24 },
+		        R = { name = "메탈아머 : 전탄발사", shape = "front", damage = 20, cooldown = 60,
+		            length = 6.25, width = 3.2, windup = 1.38, duration = 7, tickInterval = 0.1,
+		            tickCount = 70, endDuration = 2.16, visualScale = 0.7, maxTargets = 16 },
+		        T = { name = "메카 캐리어", shape = "self", damage = 10, cooldown = 90,
+		            windup = 2.43, duration = 12, cycleInterval = 2, cycleCount = 6, projectileCount = 5,
+		            hitsPerProjectile = 4, range = 8, projectileSpeed = 8, hitRadius = 0.35,
+		            projectileLifetime = 5, fireDelay = 0.18, fireDuration = 0.54, endDuration = 1.08,
+		            visualScale = 0.65, projectileScale = 1, height = 1.8, followRate = 8 },
+		    }
+	end
+
+	method table BuildVfx()
+		    -- 제공된 RUID만 사용한다. E sprite는 문자열 정렬 없이 0~22 순서를 명시한다.
+		    return {
+		        Q = { effect = "e99a05edc37541d698e0a85c18bad28a", impact = "59938b944a384a568144cba040ba0baf",
+		            castVisualScaleMultiplier = 0.65, impactScaleMultiplier = 1 },
+		        W = { idle = "6b9fbbbb7bfe4d46b95c309f7d7c9289", fire = "82f638c8b84e4c589cd7ebd97644a9d5",
+		            projectile = "439c73b2fd2c41fdb80a986d96fa8be8", impact = "b4606e4e2af54261a99078d6e2d1f174" },
+		        E = { effect = "b4baba8de8a947ea9b34722fa4799170", effect2 = "cea5b35969aa456682300b77cfa990ea",
+		            impact = "e4f42e43fc9e45619d596f9e83c29731", frames = {
+		                "cb2836dd6cf04dfcb458c816e2ab8041", "638832e491634c9b8f91f58d997937f0",
+		                "0a5aac19703a48d1b329c92bb5d78b8d", "dac9c882138347e097677af222f456e7",
+		                "b0d0f1156ea44e4e94e9e884cf3c1ad1", "03e38fb82da34d95bd93ab27a5d6ba27",
+		                "2fd833c728304683b0fcbd68e5a9f82c", "5e3956ad659a4a24ac36775262a28580",
+		                "e4bb90209faa449ebebdaf49ace254c6", "6f4c574255ac45078fa0a31933c43310",
+		                "7fc3513caa5340ddae753fccf5e8f45a", "55f55581d5a945e5b9dd99c99c91f80a",
+		                "6e0c4b8202c94b0a9bf1fd6cf398f1b3", "76aff73e15d54599978b4c400410c6b6",
+		                "2f494205369b474ebbe1fe6a5d62eb20", "24bb2e2d82de4031b20ac887a8391806",
+		                "9937f56dea4c404f877f2b2af00f37e2", "47f942385e754f928f34f00e2fe750c4",
+		                "9ba7e1a2a3a04429828a39a3f2a0980c", "1942a0106977413ea26f261032379a2e",
+		                "30d6038d7c624b8c97e73286c2d19aeb", "034b83df938644f08fdbefb42d3ee1c3",
+		                "82f40b1a83a44b89a822219cf0c48d88" } },
+		        R = { effect = "b64e41d2e3774276aa7db7bdb74410b9", foreground = "67a9ec7922374ed79f28d6bb3096aff4",
+		            background = "3256613029a3446aa783b3a1d309a347", effect2 = "63334f6f8b9d419e83baa47696287c8b",
+		            impact = "ae2d3b93864c432aa5270d5b83bf6bee" },
+		        T = { effect = "f746aaec67084a0aa893d63014bd4f48", idle = "700c9bff1e2a40b686428962d7101fce",
+		            fire = "2848caba295a4b3eb676e096cd5b8ca1", projectile = "19b8d24dd003412c9d5f571e855b7c4c",
+		            impact = "0a9142bb3e6144d8a2b87de5971cd079", effect2 = "cd635dff027645b69ce5d1500ef78a1e" },
+		    }
+	end
+
+end

@@ -1,0 +1,24 @@
+@Component
+script HealerAction extends ActionBase
+
+	@DisplayName("힐 버튼 아이콘 RUID")
+	property string HealButtonRuid = ""
+
+	method table ChangeActionUI()
+		local info = self.Entity.Unit_Info
+		if info == nil or info.RoleKey ~= "RangedHealer" then
+			return {}
+		end
+		
+		return {
+			{
+				ActionID = "Heal",
+				UnitModel = "",
+				Ruid = self.HealButtonRuid,
+				-- 어느 힐러가 힐 버튼을 눌렀는지 알아야 그 힐러의 PriorityHealTarget에 대입할 수 있다.
+				Building = self.Entity,
+			},
+		}
+	end
+
+end

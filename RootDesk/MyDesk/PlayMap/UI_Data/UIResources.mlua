@@ -1,0 +1,167 @@
+@Logic
+script UIResources extends Logic
+
+	@DisplayName("이동(M) 아이콘")
+	property string CmdMove = "1e2d82583ca04c41a1ea766e64a8f2ad"
+
+	@DisplayName("정지(S) 아이콘")
+	property string CmdStop = "1e8ba2514a51433a93d63a12ee9822f5"
+
+	@DisplayName("공격(A) 아이콘")
+	property string CmdAttack = "0dab931df6c441d592f5fd0063c70a31"
+
+	@DisplayName("순찰(P) 아이콘")
+	property string CmdPatrol = "8b2308b6364249f499d80ddcf3f414a5"
+
+	@DisplayName("저지(H) 아이콘")
+	property string CmdHold = "cd1c04dcd608415e97f98582af8d0b8c"
+
+	@DisplayName("건설(B) 아이콘 — 비우면 일꾼 WorkerAction.BuildButtonRuid 사용")
+	property string CmdBuild = ""
+
+	@DisplayName("고급 건설(V) 아이콘 — 비우면 글자 '고급 건설'")
+	property string CmdBuildAdvanced = "9e0443dddda54c84bb09fd0720ae9946"
+
+	@DisplayName("채집(G) 아이콘 — 비우면 일꾼 WorkerAction.GatherButtonRuid 사용")
+	property string CmdGather = ""
+
+	@DisplayName("자원 반환(C) 아이콘")
+	property string CmdReturn = "86322e42b03548bf87817000822418e9"
+
+	@DisplayName("수리(F) 아이콘")
+	property string CmdRepair = "07eeb04c91154d039432e8c226b83b98"
+
+	@DisplayName("고유 능력 기본 아이콘(개별 능력 아이콘이 없을 때)")
+	property string CmdAbility = ""
+
+	@DisplayName("영웅 스킬 기본 아이콘")
+	property string CmdHeroSkill = "1aeeaee2cf774ffcabee595c54ce121c"
+
+	@DisplayName("취소 아이콘")
+	property string CmdCancel = "9c2c02f5c76e4d739c6e8a0c69d15364"
+
+	@DisplayName("뒤로(ESC) 아이콘")
+	property string CmdBack = "470aecfdc97a4bf18d31c9a105c04707"
+
+	@DisplayName("인구 아이콘")
+	property string HudPopulation = "66a13a1fba204052b15ff08114037e8b"
+
+	@DisplayName("잠금 아이콘")
+	property string HudLock = "fcca1e3ef2424e0d938506c02e7a4eba"
+
+	@DisplayName("고유 능력: 도발(D)")
+	property string AbTaunt = "f33995752e3a4bba9ee4513550a30f74"
+
+	@DisplayName("고유 능력: 방어 자세(D)")
+	property string AbDefense = "c6d0e31635f742f0936b0d889922082b"
+
+	@DisplayName("고유 능력: 방어막(D)")
+	property string AbBarrier = "f4ddd2b79b16474ea39200347799a900"
+
+	@DisplayName("고유 능력: 돌진(C)")
+	property string AbCharge = "724b53e30563436cad11a7a1d78b6586"
+
+	@DisplayName("고유 능력: 공격력 오라(U)")
+	property string AbAuraAttack = "b2910d899cc0467e895cbb2757d767b2"
+
+	@DisplayName("고유 능력: 시야 공유 오라(U)")
+	property string AbAuraVision = "a00a2f1bec44454d9af64734dd3f451c"
+
+	@DisplayName("고유 능력: 독 투척(I)")
+	property string AbThrowPoison = "7a6672904c89485394b12cbe662dde15"
+
+	@DisplayName("고유 능력: 냉기 투척(I)")
+	property string AbThrowIce = "fb882ec54ea0470c9c626f1544d9a6b4"
+
+	@DisplayName("고유 능력: 저주 투척(I)")
+	property string AbThrowCurse = "671c1b4f8f5948b8b2af7a28ed9c99df"
+
+	@DisplayName("고유 능력: 복합 투척(I)")
+	property string AbThrowMixed = "2b0bbb6371264089865ffa7c0a3aeacc"
+
+	@DisplayName("고유 능력: 물리 강타(I)")
+	property string AbStrikePhysical = "0598a005e4d342228afd1ac50e667ae2"
+
+	@DisplayName("고유 능력: 화염 폭발(I)")
+	property string AbBlastFire = "7f2c22a5fd6d4868bb9c6b6379324f0b"
+
+	@DisplayName("고유 능력: 암흑 강타(I)")
+	property string AbStrikeDark = "19115ebbf67a41b7bcc88d34cf00fd6d"
+
+	@DisplayName("고유 능력: 번개 공격(I)")
+	property string AbStrikeLightning = "1a7184852bd8429994e0014327bf87d8"
+
+	@DisplayName("고유 능력: 지뢰(I)")
+	property string AbMine = "ae3706b1177f4c588bd9f2d987443cf3"
+
+	@DisplayName("고유 능력: 은신(K)")
+	property string AbStealth = "6a6a2f44d4d24c119a6473b806d4134f"
+
+	@DisplayName("고유 능력: 폭격(N)")
+	property string AbBombard = "a2a39396c81a4fef8eebda9854d75545"
+
+	@DisplayName("고유 능력: 시즈 모드(O)")
+	property string AbSiege = "f6df9933e55f48e58ca876a54d2f26c8"
+
+	@DisplayName("고유 능력: 탑승(L)")
+	property string AbMount = "7de90a833b3e4cd4b5d6b5be6a3ef961"
+
+	@DisplayName("고유 능력: 치유(L)")
+	property string AbHeal = "c55a8f3af3d246668760a84a8752cb79"
+
+	@DisplayName("유닛 체력바 스프라이트(흰색 단색, 스크립트가 색 입힘)")
+	property string UnitHpBar = "34933a8d498b481e840ee60438145b72"
+
+	@DisplayName("선택 테두리 스프라이트(흰색 타원 링, 스크립트가 색 입힘)")
+	property string UnitSelectRing = "de49f4864507496ca60644db5fbffc85"
+
+	method string GetRuid(string key)
+		-- key("CmdMove", "AbTaunt" 등 위 프로퍼티 이름)에 해당하는 RUID를 돌려준다. 없는 키면 빈 문자열.
+		local map = {
+			CmdMove = self.CmdMove,
+			CmdStop = self.CmdStop,
+			CmdAttack = self.CmdAttack,
+			CmdPatrol = self.CmdPatrol,
+			CmdHold = self.CmdHold,
+			CmdBuild = self.CmdBuild,
+			CmdBuildAdvanced = self.CmdBuildAdvanced,
+			CmdGather = self.CmdGather,
+			CmdReturn = self.CmdReturn,
+			CmdRepair = self.CmdRepair,
+			CmdAbility = self.CmdAbility,
+			CmdHeroSkill = self.CmdHeroSkill,
+			CmdCancel = self.CmdCancel,
+			CmdBack = self.CmdBack,
+			HudPopulation = self.HudPopulation,
+			HudLock = self.HudLock,
+			AbTaunt = self.AbTaunt,
+			AbDefense = self.AbDefense,
+			AbBarrier = self.AbBarrier,
+			AbCharge = self.AbCharge,
+			AbAuraAttack = self.AbAuraAttack,
+			AbAuraVision = self.AbAuraVision,
+			AbThrowPoison = self.AbThrowPoison,
+			AbThrowIce = self.AbThrowIce,
+			AbThrowCurse = self.AbThrowCurse,
+			AbThrowMixed = self.AbThrowMixed,
+			AbStrikePhysical = self.AbStrikePhysical,
+			AbBlastFire = self.AbBlastFire,
+			AbStrikeDark = self.AbStrikeDark,
+			AbStrikeLightning = self.AbStrikeLightning,
+			AbMine = self.AbMine,
+			AbStealth = self.AbStealth,
+			AbBombard = self.AbBombard,
+			AbSiege = self.AbSiege,
+			AbMount = self.AbMount,
+			AbHeal = self.AbHeal,
+			UnitHpBar = self.UnitHpBar,
+			UnitSelectRing = self.UnitSelectRing,
+		}
+		local v = map[key]
+		if v == nil then
+			return ""
+		end
+		return v
+	end
+
+end

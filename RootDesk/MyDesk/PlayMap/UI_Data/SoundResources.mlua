@@ -1,0 +1,161 @@
+@Logic
+script SoundResources extends Logic
+
+	@DisplayName("BGM 볼륨(0~1)")
+	property number BgmVolume = 0.45
+
+	@DisplayName("BGM 대기실(sound-535) — 비우면 대기실은 무음")
+	property string BgmLobby = "df68e970951740de8f8235d1e5316b23:120.1"
+
+	@DisplayName("BGM 로비 광장(자유시장, sound-127) — 비우면 대기실 BGM을 쓴다")
+	property string BgmPlaza = "3926b48759d246dc8464a876ff7fa5ce:137.6"
+
+	@DisplayName("BGM 모험가(인게임 순환: sound-375 → 255 → 2)")
+	property string BgmAdv = "a8d9d161381c4f7bab3b95f8871662eb:205.8|7a8f657721f7432fa0804dfbf2b8aadc:260.3|00ae4af8800c4e2587cc3118c8b88beb:103.3"
+
+	@DisplayName("BGM 시그너스(인게임 순환: sound-14 → 422 → 296)")
+	property string BgmCyg = "063f1dddbf8b4a1bb9067b0c7a196922:189.6|ba8ce178a584420d98e6e9c9db792881:149.5|8a81d1865d1f4152b4cbf800efed62af:125.6"
+
+	@DisplayName("BGM 에델슈타인(인게임 순환: sound-440 → 388 → 237)")
+	property string BgmEde = "bf1f1c64293943baa5ce66a2b6c8ce76:178.9|af3acec8784a4f80a0a354479b2132ff:165.0|732c8aeac0624d21bdcfc89bc6244105:144.1"
+
+	@DisplayName("BGM 승리 — 비우면 경기 종료 시 BGM만 멈춤")
+	property string BgmVictory = ""
+
+	@DisplayName("BGM 패배 — 비우면 경기 종료 시 BGM만 멈춤")
+	property string BgmDefeat = ""
+
+	@DisplayName("길이를 모르는 트랙에 쓸 기본 길이(초)")
+	property number DefaultTrackLength = 180
+
+	@DisplayName("유닛 울음(선택) 볼륨")
+	property number UnitCryVolume = 0.7
+
+	@DisplayName("유닛 공격 볼륨")
+	property number UnitAttackVolume = 0.45
+
+	@DisplayName("유닛 피격 볼륨")
+	property number UnitHitVolume = 0.5
+
+	@DisplayName("유닛 사망 볼륨")
+	property number UnitDieVolume = 0.7
+
+	@DisplayName("유닛 소리가 들리는 범위 — 카메라 중심에서 가로(월드 단위)")
+	property number UnitSoundRangeX = 8
+
+	@DisplayName("유닛 소리가 들리는 범위 — 카메라 중심에서 세로(월드 단위)")
+	property number UnitSoundRangeY = 5
+
+	@DisplayName("같은 소리 최소 재생 간격(초) — 여러 유닛이 동시에 때릴 때 겹침 방지")
+	property number SameSoundInterval = 0.08
+
+	@DisplayName("짧은 구간(0.25초) 안 최대 유닛 소리 수")
+	property integer MaxUnitSoundsPerWindow = 8
+
+	@HideFromInspector
+	property table _lastPlayed = {}
+
+	@HideFromInspector
+	property number _windowStart = 0
+
+	@HideFromInspector
+	property integer _windowCount = 0
+
+	@ExecSpace("ClientOnly")
+	method boolean InHearingRange(Entity e)
+		-- 실제 화면(네 모서리의 월드 좌표 + 여유) 안이고, 내 시야에서 보이는 엔티티만 소리를 낸다.
+		if not isvalid(e) then return false end
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) then return false end
+		local p = e.TransformComponent.WorldPosition
+		local bl = _UILogic:ScreenToWorldPosition(Vector2(0, 0))
+		local tr = _UILogic:ScreenToWorldPosition(Vector2(_UILogic.ScreenWidth, _UILogic.ScreenHeight))
+		local margin = 1.5
+		if p.x < math.min(bl.x, tr.x) - margin or p.x > math.max(bl.x, tr.x) + margin then return false end
+		if p.y < math.min(bl.y, tr.y) - margin or p.y > math.max(bl.y, tr.y) + margin then return false end
+		if not _VisionLogic:IsShownLocally(e) then return false end
+		return true
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean TryConsume(string ruid)
+		-- 같은 RUID 연타와 순간 동시 재생 수를 제한한다. 재생해도 되면 true.
+		local now = _UtilLogic.ElapsedSeconds
+		local last = self._lastPlayed[ruid]
+		if last ~= nil and now - last < self.SameSoundInterval then return false end
+		if now - self._windowStart > 0.25 then
+			self._windowStart = now
+			self._windowCount = 0
+		end
+		if self._windowCount >= self.MaxUnitSoundsPerWindow then return false end
+		self._windowCount = self._windowCount + 1
+		self._lastPlayed[ruid] = now
+		return true
+	end
+
+	@ExecSpace("ClientOnly")
+	method number SoundMult(Entity e)
+		-- 영웅 유닛이 내는 소리는 설정의 "영웅 소리", 나머지 유닛은 "유닛 소리" 배율을 쓴다.
+		if isvalid(e) and e:GetComponent("script.HeroUnit") ~= nil then return _GameSettingsLogic.HeroMult end
+		return _GameSettingsLogic.UnitMult
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayUnitSound(Entity e, string ruid, string kind)
+		-- kind: "attack" / "hit" / "die". 범위·시야·중복 검사를 통과하면 로컬 재생.
+		if ruid == nil or ruid == "" then return end
+		if not self:InHearingRange(e) then return end
+		if not self:TryConsume(ruid) then return end
+		local vol = self.UnitAttackVolume
+		if kind == "hit" then vol = self.UnitHitVolume end
+		if kind == "die" then vol = self.UnitDieVolume end
+		vol = vol * self:SoundMult(e)   -- 설정 창 "유닛 소리"(영웅이면 "영웅 소리")
+		if vol <= 0.001 then return end
+		_SoundService:PlaySound(ruid, vol)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayUnitCry(Entity e)
+		-- 선택 시 대표 유닛의 울음. 화면 범위와 무관하게(내가 고른 것이므로) 재생하되 연타만 막는다.
+		if not isvalid(e) then return end
+		---@type UnitStateComponent
+		local st = e:GetComponent("script.UnitStateComponent")
+		if st == nil or st.CrySoundRUID == "" then return end
+		local now = _UtilLogic.ElapsedSeconds
+		local key = "cry:" .. st.CrySoundRUID
+		local last = self._lastPlayed[key]
+		if last ~= nil and now - last < 0.3 then return end
+		self._lastPlayed[key] = now
+		local vol = self.UnitCryVolume * self:SoundMult(e)
+		if vol <= 0.001 then return end
+		_SoundService:PlaySound(st.CrySoundRUID, vol)
+	end
+
+	method table GetBgmList(string key)
+		-- key: "plaza"(로비 광장) / "lobby"(방 대기실) / "Adv" / "Cyg" / "Ede". 반환: { {ruid=..., length=...}, ... } (비어 있을 수 있음).
+		local raw = ""
+		if key == "plaza" then raw = (self.BgmPlaza ~= "") and self.BgmPlaza or self.BgmLobby
+		elseif key == "lobby" then raw = self.BgmLobby
+		elseif key == "Adv" then raw = self.BgmAdv
+		elseif key == "Cyg" then raw = self.BgmCyg
+		elseif key == "Ede" then raw = self.BgmEde
+		end
+		return self:ParseList(raw)
+	end
+
+	method table ParseList(string raw)
+		-- "ruid:len|ruid:len" → 테이블. 길이가 없거나 0 이하면 DefaultTrackLength.
+		local list = {}
+		if raw == nil or raw == "" then return list end
+		for token in string.gmatch(raw, "[^|]+") do
+			local ruid, len = string.match(token, "^%s*([%w]+)%s*:?%s*([%d%.]*)%s*$")
+			if ruid ~= nil and ruid ~= "" then
+				local n = tonumber(len)
+				if n == nil or n <= 0 then n = self.DefaultTrackLength end
+				table.insert(list, { ruid = ruid, length = n })
+			end
+		end
+		return list
+	end
+
+end

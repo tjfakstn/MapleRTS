@@ -1,0 +1,33 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "codeblock://70649e6a-4ec3-400a-9b0e-4aa62b788017",
+  "ContentType": "x-mod/codeblock",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "CoreVersion": {
+        "Major": 0,
+        "Minor": 2
+      },
+      "ScriptVersion": {
+        "Major": 1,
+        "Minor": 1
+      },
+      "Description": "",
+      "Id": "70649e6a-4ec3-400a-9b0e-4aa62b788017",
+      "Language": 1,
+      "Name": "HealerAction",
+      "Type": 1,
+      "Source": 0,
+      "Target": "codeblock://7ebb4172-6fa7-4f4e-8b45-4d8df7dfc6f5"
+    }
+  }
+}

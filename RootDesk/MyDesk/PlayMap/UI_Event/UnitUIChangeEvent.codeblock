@@ -1,0 +1,33 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "codeblock://ab980011-4459-4e0d-9b1b-7b85f5dd0cb3",
+  "ContentType": "x-mod/codeblock",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "CoreVersion": {
+        "Major": 0,
+        "Minor": 2
+      },
+      "ScriptVersion": {
+        "Major": 1,
+        "Minor": 1
+      },
+      "Description": "",
+      "Id": "ab980011-4459-4e0d-9b1b-7b85f5dd0cb3",
+      "Language": 1,
+      "Name": "UnitUIChangeEvent",
+      "Type": 3,
+      "Source": 0,
+      "Target": null
+    }
+  }
+}

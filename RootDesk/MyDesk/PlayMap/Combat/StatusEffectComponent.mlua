@@ -1,0 +1,103 @@
+@Component
+script StatusEffectComponent extends Component
+
+	@HideFromInspector
+	property any _poisonTimerId = nil
+
+	@HideFromInspector
+	property any _slowTimerId = nil
+
+	@HideFromInspector
+	property number _baseMoveSpeed = 0
+
+	@HideFromInspector
+	property any _atkSlowTimerId = nil
+
+	@HideFromInspector
+	property number _baseAttackCoolTime = 0
+
+	@ExecSpace("ServerOnly")
+	method void ApplyPoison(number dps, number duration)
+		-- 초당 dps 만큼 duration(초) 동안 지속피해를 준다. 이미 걸려있으면 갱신(리필)한다.
+		if not isvalid(self.Entity) or not isvalid(self.Entity.Unit_Info) then return end
+		if dps <= 0 or duration <= 0 then return end
+		
+		if self._poisonTimerId ~= nil then
+			_TimerService:ClearTimer(self._poisonTimerId)
+			self._poisonTimerId = nil
+		end
+		
+		local ticksLeft = math.floor(duration + 0.5)
+		local info = self.Entity.Unit_Info
+		self._poisonTimerId = _TimerService:SetTimerRepeat(function()
+			if not isvalid(self.Entity) or not isvalid(info) or info.IsDead then
+				if self._poisonTimerId ~= nil then
+					_TimerService:ClearTimer(self._poisonTimerId)
+					self._poisonTimerId = nil
+				end
+				return
+			end
+			info:GetDamage(math.floor(dps))
+			ticksLeft = ticksLeft - 1
+			if ticksLeft <= 0 and self._poisonTimerId ~= nil then
+				_TimerService:ClearTimer(self._poisonTimerId)
+				self._poisonTimerId = nil
+			end
+		end, 1.0)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplySlow(number ratio, number duration)
+		-- 이동속도를 ratio(0~1) 만큼 줄였다가 duration(초) 후 원래 값으로 되돌린다. 중첩 대신 갱신(리필)한다.
+		if not isvalid(self.Entity) or not isvalid(self.Entity.Unit_Info) then return end
+		if ratio <= 0 or duration <= 0 then return end
+		local info = self.Entity.Unit_Info
+		
+		if self._slowTimerId ~= nil then
+			_TimerService:ClearTimer(self._slowTimerId)
+		else
+			self._baseMoveSpeed = info.MoveSpeed
+		end
+		info.MoveSpeed = self._baseMoveSpeed * (1 - ratio)
+		
+		self._slowTimerId = _TimerService:SetTimerOnce(function()
+			if isvalid(self.Entity) and isvalid(info) then
+				info.MoveSpeed = self._baseMoveSpeed
+			end
+			self._slowTimerId = nil
+		end, duration)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplyAttackSlow(number ratio, number duration)
+		-- 대상 자신의 Weapon.AttackCoolTime을 늘려 공격속도를 ratio(0~1) 만큼 낮췄다가 duration(초) 후 원복한다.
+		if not isvalid(self.Entity) or not isvalid(self.Entity.Unit_Info) then return end
+		if ratio <= 0 or duration <= 0 or ratio >= 1 then return end
+		local info = self.Entity.Unit_Info
+		if not isvalid(info.Weapon) then return end
+		---@type Weapon
+		local weapon = info.Weapon:GetComponent("script.Weapon")
+		if weapon == nil then return end
+		
+		-- 공격 간격은 Weapon의 배율 표에 등록한다(대상 재지정 때 Weapon이 기본값을 다시 복사해도 저주가 유지된다).
+		if self._atkSlowTimerId ~= nil then
+			_TimerService:ClearTimer(self._atkSlowTimerId)
+		end
+		weapon:SetCooldownMultiplier("atkslow", "status", 1 / (1 - ratio))
+		
+		self._atkSlowTimerId = _TimerService:SetTimerOnce(function()
+			if isvalid(weapon) then
+				weapon:SetCooldownMultiplier("atkslow", "status", 1)
+			end
+			self._atkSlowTimerId = nil
+		end, duration)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnEndPlay()
+		if self._poisonTimerId ~= nil then _TimerService:ClearTimer(self._poisonTimerId) end
+		if self._slowTimerId ~= nil then _TimerService:ClearTimer(self._slowTimerId) end
+		if self._atkSlowTimerId ~= nil then _TimerService:ClearTimer(self._atkSlowTimerId) end
+	end
+
+end

@@ -1,0 +1,418 @@
+@Logic
+script VisionLogic extends Logic
+
+	@DisplayName("시야 판정 주기(초)")
+	property number TickInterval = 0.2
+
+	@DisplayName("게임 맵 이름")
+	property string PlayMapName = "map02"
+
+	@DisplayName("건설 중 건물 시야 비율")
+	property number ConstructionVisionRate = 0.5
+
+	@DisplayName("시야 반경 배율(전체)")
+	property number VisionRangeScale = 1.25
+
+	@DisplayName("서버 시야원 캐시 유효 시간(초)")
+	property number SourceCacheTtl = 0.1
+
+	@DisplayName("안개 속에서 숨길 스킬 연출 엔티티 이름 접두어(쉼표 구분)")
+	property string FxEntityPrefixes = "WorldFx_,GaleFx_,Fly_,Mechanic,NightWalker,JaguarRampage"
+
+	method string OwnerOf(Entity e)
+		-- 전투 엔티티의 소유자 UserId. 유닛/영웅(Unit_Info) → 건물(Structure_Info) → 소환체(UnitHitComponent.teamKey "P:<UserId>") 순.
+		-- 소유자가 없거나(중립, "") 전투 엔티티가 아니면 "".
+		if not isvalid(e) then return "" end
+		local uinfo = e.Unit_Info
+		if uinfo ~= nil then return uinfo.PlayerID end
+		local sinfo = e.Structure_Info
+		if sinfo ~= nil then return sinfo.PlayerID end
+		---@type UnitHitComponent
+		local hit = e:GetComponent("script.UnitHitComponent")
+		if hit ~= nil then
+			local key = hit.teamKey
+			if string.sub(key, 1, 2) == "P:" then return string.sub(key, 3) end
+		end
+		return ""
+	end
+
+	method boolean IsCombatEntity(Entity e)
+		-- 시야 판정 대상인지(Unit_Info / Structure_Info / UnitHitComponent 중 하나라도 있으면). 그 외(지형·이펙트·UI 등)는 항상 보인다.
+		if not isvalid(e) then return false end
+		return e.Unit_Info ~= nil or e.Structure_Info ~= nil or e:GetComponent("script.UnitHitComponent") ~= nil
+	end
+
+	method void AddStructureSource(table list, Entity e, string userId)
+		-- 완공/건설 중인 내 건물을 시야원으로 넣는다. 건설 중은 50 %(스펙 §4-1), 파괴는 제외(§4-2).
+		-- 탐지(Tech/FinalTech)는 완공된 건물만 한다 — 짓는 중인 탐지 건물이 은신을 드러내지 않도록.
+		local sinfo = e.Structure_Info
+		if sinfo == nil or sinfo.IsDestroyed or sinfo.PlayerID ~= userId then return end
+		local tf = e.TransformComponent
+		if not isvalid(tf) then return end
+		local r = sinfo.Vision * self.VisionRangeScale
+		local det = sinfo.IsDetector
+		if sinfo.IsUnderConstruction then
+			r = r * self.ConstructionVisionRate
+			det = false
+		end
+		if r <= 0 then return end
+		local p = tf.WorldPosition
+		table.insert(list, { x = p.x, y = p.y, r = r, det = det })
+	end
+
+	method table CollectSources(Entity map, string userId)
+		-- userId 소유의 시야원 목록 {x, y, r(반지름), det(탐지기 여부)}을 만든다(서버/클라 공통).
+		--  · 유닛/영웅: MyUnits 자식 중 Unit_Info.PlayerID == userId, 살아 있는 것(§9-1). 영웅도 MyUnits 자식이라 같이 잡힌다.
+		--  · 건물: MyStructures 자식 + 맵 직속 자식(HQ_<userId>, MyStructures가 없을 때의 폴백 스폰 위치).
+		--  · 재규어(UnitHitComponent만 있음)는 Unit_Info가 없어 시야를 제공하지 않는다(스펙 §7의 4.0은 미적용 — 보고 참고).
+		--  · 소울은 SpawnUnit.SetUnitdata에서 상시 탐지기(IsDetector=true)로 들어온다(U 토글은 추후).
+		local list = {}
+		if not isvalid(map) or userId == nil or userId == "" then return list end
+		
+		local group = map:GetChildByName("MyUnits")
+		if isvalid(group) then
+			for _, e in pairs(group.Children) do
+				local uinfo = e.Unit_Info
+				if uinfo ~= nil and not uinfo.IsDead and uinfo.PlayerID == userId and uinfo.Vision > 0 then
+					local tf = e.TransformComponent
+					if isvalid(tf) then
+						local p = tf.WorldPosition
+						table.insert(list, { x = p.x, y = p.y, r = uinfo.Vision * self.VisionRangeScale, det = uinfo.IsDetector })
+					end
+				end
+			end
+		end
+		
+		local structures = map:GetChildByName("MyStructures")
+		if isvalid(structures) then
+			for _, e in pairs(structures.Children) do
+				self:AddStructureSource(list, e, userId)
+			end
+		end
+		for _, e in pairs(map.Children) do
+			if e ~= group and e ~= structures then
+				self:AddStructureSource(list, e, userId)
+			end
+		end
+		return list
+	end
+
+	method table GetSourcesCached(Entity map, string userId)
+		-- 서버 전투 판정(CanTargetForCombat/AttackShape)은 매 프레임 여러 유닛이 부르므로 SourceCacheTtl 동안 같은 결과를 재사용한다.
+		if not isvalid(map) then return {} end
+		if self._T.srcCache == nil then self._T.srcCache = {} end
+		local now = _UtilLogic.ElapsedSeconds
+		local key = userId .. "@" .. tostring(map.Id)
+		local rec = self._T.srcCache[key]
+		if rec ~= nil and now - rec.t < self.SourceCacheTtl then
+			return rec.list
+		end
+		local list = self:CollectSources(map, userId)
+		self._T.srcCache[key] = { t = now, list = list }
+		return list
+	end
+
+	method boolean IsInSources(table sources, number x, number y, boolean detectorOnly)
+		-- (x, y)가 시야원 중 하나 안에 있는지. detectorOnly면 탐지기 원만 본다.
+		for i = 1, #sources do
+			local s = sources[i]
+			if (not detectorOnly) or s.det then
+				local dx = x - s.x
+				local dy = y - s.y
+				if dx * dx + dy * dy <= s.r * s.r then return true end
+			end
+		end
+		return false
+	end
+
+	method boolean IsVisibleWithSources(table sources, string userId, Entity target)
+		-- CollectSources 결과를 넘겨 받아 보임/안 보임을 판정한다(클라이언트 틱이 시야원을 한 번만 만들고 재사용하기 위한 분리).
+		if not isvalid(target) then return false end
+		if not self:IsCombatEntity(target) then return true end
+		local owner = self:OwnerOf(target)
+		-- 내 것은 항상 보인다. 중립(소유자 없음: 몬스터/광맥 등)도 안개가 없는 지금은 항상 보인다 — 시야는 "상대 플레이어" 전용.
+		if owner == "" or owner == userId then return true end
+		local tf = target.TransformComponent
+		if not isvalid(tf) then return true end
+		local p = tf.WorldPosition
+		if not self:IsInSources(sources, p.x, p.y, false) then return false end
+		-- 은신 유닛은 시야 안이어도 탐지기 반경 밖이면 안 보인다(스펙 §8-1).
+		local uinfo = target.Unit_Info
+		if uinfo ~= nil and uinfo.IsStealth then
+			return self:IsInSources(sources, p.x, p.y, true)
+		end
+		return true
+	end
+
+	method boolean IsVisibleTo(string userId, Entity target)
+		-- userId 플레이어에게 target이 보이는가. 내 것/중립/비전투 엔티티는 항상 true.
+		if not isvalid(target) then return false end
+		if not self:IsCombatEntity(target) then return true end
+		local owner = self:OwnerOf(target)
+		if owner == "" or owner == userId then return true end
+		local sources = self:GetSourcesCached(target.CurrentMap, userId)
+		return self:IsVisibleWithSources(sources, userId, target)
+	end
+
+	method boolean IsDetectedBy(string userId, Entity target)
+		-- 은신 전용 판정: target이 userId의 탐지기(소울/영웅/Tech·FinalTech) 반경 안에 있는가. 은신이 아니면 항상 true.
+		-- 서버 Unit_Info.CanTargetForCombat / HeroUnitSkill.AttackShape가 쓴다(스펙 §8-1).
+		if not isvalid(target) then return false end
+		local uinfo = target.Unit_Info
+		if uinfo == nil or not uinfo.IsStealth then return true end
+		if uinfo.PlayerID == userId then return true end
+		if userId == nil or userId == "" then return false end
+		local tf = target.TransformComponent
+		if not isvalid(tf) then return false end
+		local sources = self:GetSourcesCached(target.CurrentMap, userId)
+		local p = tf.WorldPosition
+		return self:IsInSources(sources, p.x, p.y, true)
+	end
+
+	method boolean IsShownLocally(Entity e)
+		-- 클라이언트: 마지막 틱에서 이 엔티티를 보이게 뒀는가(미니맵/오버레이/클릭 판정이 쓴다). 모르는 엔티티는 true.
+		if not isvalid(e) then return false end
+		local cache = self._T.visible
+		if cache == nil then return true end
+		local rec = cache[e.Id]
+		if rec == nil then return true end
+		return rec.shown
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- TickInterval마다 게임 맵(map02)에서만 시야 판정을 돌린다. 다른 맵이면 캐시를 비운다(로비/재경기).
+		self._T.acc = (self._T.acc or 0) + delta
+		if self._T.acc < self.TickInterval then return end
+		self._T.acc = 0
+		
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) or not isvalid(lp.PlayerComponent) then return end
+		local map = lp.CurrentMap
+		if not isvalid(map) or map.Name ~= self.PlayMapName then
+			self:ClearCache()
+			return
+		end
+		self:RefreshLocalVisibility(map, lp.PlayerComponent.UserId)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshLocalVisibility(Entity map, string me)
+		-- 내 시야원을 한 번 만들고, 상대 플레이어 소유의 유닛/건물/본진/영웅/소환체 전부에 보임/안 보임을 적용한다.
+		if self._T.visible == nil then self._T.visible = {} end
+		local sources = self:CollectSources(map, me)
+		local seen = {}
+		
+		local group = map:GetChildByName("MyUnits")
+		if isvalid(group) then
+			for _, e in pairs(group.Children) do
+				self:ApplyFor(e, sources, me, seen)
+			end
+		end
+		local structures = map:GetChildByName("MyStructures")
+		if isvalid(structures) then
+			for _, e in pairs(structures.Children) do
+				self:ApplyFor(e, sources, me, seen)
+			end
+		end
+		-- 맵 직속: HQ_<UserId>, 재규어(UnitHitComponent), MyStructures가 없을 때 폴백 스폰된 건물 등.
+		for _, e in pairs(map.Children) do
+			if e ~= group and e ~= structures then
+				self:ApplyFor(e, sources, me, seen)
+			end
+		end
+		
+		self:RefreshSnapshots(sources)
+		
+		-- 사라진(파괴/제거) 엔티티의 캐시는 지운다.
+		for id, rec in pairs(self._T.visible) do
+			if not seen[id] then
+				if isvalid(rec.e) and not rec.shown then self:ApplyVisible(rec.e, true) end
+				self._T.visible[id] = nil
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean IsFxEntity(Entity e)
+		-- 투사체(ProjectileComponent)나 영웅 스킬 연출용으로 맵에 스폰되는 엔티티(이름 접두어)인지.
+		if e:GetComponent("script.ProjectileComponent") ~= nil then return true end
+		if self._T.fxPrefixes == nil then
+			local list = {}
+			for token in string.gmatch(self.FxEntityPrefixes, "[^,%s]+") do table.insert(list, token) end
+			self._T.fxPrefixes = list
+		end
+		local name = e.Name
+		for _, prefix in ipairs(self._T.fxPrefixes) do
+			if string.sub(name, 1, #prefix) == prefix then return true end
+		end
+		return false
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ApplyFor(Entity e, table sources, string me, table seen)
+		-- 상대 플레이어 소유의 전투 엔티티만 캐시에 올리고 Visible을 맞춘다(내 것/비전투는 손대지 않음).
+		-- 안개가 켜져 있으면 투사체·스킬 연출 엔티티도 지금 위치가 내 시야 안일 때만 보인다(누가 쐈든).
+		if not isvalid(e) then return end
+		if not self:IsCombatEntity(e) then
+			if not _FogOfWarLogic.FogEnabled or not self:IsFxEntity(e) then return end
+			local tf = e.TransformComponent
+			if not isvalid(tf) then return end
+			local p = tf.WorldPosition
+			local fxShown = self:IsInSources(sources, p.x, p.y, false)
+			seen[e.Id] = true
+			local fxRec = self._T.visible[e.Id]
+			if fxRec ~= nil and fxRec.shown == fxShown then return end
+			self:ApplyVisible(e, fxShown)
+			return
+		end
+		local owner = self:OwnerOf(e)
+		if owner == me then return end
+		local shown = true
+		if owner == "" then
+			-- 중립 유닛·몬스터(Arda 등)는 안개(FogOfWarLogic)가 켜져 있을 때만, 스타처럼 내 시야 안에서만 보인다.
+			-- 중립 건물은 항상 보인다. 서버 전투 판정(IsVisibleWithSources)은 그대로 — 화면 표시만 바꾼다.
+			if e.Structure_Info ~= nil or not _FogOfWarLogic.FogEnabled then return end
+			local tf = e.TransformComponent
+			if not isvalid(tf) then return end
+			local p = tf.WorldPosition
+			shown = self:IsInSources(sources, p.x, p.y, false)
+		else
+			shown = self:IsVisibleWithSources(sources, me, e)
+		end
+		seen[e.Id] = true
+		local rec = self._T.visible[e.Id]
+		-- 적 건물 잔상(스타식): 본 적 있는 적 건물이 시야 밖으로 나가면 그 자리에 마지막 모습을 남기고,
+		-- 다시 보이면 잔상을 지운다. 처음부터 안 보이던 건물은 잔상이 없다.
+		if owner ~= "" and e.Structure_Info ~= nil then
+			if shown then
+				self:RemoveSnapshot(e.Id)
+			elseif rec ~= nil and rec.shown then
+				self:MakeSnapshot(e)
+			end
+		end
+		if rec ~= nil and rec.shown == shown then return end
+		self:ApplyVisible(e, shown)
+	end
+
+	@ExecSpace("ClientOnly")
+	method Entity SnapshotRoot(Entity map)
+		-- 잔상들을 모아 둘 그림 없는 컨테이너(FogSnapshots)를 맵 아래에 한 번 만든다.
+		local root = self._T.snapRoot
+		if isvalid(root) then return root end
+		if not isvalid(map) then return nil end
+		root = _SpawnService:SpawnByModelId(_FogOfWarLogic.CellModelId, "FogSnapshots", Vector3(0, 0, 0), map)
+		if root == nil then return nil end
+		root.SpriteRendererComponent.Enable = false
+		self._T.snapRoot = root
+		return root
+	end
+
+	@ExecSpace("ClientOnly")
+	method void MakeSnapshot(Entity e)
+		-- 적 건물의 현재 그림·위치·크기를 그대로 베낀 클라 로컬 엔티티를 남긴다(체력바·충돌·선택 없음). 안개가 꺼져 있으면 만들지 않는다.
+		if not _FogOfWarLogic.FogEnabled or not isvalid(e) then return end
+		if self._T.snaps == nil then self._T.snaps = {} end
+		if self._T.snaps[e.Id] ~= nil then return end
+		local src = e.SpriteRendererComponent
+		local tf = e.TransformComponent
+		if not isvalid(src) or not isvalid(tf) then return end
+		local root = self:SnapshotRoot(e.CurrentMap)
+		if root == nil then return end
+		local snap = _SpawnService:SpawnByModelId(_FogOfWarLogic.CellModelId, "FogSnapshot", Vector3(0, 0, 0), root)
+		if snap == nil then return end
+		local p = tf.WorldPosition
+		snap.TransformComponent.WorldPosition = p
+		snap.TransformComponent.Scale = tf.Scale
+		local sr = snap.SpriteRendererComponent
+		sr.SpriteRUID = src.SpriteRUID
+		sr.SortingLayer = src.SortingLayer
+		sr.OrderInLayer = src.OrderInLayer
+		sr.FlipX = src.FlipX
+		sr.Color = Color(1, 1, 1, 1)
+		self._T.snaps[e.Id] = { e = snap, x = p.x, y = p.y, owner = self:OwnerOf(e) }   -- owner: 미니맵 잔상 색(플레이어 고유 색)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RemoveSnapshot(string id)
+		-- 잔상 하나를 지운다(없으면 무시).
+		local snaps = self._T.snaps
+		if snaps == nil then return end
+		local rec = snaps[id]
+		if rec == nil then return end
+		if isvalid(rec.e) then _EntityService:Destroy(rec.e) end
+		snaps[id] = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshSnapshots(table sources)
+		-- 잔상 자리가 다시 내 시야에 들어오면 지운다 — 건물이 그대로면 진짜 건물이 보이고, 그사이 파괴됐으면 빈 땅이 보인다.
+		local snaps = self._T.snaps
+		if snaps == nil then return end
+		local remove = {}
+		for id, rec in pairs(snaps) do
+			if not isvalid(rec.e) or self:IsInSources(sources, rec.x, rec.y, false) then
+				table.insert(remove, id)
+			end
+		end
+		for _, id in ipairs(remove) do
+			self:RemoveSnapshot(id)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method table GetSnapshots()
+		-- 미니맵용: 잔상 목록 { [건물 Id] = { e, x, y } }.
+		return self._T.snaps or {}
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ApplyVisible(Entity e, boolean shown)
+		-- 본체와 자식(SelectRing/HpBarBg/HpBarFill/Attack_ 등) Visible을 함께 바꾸고 캐시에 기록한다.
+		-- 숨길 때 자식의 원래 Visible을 기억해 두고, 다시 보일 때 그대로 되돌린다(일꾼의 Meso 표시처럼 원래 꺼져 있던 자식이 켜지지 않게).
+		if not isvalid(e) then return end
+		if self._T.visible == nil then self._T.visible = {} end
+		local rec = self._T.visible[e.Id]
+		if shown then
+			e.Visible = true
+			-- 내가 숨긴 적이 있는 자식만 원래 값으로 되돌린다. 숨긴 기록이 없으면(처음 보이는 대상·재경기 직후) 자식은 건드리지 않는다.
+			-- 예전엔 기록이 없을 때 자식을 전부 Visible=true로 켜서, 원래 꺼져 있던 Attack_(사거리 판정용, 초기 개발용 발톱 스프라이트
+			-- 354ee1c7…)이 가끔 유닛 발밑에 보이는 버그가 있었다(2026-10-06).
+			local kids = (rec ~= nil) and rec.kids or nil
+			if kids ~= nil then
+				for _, child in pairs(e.Children) do
+					if isvalid(child) then
+						local prev = kids[child.Id]
+						if prev ~= nil then child.Visible = prev end
+					end
+				end
+			end
+			self._T.visible[e.Id] = { e = e, shown = true, kids = nil }
+		else
+			local kids = {}
+			for _, child in pairs(e.Children) do
+				if isvalid(child) then
+					kids[child.Id] = child.Visible
+					child.Visible = false
+				end
+			end
+			e.Visible = false
+			self._T.visible[e.Id] = { e = e, shown = false, kids = kids }
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ClearCache()
+		-- 맵을 떠날 때(로비/재경기) 숨겨 둔 엔티티를 되살리고 캐시를 비운다. 맵 언로드로 이미 사라진 엔티티는 건너뛴다.
+		if isvalid(self._T.snapRoot) then _EntityService:Destroy(self._T.snapRoot) end
+		self._T.snapRoot = nil
+		self._T.snaps = nil
+		local cache = self._T.visible
+		if cache == nil then return end
+		for id, rec in pairs(cache) do
+			if isvalid(rec.e) and not rec.shown then self:ApplyVisible(rec.e, true) end
+		end
+		self._T.visible = nil
+	end
+
+end

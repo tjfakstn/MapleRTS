@@ -1,0 +1,108 @@
+@Component
+script WorkerBuildState extends Component
+
+	@Sync
+	property string BuildingRuid = ""
+
+	@Sync
+	property number BuildTotalTime = 0
+
+	@Sync
+	property boolean IsBuilding = false
+
+	@Sync
+	property boolean FreeWhileBuilding = false
+
+	@Sync
+	property Entity BuildTarget = nil
+
+	@Sync
+	property boolean IsRepairing = false
+
+	@HideFromInspector
+	property integer ActiveBuilds = 0
+
+	@Sync
+	@HideFromInspector
+	property boolean BuildOrdered = false
+
+	@Sync
+	@HideFromInspector
+	property integer BuildOrderId = 0
+
+	method boolean IsBuildLocked()
+		-- 건설 때문에 이동/명령이 막혀야 하는지. 건설 중이어도 FreeWhileBuilding이면 막지 않는다.
+		return self.IsBuilding == true and self.FreeWhileBuilding ~= true
+	end
+
+	method boolean IsOwnedBy(string userId)
+		-- 이 일꾼의 소유자(Unit_Info.PlayerID)가 userId인지 확인한다.
+		local info = self.Entity.Unit_Info
+		return info ~= nil and info.PlayerID ~= "" and info.PlayerID == userId
+	end
+
+	@ExecSpace("Server")
+	method void RequestBuildOrder(Vector2 dest)
+		-- 건설 위치가 확정되면 소유 클라이언트가 호출한다: "건설에 묶임" 표시를 켜고 그 위치로 이동시킨다(서버 권위 이동).
+		if not self:IsOwnedBy(senderUserId) or self:IsBuildLocked() then return end
+		local move = self.Entity.UnitMoveComponent
+		if move == nil then return end
+		self.BuildOrdered = true
+		self.BuildOrderId = self.BuildOrderId + 1
+		move:FindTarget(dest)
+	end
+
+	@ExecSpace("Server")
+	method void RequestClearBuildOrder()
+		-- 건설 요청을 보냈거나 배치를 취소하면 소유 클라이언트가 호출한다. 이후엔 IsBuilding이 같은 역할을 한다.
+		if not self:IsOwnedBy(senderUserId) then return end
+		self.BuildOrdered = false
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CancelBuildOrder()
+		-- 건설 위치로 가던 일꾼에게 다른 명령(이동·정지·공격·채집)이 오면 건설 예약을 푼다(스타 방식).
+		-- 비용은 도착해서 건설을 시작할 때 내므로 손해가 없다. 클라 고스트는 BuildOrdered가 꺼진 걸 보고 사라진다.
+		if not self.BuildOrdered then return end
+		self.BuildOrdered = false
+	end
+
+	@ExecSpace("Server")
+	method void RequestResumeBuild(Entity structure)
+		-- 미완성 건물(에델슈타인 테란식 건설)을 우클릭: 그 건물 곁으로 가서 이어 짓는다. 실제 진행은 건물이 이 일꾼을 발견하면 시작.
+		if not self:IsOwnedBy(senderUserId) or not isvalid(structure) then return end
+		---@type Structure_Info
+		local sinfo = structure:GetComponent("script.Structure_Info")
+		if sinfo == nil or sinfo.IsDestroyed or not sinfo.IsUnderConstruction or not sinfo.NeedsBuilder then return end
+		if sinfo.PlayerID ~= senderUserId then return end
+		local gather = self.Entity:GetComponent("script.WorkerGatherComponent")
+		if gather ~= nil then gather:CancelByCommand() end
+		local info = self.Entity.Unit_Info
+		if info ~= nil then info:Stop() end
+		self.BuildTarget = structure
+		local sp = structure.TransformComponent.WorldPosition
+		local dest = _StructureObstacleLogic:PushOut(self.Entity.CurrentMap, Vector2(sp.x, sp.y), 0.1, nil)
+		local move = self.Entity.UnitMoveComponent
+		if move ~= nil then move:FindTarget(dest) end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void StartBuild(string ruid, number totalTime, boolean freeWhileBuilding)
+		self.BuildingRuid = ruid
+		self.BuildTotalTime = totalTime
+		self.FreeWhileBuilding = freeWhileBuilding == true
+		self.ActiveBuilds = self.ActiveBuilds + 1
+		self.IsBuilding = true
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ClearBuild()
+		self.ActiveBuilds = self.ActiveBuilds - 1
+		if self.ActiveBuilds > 0 then return end
+		self.ActiveBuilds = 0
+		self.BuildingRuid = ""
+		self.BuildTotalTime = 0
+		self.IsBuilding = false
+	end
+
+end

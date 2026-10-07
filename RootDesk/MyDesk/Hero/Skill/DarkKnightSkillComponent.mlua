@@ -1,0 +1,106 @@
+@Component
+script DarkKnightSkillComponent extends Component
+
+	@ExecSpace("ServerOnly")
+	method string BeginDarkCycle(Entity castMap, table skill)
+		    -- T 시전마다 새 토큰을 발급한다. 이전 시전이 남아 있으면 먼저 취소하고, 이동 제한과 감시 타이머(0.02초)를 시작한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    self:CancelDarkCycle()
+		    self._T.darkCycleSerial = (self._T.darkCycleSerial or 0) + 1
+		    local darkCycleToken = tostring(self._T.darkCycleSerial)
+		    self._T.darkCycleMap = castMap
+		    self._T.darkCycleUntil = _UtilLogic.ElapsedSeconds + (skill.moveLockDuration or 4.02)
+		    local rec = { token = darkCycleToken, map = castMap, untilTime = self._T.darkCycleUntil }
+		    self._T.darkCycle = rec
+		    self:SetDarkCycleMovement(darkCycleToken, skill.moveLockDuration or 4.02)
+		    rec.timerId = _TimerService:SetTimerRepeat(function()
+		        if not isvalid(self.Entity) then
+		            -- 영웅이 제거됐으면(사망 후 제거/경기 종료) 감시 타이머도 함께 끝낸다.
+		            _TimerService:ClearTimer(rec.timerId)
+		            return
+		        end
+		        if self.Entity.CurrentMap ~= rec.map or _CombatTeamLogic:IsDead(self.Entity)
+		            or core:GetSelectedHeroIndex() ~= 1 or _UtilLogic.ElapsedSeconds >= rec.untilTime then
+		            self:CancelDarkCycle()
+		        end
+		    end, 0.02)
+		    return darkCycleToken
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean IsCycleCasting()
+		    -- T 시전(이동 제한) 중에는 새 스킬 입력을 받지 않는다.
+		    return self._T.darkCycleMap == self.Entity.CurrentMap and _UtilLogic.ElapsedSeconds < (self._T.darkCycleUntil or 0)
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean IsCycleActive(string token)
+		    -- 이 토큰의 T 시전이 아직 유효한지(취소/재시전으로 바뀌지 않았는지) 확인한다. 만료된 타격 콜백 무효화용.
+		    return self._T.darkCycle ~= nil and self._T.darkCycle.token == token
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean IsDarkCycleMovementLocked()
+		    -- 맵 이동/사망/직업 변경은 동기화 종료 통지를 기다리지 않고 로컬 제한만 해제한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local rec = self._T.darkCycleMovement
+		    if rec == nil then return false end
+		    if not isvalid(self.Entity) or _CombatTeamLogic:IsDead(self.Entity)
+		        or self.Entity.CurrentMap ~= rec.map or core:GetSelectedHeroIndex() ~= 1
+		        or _UtilLogic.ElapsedSeconds >= rec.untilTime then
+		        self._T.darkCycleMovement = nil
+		        return false
+		    end
+		    return true
+	end
+
+	@ExecSpace("Client")
+	method void SetDarkCycleMovement(string token, number duration)
+		    -- 토큰이 일치하는 시전만 종료한다. 다른 이동 제한/점프 조건은 수정하지 않는다.
+		    if duration <= 0 then
+		        local rec = self._T.darkCycleMovement
+		        if rec ~= nil and rec.token == token then
+		            self._T.darkCycleMovement = nil
+		            local effects = self.Entity:GetComponent("script.HeroSkillEffectComponent")
+		            if effects ~= nil then effects:ClearDarkCycleEffects() end
+		        end
+		        return
+		    end
+		    self._T.darkCycleMovement = { token = token, map = self.Entity.CurrentMap, untilTime = _UtilLogic.ElapsedSeconds + duration }
+		    if self.Entity ~= _UserService.LocalPlayer then return end
+		    local controller = self.Entity.PlayerControllerComponent
+		    if controller ~= nil and self._T.darkCycleJumpController ~= controller then
+		        local allowJump = function()
+		            return not isvalid(self.Entity) or not self:IsDarkCycleMovementLocked()
+		        end
+		        controller:AddCondition("Jump", allowJump)
+		        controller:AddCondition("DownJump", allowJump)
+		        self._T.darkCycleJumpController = controller
+		    end
+		    local moveComp = self.Entity:GetComponent("script.ClickToMoveComponent")
+		    if moveComp ~= nil then moveComp:StopMovement() end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CancelDarkCycle()
+		    -- 소유한 타이머/토큰만 정리하며 만료된 타격 콜백도 토큰 검사로 무효화한다.
+		    local rec = self._T.darkCycle
+		    if rec == nil then return end
+		    self._T.darkCycle = nil
+		    self._T.darkCycleUntil = 0
+		    if rec.timerId ~= nil then _TimerService:ClearTimer(rec.timerId) end
+		    self:SetDarkCycleMovement(rec.token, 0)
+	end
+
+	method void OnMapLeave(Entity map)
+		    -- 이전 맵에서 시작한 창 공격은 재진입 후 되살아나지 않는다.
+		    if self:IsServer() then self:CancelDarkCycle() else self._T.darkCycleMovement = nil end
+	end
+
+	method void OnEndPlay()
+		    -- 서버와 클라이언트가 각각 소유한 시전 제한을 종료한다.
+		    if self:IsServer() then self:CancelDarkCycle() return end
+		    self._T.darkCycleMovement = nil
+	end
+
+end

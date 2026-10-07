@@ -1,0 +1,90 @@
+@Component
+script UnitSpriteUIAnimator extends Component
+
+	property Entity selectedTarget = nil
+
+	@HideFromInspector
+	property string _lastRuid = ""
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		self.Entity.Enable = false
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		if not isvalid(self.selectedTarget) then return end
+		local renderer = self.selectedTarget.SpriteRendererComponent
+		if not isvalid(renderer) then return end
+		
+		local ruid = renderer.SpriteRUID
+		-- 전직관(JobAdvanceAction)은 건물 그림 대신 소유자 영웅의 전직 교관 NPC를 띄운다(맵에는 교관을 세우지 않음).
+		-- 평소 stand, 연구 중이면 말하는 클립. 건설 중이거나 교관을 모르면 건물 그림 그대로.
+		---@type JobAdvanceAction
+		local job = self.selectedTarget:GetComponent("script.JobAdvanceAction")
+		---@type Structure_Info
+		local sinfo = self.selectedTarget:GetComponent("script.Structure_Info")
+		if job ~= nil and sinfo ~= nil and not sinfo.IsUnderConstruction then
+			local npc = job:PortraitRuid()
+			if npc ~= "" then ruid = npc end
+		end
+		-- 같은 RUID를 매 프레임 다시 대입하면 애니메이션이 계속 처음부터 재시작되므로, 바뀔 때만 갱신한다.
+		if ruid == nil or ruid == "" or ruid == self._lastRuid then return end
+		self._lastRuid = ruid
+		self.Entity.SpriteGUIRendererComponent.ImageRUID = DataRef(ruid)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ShowHeroAvatar(Entity hero)
+		-- hero가 nil이면 아바타를 숨기고, 영웅이면 영웅 엔티티가 입고 있는 장비를 그대로 UI 아바타에 복사해 보인다.
+		local avatar = _EntityService:GetEntityByPath("/ui/UIGroup/BasicUI/HeroAvatarUI")
+		if not isvalid(avatar) then return end
+		if not isvalid(hero) then
+			_HeroPortraitLogic:SetTarget(nil)
+			avatar.Enable = false
+			avatar.Visible = false
+			return
+		end
+		_HeroPortraitLogic:SetTarget(hero)
+		local costume = avatar.CostumeManagerComponent
+		local src = hero.CostumeManagerComponent
+		if costume ~= nil and src ~= nil then
+			costume.UseCustomEquipOnly = true
+			local cats = {
+				MapleAvatarItemCategory.Body, MapleAvatarItemCategory.Hair, MapleAvatarItemCategory.Face, MapleAvatarItemCategory.Ear,
+				MapleAvatarItemCategory.Cap, MapleAvatarItemCategory.Cape, MapleAvatarItemCategory.Coat, MapleAvatarItemCategory.Longcoat,
+				MapleAvatarItemCategory.Pants, MapleAvatarItemCategory.Glove, MapleAvatarItemCategory.Shoes,
+				MapleAvatarItemCategory.OneHandedWeapon, MapleAvatarItemCategory.TwoHandedWeapon, MapleAvatarItemCategory.SubWeapon,
+				MapleAvatarItemCategory.FaceAccessory, MapleAvatarItemCategory.EyeAccessory, MapleAvatarItemCategory.EarAccessory,
+			}
+			local n = 0
+			for _, c in ipairs(cats) do
+				local ruid = src:GetEquip(c)
+				if ruid == nil then ruid = "" end
+				costume:SetEquip(c, ruid)
+				if ruid ~= "" then n += 1 end
+			end
+		end
+		avatar.Enable = true
+		avatar.Visible = true
+	end
+
+	@EventSender("LocalPlayer")
+	handler HandleUnitUIChangeEvent(UnitUIChangeEvent event)
+		self.selectedTarget = event.SelectedUnitEntity
+		self._lastRuid = ""
+		
+		-- 영웅을 선택하면 초상 스프라이트 대신 그 영웅이 실제로 입고 있는 아바타를 같은 자리에 보여준다.
+		local isHero = isvalid(self.selectedTarget) and self.selectedTarget:GetComponent("script.HeroUnitSkill") ~= nil
+		self:ShowHeroAvatar(isHero and self.selectedTarget or nil)
+		
+		if isvalid(self.selectedTarget) and not isHero then
+			self.Entity.Enable = true
+			self.Entity.Visible = true
+		else
+			self.Entity.Enable = false
+			self.Entity.Visible = false
+		end
+	end
+
+end

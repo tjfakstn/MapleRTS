@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>훈련로봇 건설 모션</title>
+<style>
+  :root { --bg:#111; --ink:#eee; --sub:#9ab; --card:#1a2030; --edge:#334; }
+  body { background:var(--bg); color:var(--ink); font:14px/1.5 sans-serif; margin:0; padding:16px; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  p.note { margin:0 0 14px; color:#aab; max-width:900px; }
+  .row { display:flex; flex-wrap:wrap; gap:14px; }
+  .card { width:280px; background:var(--card); border:1px solid var(--edge); border-radius:8px; padding:10px; box-sizing:border-box; }
+  .card h2 { font-size:15px; margin:0 0 4px; }
+  .card p { margin:0 0 8px; color:var(--sub); font-size:13px; min-height:58px; }
+  .stage { position:relative; height:200px; border-radius:6px; overflow:hidden;
+    background: radial-gradient(circle at 40% 40%, #3f6b3a 0, #2c4d29 100%); }
+  .bld { position:absolute; left:22px; bottom:38px; width:130px; height:120px; border:2px dashed rgba(255,255,255,.45); border-radius:6px;
+    background:rgba(120,140,170,.25); display:flex; align-items:center; justify-content:center; color:#dde; font:12px sans-serif; text-align:center; }
+  .bar { position:absolute; left:22px; bottom:26px; width:134px; height:6px; background:rgba(0,0,0,.6); }
+  .bar i { position:absolute; left:0; top:0; bottom:0; background:#ffd54a; }
+  .bot { position:absolute; left:160px; bottom:40px; width:96px; height:136px; } .bot img, .fx img { position:absolute; image-rendering:pixelated; }
+  .fx { position:absolute; left:150px; bottom:95px; width:0; height:0; pointer-events:none; }
+  .lbl { position:absolute; left:8px; top:6px; font:bold 12px sans-serif; background:rgba(0,0,0,.5); padding:1px 6px; border-radius:4px; }
+  .rec { color:#8f8; }
+</style>
+</head>
+<body>
+<h1>훈련로봇 건설 중 모션 — 비교</h1>
+<p class="note">훈련로봇A 리소스에는 <b>대기·이동·피격</b> 애니메이션 3개뿐이고 공격·작업 동작이 없어요. 모델의 공격 애니메이션(AttackRUID)도 대기와 같은 리소스(d4af7ea9)라, 지금 넣은 "건설 중 = 공격 모션 반복"은 화면에서 그냥 서 있는 것과 똑같이 보여요. 아래는 실제 리소스(gif 썸네일)로 그린 비교예요.</p>
+<div class="row">
+  <div class="card">
+    <h2>현재</h2>
+    <p>건설 중에도 대기 모션 그대로 — 일하는지 노는지 구분이 안 됨.</p>
+    <div class="stage"><div class="lbl">현재</div><div class="bld">건설 중인 건물</div><div class="bar"><i></i></div>
+      <div class="bot" data-clip="stand"></div></div>
+  </div>
+  <div class="card">
+    <h2>안 A: 제자리 걷기</h2>
+    <p>건설 중에는 이동 애니메이션을 제자리에서 재생 — 바쁘게 움직이는 느낌. 위치는 그대로.</p>
+    <div class="stage"><div class="lbl">안 A</div><div class="bld">건설 중인 건물</div><div class="bar"><i></i></div>
+      <div class="bot" data-clip="move"></div></div>
+  </div>
+  <div class="card">
+    <h2 class="rec">안 B: 제자리 걷기 + 작업 불꽃 (추천)</h2>
+    <p>안 A에 더해 0.6초마다 건물 쪽에 타격 불꽃(게임에서 이미 쓰는 근접 타격 이펙트 ImpactRUID)이 튐 — 망치질처럼 보임.</p>
+    <div class="stage"><div class="lbl">안 B</div><div class="bld">건설 중인 건물</div><div class="bar"><i></i></div>
+      <div class="bot" data-clip="move"></div>
+      <div class="fx" id="fx"></div></div>
+  </div>
+</div>
+<script>
+const CDN = id => `https://mod-resource-search-images.dn.nexoncdn.co.kr/maplestory_world/${id}.png`;
+// 실제 애니메이션 클립의 프레임(리소스 검색 API): [스프라이트, 폭, 높이, 피벗x, 피벗y]
+const CLIPS = {
+  stand: [["6291462c56d54adebb517cfdefee4437",48,64,25,0],["b3e4682af76545b5959f52ebdffe96fa",48,64,25,0],["56ed4d4677ab4aaab4a108840f05c8d4",48,64,25,0],["48b4b8d916e34418bf57bcb7a6bc6d12",48,68,25,0]],
+  move:  [["f8ca402d8b9345b9a90de4e0132c732d",48,68,25,0],["4c7504920b5343b087f0281fd8d17232",48,68,25,0],["26bd5ed9c4064e99a2338448472fa48a",48,64,25,0],["dee3d4b898ce4c4d924b861ec260bd6e",4,4,0,-3],["4961fc7957b34190800c66726bb7e0ca",48,68,25,0],["c3cb314b788343aa86f9e8f8eae64b12",48,64,25,0]],
+  impact:[["98cfbaea34744c9bad2bb02a6574b742",236,212,111,112],["9135ef4fe3b24c18976188a0ffb8ccc0",352,284,210,143],["168e347a4e474878abde130be508b34a",396,288,224,145],["aec192950485401c802b06b40795d822",416,296,224,149],["1c38089bd0764d51bfffb4036245829d",416,300,224,152],["a303e2fbd4304dfe81af8c7a48ef41a1",296,300,149,152]],
+};
+const SCALE = 1.6, FX_SCALE = 0.3;   // 유닛은 화면에서 보기 좋게 1.6배, 불꽃은 게임에서처럼 작게
+Object.values(CLIPS).flat().forEach(f => { const i = new Image(); i.src = CDN(f[0]); });   // 미리 불러오기
+function setFrame(holder, f, scale, flipX) {
+  let img = holder.querySelector("img"); if (!img) { img = document.createElement("img"); holder.append(img); }
+  img.src = CDN(f[0]); img.width = f[1] * scale; img.height = f[2] * scale;
+  // 피벗(발밑)을 holder 바닥 가운데에 맞춤
+  img.style.left = (holder.clientWidth / 2 - f[3] * scale) + "px";
+  img.style.bottom = (-f[4] * scale) + "px";
+  img.style.transform = flipX ? "scaleX(-1)" : "none";
+}
+// 유닛: 프레임 150ms. 로봇 원본은 오른쪽을 봄 → 건물(왼쪽)을 보도록 뒤집기
+document.querySelectorAll(".bot").forEach(h => { const c = CLIPS[h.dataset.clip]; let k = 0;
+  setInterval(() => { setFrame(h, c[k % c.length], SCALE, true); k++; }, 150); setFrame(h, c[0], SCALE, true); });
+// 안 B 불꽃: 0.6초마다 한 번 재생(프레임 60ms)
+const fx = document.getElementById("fx");
+function burst() { let k = 0; const c = CLIPS.impact; const id = setInterval(() => {
+  if (k >= c.length) { clearInterval(id); fx.innerHTML = ""; return; }
+  const f = c[k++]; let img = fx.querySelector("img"); if (!img) { img = document.createElement("img"); fx.append(img); }
+  img.src = CDN(f[0]); img.width = f[1] * FX_SCALE; img.height = f[2] * FX_SCALE;
+  img.style.left = (-f[3] * FX_SCALE) + "px"; img.style.top = (-f[4] * FX_SCALE) + "px"; }, 60); }
+setInterval(burst, 600); burst();
+// 건설 진행 바(20초, 반복)
+const bars = [...document.querySelectorAll(".bar i")]; const t0 = performance.now();
+(function tick(t) { const p = ((t - t0) / 20000) % 1; bars.forEach(b => b.style.width = (p * 100) + "%"); requestAnimationFrame(tick); })(t0);
+</script>
+</body>
+</html>

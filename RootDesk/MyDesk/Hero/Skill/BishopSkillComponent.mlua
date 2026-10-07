@@ -1,0 +1,306 @@
+@Component
+script BishopSkillComponent extends Component
+
+	@ExecSpace("ServerOnly")
+	method void ApplyHealToEntity(Entity target, integer amount, string skillName)
+		    if _CombatTeamLogic:IsDead(target) then return end
+		    local unit = target:GetComponent("script.Unit_Info")
+		    if unit ~= nil then unit:Heal(amount) return end
+		    -- 건물은 회복 대상이 아니다(범위 회복이 아군 건물을 훑을 때마다 경고가 찍히지 않게 조용히 넘어간다).
+		    if target:GetComponent("script.Structure_Info") ~= nil then return end
+		
+		    if amount <= 0 then
+		        return
+		    end
+		
+		    -- 영웅은 PlayerComponent.Hp, 생산 유닛은 UnitHitComponent.hp를 쓴다.
+		    local player = target.PlayerComponent
+		    if player ~= nil then
+		        local beforeHp = player.Hp
+		        player.Hp = math.min(player.MaxHp, beforeHp + amount)
+		        return
+		    end
+		
+		    local unitHit = target:GetComponent("script.UnitHitComponent")
+		    if unitHit ~= nil then
+		        local beforeHp = unitHit.hp
+		        unitHit.hp = math.min(unitHit.maxHp, beforeHp + amount)
+		        return
+		    end
+		
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplySelfHeal(integer amount, string skillName)
+		    self:ApplyHealToEntity(self.Entity, amount, skillName)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplyHealOnHit(table skill, string skillName, integer hitCount)
+		    -- 엔젤레이처럼 "공격은 적에게, 회복은 시전자에게"인 스킬을 공용 데이터만으로 처리한다.
+		    if hitCount <= 0 then return end
+		    local healAmount = skill.healOnHitAmount or skill.healAmount or 0
+		    if healAmount <= 0 then return end
+		    self:ApplySelfHeal(healAmount, skillName)
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean IsInsideSquareRange(Vector2 center, Vector2 targetPos, number halfWidth, number halfHeight)
+		    local dx = math.abs(targetPos.x - center.x)
+		    local dy = math.abs(targetPos.y - center.y)
+		    return dx <= halfWidth and dy <= halfHeight
+	end
+
+	@ExecSpace("ServerOnly")
+	method table FindPeaceMakerImpact(table skill, Vector2 casterPos, Vector2 aimDir, number maxDistance)
+		    -- 전방 경로의 첫 적과 닿는 지점을 찾고, 없으면 최대 사거리 끝을 충돌 지점으로 사용한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local corridorHalfWidth = ((skill.projectileSearchWidth or skill.width or 1.0) * core.rangeScale) * 0.5
+		    local closestProj = nil
+		    local impactTarget = nil
+		    -- 예전에는 "Unit" 태그 + PlayerComponent 있는 대상만 봤다. 허수아비는 둘 다 없어서
+		    -- 피스메이커가 허수아비에 절대 안 걸리고 항상 최대 사거리까지 날아갔다.
+		    -- 이제 적 후보 수집을 CollectEnemyUnitCandidates 한 곳으로 통일한다.
+		    local candidates = core:CollectEnemyUnitCandidates()
+		    for _, candidate in ipairs(candidates) do
+		        if isvalid(candidate) and candidate ~= self.Entity then
+		            if candidate.CurrentMap == self.Entity.CurrentMap then
+		                local candidatePos = core:GetEntityWorldPos2(candidate)
+		                local offsetX = candidatePos.x - casterPos.x
+		                local offsetY = candidatePos.y - casterPos.y
+		                local proj = offsetX * aimDir.x + offsetY * aimDir.y
+		                if proj >= 0 and proj <= maxDistance then
+		                    local lateralSq = (offsetX * offsetX + offsetY * offsetY) - (proj * proj)
+		                    if lateralSq <= corridorHalfWidth * corridorHalfWidth then
+		                        if closestProj == nil or proj < closestProj then
+		                            closestProj = proj
+		                            impactTarget = candidate
+		                        end
+		                    end
+		                end
+		            end
+		        end
+		    end
+		
+		    if closestProj ~= nil then
+		        return {
+		            position = casterPos + aimDir * closestProj,
+		            distance = closestProj,
+		            target = impactTarget,
+		        }
+		    end
+		
+		    return {
+		        position = casterPos + aimDir * maxDistance,
+		        distance = maxDistance,
+		        target = nil,
+		    }
+	end
+
+	@ExecSpace("ServerOnly")
+	method table CollectFriendlyUnitsInRect(Vector2 centerPos, number halfWidth, number halfHeight, integer maxTargets)
+		    -- 같은 소유자 유닛 중 지정 범위 안에 들어온 대상만 반환한다.
+		    -- 아군 판정도 CombatTeamLogic으로 통일한다. PlayerComponent 유무를 묻지 않으므로
+		    -- 생산 유닛(플레이어 엔티티가 아님)도 회복/버프 대상이 된다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local allies = {}
+		    local candidates = _CombatTeamLogic:GetCombatCandidates(self.Entity.CurrentMap)
+		    for _, candidate in ipairs(candidates) do
+		        if isvalid(candidate) then
+		            if candidate.CurrentMap == self.Entity.CurrentMap and _CombatTeamLogic:IsAlly(self.Entity, candidate) then
+		                local pos2 = core:GetEntityWorldPos2(candidate)
+		                if self:IsInsideSquareRange(centerPos, pos2, halfWidth, halfHeight) then
+		                    table.insert(allies, candidate)
+		                    if maxTargets ~= nil and maxTargets > 0 and #allies >= maxTargets then
+		                        break
+		                    end
+		                end
+		            end
+		        end
+		    end
+		    return allies
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplyPeaceMakerSupport(table skill, table allies, string skillName)
+		    -- 합본 피스메이커는 적 폭발 피해와 아군 1회 회복을 같은 충돌 지점에서 처리한다.
+		    if self._T.pendingPeaceMakerBuffs == nil then
+		        self._T.pendingPeaceMakerBuffs = {}
+		    end
+		    local duration = skill.supportDuration or 6
+		    local expiresAt = _UtilLogic.ElapsedSeconds + duration
+		    for _, ally in ipairs(allies) do
+		        if isvalid(ally) then
+		            if (skill.supportHealAmount or 0) > 0 then
+		                self:ApplyHealToEntity(ally, skill.supportHealAmount, skillName)
+		            end
+		            self._T.pendingPeaceMakerBuffs[ally.Id] = { expiresAt = expiresAt, skill = skillName }
+		        end
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CastFountainAura(table skill, string skillName, Vector2 centerPos)
+		    -- 홀리 파운틴은 설치 위치를 고정하고, 범위 안의 같은 소유자 유닛을 대상별 개인 쿨로 자동 회복한다.
+		    local duration = skill.installDuration or 10
+		    local tickInterval = skill.installTickInterval or 0.2
+		    local healAmount = skill.healAmount or 0
+		    local healCooldown = skill.healCooldownPerTarget or 3
+		    local halfWidth = (skill.healAreaWidth or skill.length or 3) * 0.5
+		    local halfHeight = (skill.healAreaHeight or skill.width or skill.length or 3) * 0.5
+		    local castMap = self.Entity.CurrentMap
+		    local startedAt = _UtilLogic.ElapsedSeconds
+		
+		    if self._T.activeFountains == nil then
+		        self._T.activeFountains = {}
+		    end
+		
+		    local fountainId = tostring(startedAt) .. ":" .. tostring(centerPos.x) .. ":" .. tostring(centerPos.y)
+		    local fountainState = {
+		        center = Vector2(centerPos.x, centerPos.y),
+		        expiresAt = startedAt + duration,
+		        lastHealAtByEntityId = {},
+		    }
+		    self._T.activeFountains[fountainId] = fountainState
+		
+		    local applyHealingPulse = function()
+		        if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then self._T.activeFountains[fountainId] = nil return end
+		
+		        local now = _UtilLogic.ElapsedSeconds
+		        if now >= fountainState.expiresAt then
+		            self._T.activeFountains[fountainId] = nil
+		            return
+		        end
+		
+		        local candidates = _CombatTeamLogic:GetCombatCandidates(self.Entity.CurrentMap)
+		        local casterIncluded = false
+		        for _, candidate in ipairs(candidates) do
+		            if isvalid(candidate) then
+		                if candidate.CurrentMap == self.Entity.CurrentMap then
+		                    if candidate == self.Entity then
+		                        casterIncluded = true
+		                    end
+		
+		                    if candidate == self.Entity or _CombatTeamLogic:IsAlly(self.Entity, candidate) then
+		                        local pos3 = candidate.TransformComponent.WorldPosition
+		                        local pos2 = Vector2(pos3.x, pos3.y)
+		                        if self:IsInsideSquareRange(fountainState.center, pos2, halfWidth, halfHeight) then
+		                            local entityId = tostring(candidate.Id)
+		                            local readyAt = fountainState.lastHealAtByEntityId[entityId] or -999
+		                            if now - readyAt >= healCooldown then
+		                                fountainState.lastHealAtByEntityId[entityId] = now
+		                                self:ApplyHealToEntity(candidate, healAmount, skillName)
+		                            end
+		                        end
+		                    end
+		                end
+		            end
+		        end
+		
+		        if not casterIncluded then
+		            local selfPos3 = self.Entity.TransformComponent.WorldPosition
+		            local selfPos2 = Vector2(selfPos3.x, selfPos3.y)
+		            if self:IsInsideSquareRange(fountainState.center, selfPos2, halfWidth, halfHeight) then
+		                local selfId = tostring(self.Entity.Id)
+		                local readyAt = fountainState.lastHealAtByEntityId[selfId] or -999
+		                if now - readyAt >= healCooldown then
+		                    fountainState.lastHealAtByEntityId[selfId] = now
+		                    self:ApplyHealToEntity(self.Entity, healAmount, skillName)
+		                end
+		            end
+		        end
+		    end
+		
+		    applyHealingPulse()
+		
+		    local timerId = nil
+		    local repeatPulse = function()
+		        applyHealingPulse()
+		        if self._T.activeFountains[fountainId] == nil and timerId ~= nil then
+		            _TimerService:ClearTimer(timerId)
+		        end
+		    end
+		    timerId = _TimerService:SetTimerRepeat(repeatPulse, tickInterval)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CastHealTicks(table skill, string skillName)
+		local castMap = self.Entity.CurrentMap
+		    -- 설치형 회복도 일반 지속 피해와 같은 템포로 처리한다. 첫 회복은 즉시 적용해 반응성을 보장하고,
+		    -- 남은 회복은 지정 간격마다 적용한다. 나중에 팀 식별이 생기면 ApplySelfHeal만 범위 아군 회복으로 교체하면 된다.
+		    local ticks = skill.tickCount or 1
+		    local applyOne = function()
+		        if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		        self:ApplySelfHeal(skill.healAmount or 0, skillName)
+		    end
+		    applyOne()
+		    if ticks <= 1 then return end
+		
+		    local ticksLeft = ticks - 1
+		    local timerId = nil
+		    local tick = function()
+		        applyOne()
+		        ticksLeft = ticksLeft - 1
+		        if ticksLeft <= 0 and timerId ~= nil then
+		            _TimerService:ClearTimer(timerId)
+		        end
+		    end
+		    timerId = _TimerService:SetTimerRepeat(tick, skill.tickInterval or 1)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CastPeaceMaker(string heroName, string skillKey, table skill, Vector2 aimDir, Vector2 aimWorldPos)
+		local castMap = self.Entity.CurrentMap
+		    -- 피스메이커는 커서 방향으로 날아가다 첫 적과 닿거나 사거리 끝에서 폭발하고,
+		    -- 적에게는 피해/피격 이펙트, 아군에게는 지원 이펙트를 따로 남긴다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local hitContext = core:BuildRuntimeHitContext(skill, aimWorldPos, aimDir)
+		    local casterPos = hitContext.casterPos
+		    local maxDistance = hitContext.scaledLength
+		    local impactInfo = self:FindPeaceMakerImpact(skill, casterPos, aimDir, maxDistance)
+		    local travelTime = impactInfo.distance / (skill.projectileSpeed or core.projectileSpeed)
+		    local windup = skill.castWindup or core.castWindup
+		
+		    _TimerService:SetTimerOnce(function()
+		        if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		
+		        local areaLength = (skill.impactHitLength or skill.hitLength or skill.length or 3.2) * core.rangeScale
+		        local areaWidth = (skill.impactHitWidth or skill.hitWidth or skill.width or areaLength) * core.rangeScale
+		        core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		        local attackInfo = skillKey .. ":" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(skill.damage or 0)
+		        local attackShape = core:BuildCenteredBox(impactInfo.position, aimDir, areaLength, areaWidth)
+		        local impactVfx = core:BuildHeroVfx(core:GetSelectedHeroIndex())[skillKey]
+		        if impactVfx ~= nil and impactVfx.impact ~= nil then
+		            local measured = core:GetAttackLogicComponent():BuildMeasuredEffectBox(impactVfx.impact, impactInfo.position, aimDir,
+		                impactVfx.impactScaleMultiplier or skill.impactScaleMultiplier or skill.effectScaleMultiplier or 1)
+		            if measured ~= nil then attackShape = measured end
+		        end
+		        local followupDelay = skill.impactFollowupDelay or 0.06
+		
+		        core:BeginAttackTargetFilter(attackInfo, skill.maxTargets or 0)
+		        local hitComponents = core:PerformAttack(attackShape, attackInfo)
+		        core:EndAttackTargetFilter(attackInfo)
+		
+		        local halfWidth = areaLength * 0.5
+		        local halfHeight = areaWidth * 0.5
+		        local allies = self:CollectFriendlyUnitsInRect(impactInfo.position, halfWidth, halfHeight, skill.supportMaxTargets or 0)
+		
+		        core:EmitImpactSync(skillKey, impactInfo.position)
+		        if #hitComponents > 0 then
+		            _TimerService:SetTimerOnce(function()
+		                if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		                core:EmitImpactBatchSync(skillKey, hitComponents, skill.maxImpactFxCount or skill.maxTargets or #hitComponents)
+		            end, followupDelay)
+		        end
+		        if #allies > 0 then
+		            _TimerService:SetTimerOnce(function()
+		                if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then return end
+		                core:EmitFriendlyImpactBatchSync(skillKey, allies, skill.supportMaxTargets or #allies)
+		                self:ApplyPeaceMakerSupport(skill, allies, skill.name or skillKey)
+		            end, followupDelay)
+		        end
+		
+		    end, windup + travelTime)
+	end
+
+end

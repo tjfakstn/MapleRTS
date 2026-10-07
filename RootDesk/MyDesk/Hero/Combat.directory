@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "directory://f2ffba74b94e4a57856faeb4b3f7a91e",
+  "ContentType": "x-mod/directory",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "entry_id": "directory://f2ffba74b94e4a57856faeb4b3f7a91e",
+      "name": "Combat",
+      "lock": false,
+      "folding": false,
+      "nameEditable": true
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "codeblock://dfeaafa2-4528-4b5c-aead-bc52f9482dd6",
+  "ContentType": "x-mod/codeblock",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "CoreVersion": {
+        "Major": 0,
+        "Minor": 2
+      },
+      "ScriptVersion": {
+        "Major": 1,
+        "Minor": 1
+      },
+      "Description": "",
+      "Id": "dfeaafa2-4528-4b5c-aead-bc52f9482dd6",
+      "Language": 1,
+      "Name": "RTSCameraLogic",
+      "Type": 5,
+      "Source": 0,
+      "Target": null
+    }
+  }
+}

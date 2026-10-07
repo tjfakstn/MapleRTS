@@ -1,0 +1,452 @@
+@Component
+script UnitActionSpriteChange extends Component
+
+	property table ActionUIList = {}
+
+	property integer SlotCount = 10
+
+	@HideFromInspector
+	property number cooldownTimer = 0
+
+	@HideFromInspector
+	property table hoverHandlers = {}
+
+	@HideFromInspector
+	property integer hoverSlot = 0
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		-- 처음에는 모든 칸을 끈다(아무것도 선택되지 않은 상태).
+		-- 칸마다 버튼 상태 이벤트를 걸어, 잠긴 칸에 마우스를 올렸을 때만 해금 조건 말풍선(LockTip)을 띄운다.
+		self.ActionUIList = {}
+		self.hoverHandlers = {}
+		for idx = 1, self.SlotCount do
+			local slot = self.Entity:GetChildByName("Slot" .. tostring(idx))
+			if isvalid(slot) then
+				local slotIdx = idx
+				local h = slot:ConnectEvent(ButtonStateChangeEvent, function(event) self:OnSlotState(slotIdx, event.state) end)
+				table.insert(self.hoverHandlers, { entity = slot, cb = h })
+			end
+		end
+		self:HideLockTip()
+		self:ChangeActionUI()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		-- 칸 버튼 상태 이벤트 연결을 푼다.
+		for _, rec in ipairs(self.hoverHandlers) do
+			if isvalid(rec.entity) then rec.entity:DisconnectEvent(ButtonStateChangeEvent, rec.cb) end
+		end
+		self.hoverHandlers = {}
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSlotState(integer idx, any state)
+		-- 마우스가 칸 위로 오면(Hover) 말풍선을 띄우고, 벗어나면(Normal) 닫는다.
+		if state == ButtonState.Hover then
+			self:ShowSlotTip(idx)
+		elseif state == ButtonState.Normal then
+			if self.hoverSlot == idx then self:HideLockTip() end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ShowSlotTip(integer idx)
+		-- 스타2 커맨드카드 툴팁처럼, 마우스를 올린 칸 바로 위에 작은 말풍선(LockTip)을 띄운다.
+		--  1줄: 이름 + 노란 [단축키]  2줄: 비용(메소·에르다·인구)  3줄(잠긴 칸만): 빨간 "필요: 해금 조건"
+		local action = self.ActionUIList[idx]
+		local tip = self.Entity:GetChildByName("LockTip")
+		local slot = self.Entity:GetChildByName("Slot" .. tostring(idx))
+		if not isvalid(tip) or not isvalid(slot) or action == nil then
+			self:HideLockTip()
+			return
+		end
+		local locked = action.Locked == true
+		local name = action.TipTitle or action.Label or ""
+		local hk = action.Hotkey or ""
+		local titleText = name
+		if hk ~= "" then titleText = titleText .. "  <color=#FFD54A>[" .. hk .. "]</color>" end
+		local cost = self:CostLine(action)
+		local reqText = ""
+		if action.Done == true then
+			reqText = "<color=#9BE37A>완료한 전직</color>"
+		elseif locked and action.LockToast ~= nil and action.LockToast ~= "" then
+			reqText = action.LockToast
+		elseif locked then
+			local reason = action.LockReason or ""
+			reqText = (reason ~= "") and ("필요: " .. reason) or "아직 사용할 수 없습니다"
+		elseif action.TipInfo ~= nil and action.TipInfo ~= "" then
+			-- 잠기지 않은 전직 버튼은 셋째 줄에 해금되는 스킬을 초록으로 보여 준다.
+			reqText = "<color=#9BE37A>" .. action.TipInfo .. "</color>"
+		end
+		
+		local title = tip:GetChildByName("Title")
+		if isvalid(title) then title.TextGUIRendererComponent.Text = titleText end
+		-- 둘째 줄은 비용, 비용이 없으면 필요 조건을 끌어올린다(빈 줄이 남지 않게).
+		local lines = 1
+		local body = tip:GetChildByName("Body")
+		local req = tip:GetChildByName("Req")
+		if isvalid(body) then
+			body.Enable = (cost ~= "")
+			body.TextGUIRendererComponent.Text = cost
+		end
+		if cost ~= "" then lines = lines + 1 end
+		if isvalid(req) then
+			req.Enable = (reqText ~= "")
+			req.TextGUIRendererComponent.Text = reqText
+			req.UITransformComponent.anchoredPosition = Vector2(12, (cost ~= "") and -64 or -38)
+		end
+		if reqText ~= "" then lines = lines + 1 end
+		
+		-- 크기: 줄 수에 맞춰 높이를 정하고, 칸 왼쪽 위 모서리 바로 위에 붙인다(커맨드카드 좌우 밖으로 나가지 않게 자름).
+		local ut = tip.UITransformComponent
+		local h = 14 + 28 * lines
+		local w = ut.RectSize.x
+		ut.RectSize = Vector2(w, h)
+		ut.AnchorsMin = Vector2(0.5, 0.5)
+		ut.AnchorsMax = Vector2(0.5, 0.5)
+		ut.Pivot = Vector2(0, 0)
+		local st = slot.UITransformComponent
+		local half = self.Entity.UITransformComponent.RectSize.x / 2
+		local x = st.anchoredPosition.x - st.RectSize.x / 2
+		x = math.max(-half, math.min(x, half - w))
+		ut.anchoredPosition = Vector2(x, st.anchoredPosition.y + st.RectSize.y / 2 + 6)
+		tip.Enable = true
+		self.hoverSlot = idx
+	end
+
+	@ExecSpace("ClientOnly")
+	method string CostLine(table action)
+		-- 생산/건설 칸의 비용 문자열("메소 150   에르다 1   인구 2"). 비용 정보가 없는 명령(이동·정지 등)은 "".
+		-- 건물은 Structure_Stat_DataSet(클라에서 직접 읽어 캐시), 유닛은 SetCampManager_Logic의 진영 유닛 표에서 찾는다.
+		local meso = nil
+		local erda = nil
+		local pop = nil
+		local bd = action.BuildData
+		local model = ""
+		if action.CostMeso ~= nil or action.CostErda ~= nil then
+			-- 전직 연구처럼 비용을 액션에 직접 실어 오는 경우(JobAdvanceAction).
+			meso = action.CostMeso
+			erda = action.CostErda
+		elseif bd ~= nil and bd.Model ~= nil and bd.Model ~= "" then
+			model = bd.Model
+			local row = self:StructureCost(model)
+			if row ~= nil then
+				meso = row.meso
+				erda = row.erda
+			end
+		elseif action.UnitModel ~= nil and action.UnitModel ~= "" then
+			model = action.UnitModel
+			local row = self:UnitCost(model)
+			if row ~= nil then
+				meso = row.meso
+				erda = row.erda
+				pop = row.pop
+			end
+		end
+		local parts = {}
+		if meso ~= nil and meso > 0 then table.insert(parts, "<color=#FFD54A>메소</color> " .. tostring(math.floor(meso))) end
+		if erda ~= nil and erda > 0 then table.insert(parts, "<color=#7FD7FF>에르다</color> " .. tostring(math.floor(erda))) end
+		if pop ~= nil and pop > 0 then table.insert(parts, "<color=#9BE37A>인구</color> " .. tostring(math.floor(pop))) end
+		if action.CostTime ~= nil and action.CostTime > 0 then table.insert(parts, "<color=#C9D1DC>시간</color> " .. tostring(math.floor(action.CostTime)) .. "초") end
+		return table.concat(parts, "    ")
+	end
+
+	@ExecSpace("ClientOnly")
+	method table UnitCost(string model)
+		-- 유닛 Model ID → { meso, erda, pop } (3개 진영 Unit_Stat_DataSet을 클라에서 한 번 읽어 캐시). 없으면 nil.
+		-- SetCampManager_Logic의 진영 표는 서버에서만 채워지므로 여기서 직접 읽는다(열 이름: Adv=영문, Cyg/Res=한글).
+		if self._T.unitCost == nil then
+			local cache = {}
+			for _, name in ipairs({ "Adv_Unit_Stat_DataSet", "Cyg_Unit_Stat_DataSet", "Res_Unit_Stat_DataSet" }) do
+				local temp = _DataService:GetTable(name)
+				if temp ~= nil then
+					for r = 1, temp:GetRowCount() do
+						local m = temp:GetCell(r, "Model")
+						if m ~= nil and m ~= "" then
+							cache[m] = {
+								meso = tonumber(_SetCampManager_Logic:GetCellAny(temp, r, "Meso", "메소")),
+								erda = tonumber(_SetCampManager_Logic:GetCellAny(temp, r, "Arda", "에르다")),
+								pop = tonumber(_SetCampManager_Logic:GetCellAny(temp, r, "papulation", "인구")),
+							}
+						end
+					end
+				end
+			end
+			self._T.unitCost = cache
+		end
+		return self._T.unitCost[model]
+	end
+
+	@ExecSpace("ClientOnly")
+	method table StructureCost(string model)
+		-- 건물 Model ID → { meso, erda } (3개 진영 Structure_Stat_DataSet을 클라에서 한 번 읽어 캐시). 없으면 nil.
+		if self._T.structCost == nil then
+			local cache = {}
+			for _, name in ipairs({ "Adv_Structure_Stat_DataSet", "Cyg_Structure_Stat_DataSet", "Res_Structure_Stat_DataSet" }) do
+				local temp = _DataService:GetTable(name)
+				if temp ~= nil then
+					for r = 1, temp:GetRowCount() do
+						local m = temp:GetCell(r, "Model")
+						if m ~= nil and m ~= "" then
+							cache[m] = { meso = tonumber(temp:GetCell(r, "Meso")), erda = tonumber(temp:GetCell(r, "Arda")) }
+						end
+					end
+				end
+			end
+			self._T.structCost = cache
+		end
+		return self._T.structCost[model]
+	end
+
+	@ExecSpace("ClientOnly")
+	method void HideLockTip()
+		-- 해금 조건 말풍선을 닫는다.
+		local tip = self.Entity:GetChildByName("LockTip")
+		if isvalid(tip) then tip.Enable = false end
+		self.hoverSlot = 0
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ChangeActionUI()
+		-- 액션이 있는 칸만 켜고 내용을 채운다. 액션이 없는 칸은 꺼서 이전 선택의 버튼이 남지 않게 한다.
+		local anyShown = false
+		for idx = 1, self.SlotCount do
+			local slot = self.Entity:GetChildByName("Slot" .. tostring(idx))
+			if isvalid(slot) then
+				local action = self.ActionUIList[idx]
+				if action ~= nil then
+					anyShown = true
+					slot.Enable = true
+					self:FillSlot(slot, idx, action)
+				else
+					slot.Enable = false
+				end
+			end
+		end
+		-- 칸 내용이 바뀌었으니 떠 있던 말풍선은 닫는다(다른 유닛을 고르면 이전 조건이 남지 않게).
+		self:HideLockTip()
+		-- 같은 프레임에 칸을 켜면서 아이콘을 바꾸면 이전 선택의 그림이 남는 경우가 있어(2026-10-06 테스트: Z·B 칸에 이전 건물의
+		-- 아이콘이 계속 보임) 잠깐 뒤에 지금 카드의 아이콘을 한 번 더 넣는다. 그 사이 카드가 또 바뀌었으면(버전 다름) 건너뛴다.
+		self._T.cardVersion = (self._T.cardVersion or 0) + 1
+		local version = self._T.cardVersion
+		_TimerService:SetTimerOnce(function()
+			if self._T.cardVersion == version then self:ReapplyIcons() end
+		end, 0.05)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ReapplyIcons()
+		-- 켜져 있는 칸의 아이콘 그림을 지금 액션 표 기준으로 다시 넣는다(ChangeActionUI 직후 지연 호출).
+		for idx = 1, self.SlotCount do
+			local action = self.ActionUIList[idx]
+			local slot = self.Entity:GetChildByName("Slot" .. tostring(idx))
+			if action ~= nil and isvalid(slot) and slot.Enable then
+				local ruid = action.Ruid or ""
+				local icon = slot:GetChildByName("Icon")
+				if isvalid(icon) and ruid ~= "" then
+					icon.Enable = true
+					icon.SpriteGUIRendererComponent.ImageRUID = DataRef(ruid)
+				end
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void FillSlot(Entity slot, integer idx, table action)
+		-- 한 칸을 채운다. 아이콘 RUID가 없으면 아이콘을 끄고 이름 글자를 크게 보여 준다.
+		---@type UIButtonAction
+		local btn = slot:GetComponent("script.UIButtonAction")
+		if btn ~= nil then
+			btn.SlotIndex = idx
+			btn.ActionId = action.ActionID or ""
+			btn.ModelId = action.UnitModel or ""
+			btn.Building = action.Building
+			btn.BuildData = action.BuildData or {}
+		end
+		
+		local ruid = action.Ruid or ""
+		local icon = slot:GetChildByName("Icon")
+		if isvalid(icon) then
+			icon.Enable = (ruid ~= "")
+			if ruid ~= "" then
+				icon.SpriteGUIRendererComponent.ImageRUID = DataRef(ruid)
+			end
+		end
+		
+		-- 이름 글자는 아이콘이 없는 칸에서만 칸 가운데에 보여 준다(칸 안에 맞춰 자동 축소, 넘치면 말줄임).
+		-- 아이콘이 있으면 이름은 숨기고 마우스를 올렸을 때 말풍선(ShowSlotTip)으로만 보여 준다 — 스타 커맨드카드 방식.
+		local label = slot:GetChildByName("Label")
+		if isvalid(label) then
+			label.TextGUIRendererComponent.Text = action.Label or ""
+			label.Enable = (ruid == "")
+		end
+		
+		local hotkey = slot:GetChildByName("Hotkey")
+		if isvalid(hotkey) then
+			hotkey.TextGUIRendererComponent.Text = action.Hotkey or ""
+		end
+		
+		-- 쿨타임 덮개는 영웅 스킬 칸에서만 쓰며, 실제 켜고 끄는 건 OnUpdate의 RefreshCooldowns가 한다.
+		local cool = slot:GetChildByName("Cool")
+		if isvalid(cool) and action.ActionID ~= "HeroSkill" and action.ActionID ~= "JobAdvance" and action.ActionID ~= "Upgrade" and action.ActionID ~= "Ability" then
+			cool.Enable = false
+		end
+		
+		local lock = slot:GetChildByName("Lock")
+		if isvalid(lock) then
+			lock.Enable = (action.Locked == true)
+			-- 칸 안에는 어둡게 덮기만 하고 해금 조건 글자는 띄우지 않는다(한 칸에 정보가 너무 많았음).
+			-- 조건은 마우스를 올렸을 때 LockTip 말풍선으로 보여 준다(ShowSlotTip).
+			local reason = lock:GetChildByName("Reason")
+			if isvalid(reason) then reason.Enable = false end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- 0.1초마다 영웅 스킬 칸의 쿨타임 덮개(라디얼 게이지 + 남은 초)를 갱신한다.
+		self.cooldownTimer += delta
+		if self.cooldownTimer < 0.1 then return end
+		self.cooldownTimer = 0
+		self:RefreshCooldowns()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshAbility(Entity slot, table action)
+		-- 고유 능력 버튼: 이 유닛이 마지막으로 쓴 능력(Unit_Info.AbilityCdName)이 이 칸이면 재사용 대기를 덮개로 보여 준다.
+		local cool = isvalid(slot) and slot:GetChildByName("Cool") or nil
+		if not isvalid(cool) then return end
+		local remain = 0
+		local total = 0
+		if isvalid(action.Building) then
+			local info = action.Building.Unit_Info
+			if info ~= nil and info.AbilityCdName == (action.Arg or "") then
+				remain = info.AbilityReadyAt - _UtilLogic.ServerElapsedSeconds
+				total = info.AbilityCdTotal
+			end
+		end
+		if remain > 0.05 then
+			cool.Enable = true
+			local sprite = cool.SpriteGUIRendererComponent
+			if sprite ~= nil then sprite.FillAmount = (total > 0) and math.min(1, remain / total) or 1 end
+			local sec = cool:GetChildByName("Sec")
+			if isvalid(sec) and sec.TextGUIRendererComponent ~= nil then
+				sec.TextGUIRendererComponent.Text = (remain >= 10) and tostring(math.ceil(remain)) or string.format("%.1f", remain)
+			end
+		else
+			cool.Enable = false
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshUpgrade(Entity slot, table action)
+		-- 업그레이드 연구 버튼: 그 건물이 이 종류(Arg = A/D)를 연구 중이면 남은 시간을 쿨타임 덮개로 보여 준다(StructureBuffAura.Research*).
+		local cool = isvalid(slot) and slot:GetChildByName("Cool") or nil
+		if not isvalid(cool) then return end
+		local remain = 0
+		local total = 0
+		if isvalid(action.Building) then
+			---@type StructureBuffAura
+			local up = action.Building:GetComponent("script.StructureBuffAura")
+			if up ~= nil and up.ResearchKind ~= "" and up.ResearchKind == (action.Arg or "") then
+				remain = up:ResearchRemain()
+				total = up.ResearchTotal
+			end
+		end
+		if remain > 0.05 then
+			cool.Enable = true
+			local sprite = cool.SpriteGUIRendererComponent
+			if sprite ~= nil then sprite.FillAmount = (total > 0) and math.min(1, remain / total) or 1 end
+			local sec = cool:GetChildByName("Sec")
+			if isvalid(sec) and sec.TextGUIRendererComponent ~= nil then
+				sec.TextGUIRendererComponent.Text = (remain >= 10) and tostring(math.ceil(remain)) or string.format("%.1f", remain)
+			end
+		else
+			cool.Enable = false
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshResearch(Entity slot, table action)
+		-- 전직관 연구 버튼: 지금 연구 중인 단계의 칸에 쿨타임 덮개처럼 남은 연구 시간을 보여 준다(PlayerInfo.Research*).
+		local cool = isvalid(slot) and slot:GetChildByName("Cool") or nil
+		if not isvalid(cool) then return end
+		local lp = _UserService.LocalPlayer
+		---@type PlayerInfo
+		local info = isvalid(lp) and lp:GetComponent("script.PlayerInfo") or nil
+		local remain = 0
+		local total = 0
+		if info ~= nil and tostring(info.ResearchTier) == (action.Arg or "") then
+			remain = info.ResearchEndTime - _UtilLogic.ServerElapsedSeconds
+			total = info.ResearchTotal
+		end
+		if remain > 0.05 then
+			cool.Enable = true
+			local sprite = cool.SpriteGUIRendererComponent
+			if sprite ~= nil then sprite.FillAmount = (total > 0) and math.min(1, remain / total) or 1 end
+			local sec = cool:GetChildByName("Sec")
+			if isvalid(sec) and sec.TextGUIRendererComponent ~= nil then
+				sec.TextGUIRendererComponent.Text = (remain >= 10) and tostring(math.ceil(remain)) or string.format("%.1f", remain)
+			end
+		else
+			cool.Enable = false
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshCooldowns()
+		for idx = 1, self.SlotCount do
+			local action = self.ActionUIList[idx]
+			if action ~= nil and action.ActionID == "JobAdvance" then
+				self:RefreshResearch(self.Entity:GetChildByName("Slot" .. tostring(idx)), action)
+			end
+			if action ~= nil and action.ActionID == "Upgrade" then
+				self:RefreshUpgrade(self.Entity:GetChildByName("Slot" .. tostring(idx)), action)
+			end
+			if action ~= nil and action.ActionID == "Ability" then
+				self:RefreshAbility(self.Entity:GetChildByName("Slot" .. tostring(idx)), action)
+			end
+			if action ~= nil and action.ActionID == "HeroSkill" then
+				local slot = self.Entity:GetChildByName("Slot" .. tostring(idx))
+				local cool = isvalid(slot) and slot:GetChildByName("Cool") or nil
+				if isvalid(cool) then
+					local remain, total = 0, 0
+					if isvalid(action.Building) then
+						---@type HeroUnitSkill
+						local hs = action.Building:GetComponent("script.HeroUnitSkill")
+						if hs ~= nil then
+							remain = hs:GetCooldownRemaining(action.Arg or "")
+							total = hs:GetCooldownTotal(action.Arg or "")
+						end
+					end
+					if remain > 0.05 then
+						cool.Enable = true
+						local sprite = cool.SpriteGUIRendererComponent
+						if sprite ~= nil then
+							sprite.FillAmount = (total > 0) and math.min(1, remain / total) or 1
+						end
+						local sec = cool:GetChildByName("Sec")
+						if isvalid(sec) and sec.TextGUIRendererComponent ~= nil then
+							-- 10초 이상은 정수, 그 아래는 소수 한 자리로 보여 준다.
+							sec.TextGUIRendererComponent.Text = (remain >= 10) and tostring(math.ceil(remain)) or string.format("%.1f", remain)
+						end
+					else
+						cool.Enable = false
+					end
+				end
+			end
+		end
+	end
+
+	@EventSender("LocalPlayer")
+	handler HandleUnitActionChangeEvent(UnitActionChangeEvent event)
+		-- Parameters
+		-- local ActionList = event.ActionList
+		---------------------------------------------------------
+		self.ActionUIList = event.ActionList or {}
+		self:ChangeActionUI()
+	end
+
+end

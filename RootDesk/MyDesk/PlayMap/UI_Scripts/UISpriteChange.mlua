@@ -1,0 +1,28 @@
+@Component
+script UISpriteChange extends Component
+
+	@ExecSpace("Client")
+	method void ChangeUISprite(table SpriteID)
+		if SpriteID ~= nil then
+			self.Entity.SpriteGUIRendererComponent.ImageRUID = SpriteID[1]
+			return
+		end
+	end
+
+	@EventSender("LocalPlayer")
+	handler HandleUnitUIChangeEvent(UnitUIChangeEvent event)
+		-- Parameters
+		-- local TargetUIName = event.TargetUIName
+		-- local SelectedUnitTable = event.SelectedUnitTable
+		---------------------------------------------------------
+		if event.TargetUIName == self.Entity.Name then
+			self:ChangeUISprite(event.SelectedUnitTable)
+			self.Entity.Enable = true
+			self.Entity.Visible = true
+		else
+			self.Entity.Enable = false
+			self.Entity.Visible = false
+		end
+	end
+
+end

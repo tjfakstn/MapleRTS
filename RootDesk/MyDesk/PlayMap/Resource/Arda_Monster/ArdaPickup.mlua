@@ -1,0 +1,194 @@
+@Component
+script ArdaPickup extends Component
+
+	@Sync
+	property integer Amount = 3
+
+	@Sync
+	property boolean Pickable = false
+
+	@DisplayName("줍기 판정 여유(트리거 박스 바깥으로 더 넓히는 거리, world unit)")
+	property number PickupMargin = 0.3
+
+	@DisplayName("본진까지 날아가는 시간(초)")
+	property number FlightTime = 0.9
+
+	@DisplayName("포물선 최고 높이(world unit)")
+	property number ArcHeight = 1.5
+
+	@HideFromInspector
+	property boolean _picked = false
+
+	@HideFromInspector
+	property number _checkTimer = 0
+
+	@HideFromInspector
+	property boolean _flying = false
+
+	@HideFromInspector
+	property Vector2 _from = Vector2(0, 0)
+
+	@HideFromInspector
+	property Vector2 _to = Vector2(0, 0)
+
+	@HideFromInspector
+	property number _t = 0
+
+	@HideFromInspector
+	property number _z = 0
+
+	method void OnUpdate(number delta)
+		-- 서버: 줍기 판정 / 클라이언트: 비행 연출.
+		if self:IsServer() then
+			self:ServerUpdate(delta)
+			return
+		end
+		if self._flying then
+			self:UpdateFlight(delta)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ServerUpdate(number delta)
+		if self._picked or not self.Pickable then return end
+		
+		self._checkTimer = self._checkTimer - delta
+		if self._checkTimer > 0 then return end
+		self._checkTimer = 0.1
+		
+		local unit = self:FindUnitInside()
+		if unit ~= nil then
+			self:BeginCollect(unit.Unit_Info.PlayerID)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method Entity FindUnitInside()
+		-- 모든 플레이어의 살아있는 유닛 중 트리거 박스(+여유) 안에 들어온 유닛(없으면 nil).
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return nil end
+		
+		local group = map:GetChildByName("MyUnits")
+		if not isvalid(group) then return nil end
+		
+		local tf = self.Entity.TransformComponent
+		local wp = tf.WorldPosition
+		local sx = math.abs(tf.Scale.x)
+		local sy = math.abs(tf.Scale.y)
+		local cx = wp.x
+		local cy = wp.y
+		local hx = self.PickupMargin
+		local hy = self.PickupMargin
+		local trigger = self.Entity.TriggerComponent
+		if trigger ~= nil then
+			cx = cx + trigger.ColliderOffset.x * sx
+			cy = cy + trigger.ColliderOffset.y * sy
+			hx = hx + trigger.BoxSize.x * sx / 2
+			hy = hy + trigger.BoxSize.y * sy / 2
+		end
+		
+		for _, child in ipairs(group.Children:ToTable()) do
+			---@type Unit_Info
+			local uinfo = child:GetComponent("script.Unit_Info")
+			if uinfo ~= nil and not uinfo.IsDead and uinfo.PlayerID ~= "" then
+				local up = child.TransformComponent.WorldPosition
+				if math.abs(up.x - cx) <= hx and math.abs(up.y - cy) <= hy then
+					return child
+				end
+			end
+		end
+		return nil
+	end
+
+	@ExecSpace("ServerOnly")
+	method void AutoCollect(string ownerId)
+		-- 줍기 없이 ownerId의 본진으로 바로 날려 보낸다(Arda 채집 건물이 잡은 몬스터의 드롭).
+		if self._picked then return end
+		self:BeginCollect(ownerId)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void BeginCollect(string ownerId)
+		-- 수거 시작: ownerId의 가장 가까운 본진으로 포물선 비행을 시키고, 도착 시점에 Erda를 지급한다.
+		local hq = self:FindHQ(ownerId)
+		self._picked = true
+		
+		local wp = self.Entity.TransformComponent.WorldPosition
+		if hq == nil then
+			-- 반납할 본진이 없으면 날아가는 연출 없이 바로 지급한다.
+			self:Credit(ownerId)
+			return
+		end
+		
+		local hp = hq.TransformComponent.WorldPosition
+		self:StartFlight(Vector2(wp.x, wp.y), Vector2(hp.x, hp.y))
+		
+		_TimerService:SetTimerOnce(function()
+			self:Credit(ownerId)
+		end, self.FlightTime)
+	end
+
+	@ExecSpace("ServerOnly")
+	method Entity FindHQ(string ownerId)
+		-- ownerId 소유의 살아있는 본진 중 이 Arda에서 가장 가까운 것.
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return nil end
+		local wp = self.Entity.TransformComponent.WorldPosition
+		local best = nil
+		local bestDist = math.huge
+		local comps = map:GetChildComponentsByTypeName("script.Structure_Info", true)
+		for _, comp in ipairs(comps) do
+			---@type Structure_Info
+			local sinfo = comp
+			local e = sinfo.Entity
+			if isvalid(e) and not sinfo.IsDestroyed and sinfo.PlayerID == ownerId and sinfo.BuildingKey == "HQ" then
+				local p = e.TransformComponent.WorldPosition
+				local d = Vector2.Distance(Vector2(wp.x, wp.y), Vector2(p.x, p.y))
+				if d < bestDist then
+					best = e
+					bestDist = d
+				end
+			end
+		end
+		return best
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Credit(string ownerId)
+		-- 도착 시점: 소유자의 Erda를 늘리고 드롭을 제거한다.
+		local owner = _UserService:GetUserEntityByUserId(ownerId)
+		if isvalid(owner) then
+			---@type PlayerInfo
+			local pinfo = owner:GetComponent("script.PlayerInfo")
+			if pinfo ~= nil then
+				pinfo.Erda = pinfo.Erda + self.Amount
+				_MatchStatsLogic:AddGathered(ownerId, 0, self.Amount)
+			end
+		end
+		if isvalid(self.Entity) then self.Entity:Destroy() end
+	end
+
+	@ExecSpace("Multicast")
+	method void StartFlight(Vector2 from, Vector2 to)
+		-- 모든 클라이언트에서 같은 포물선을 각자 그린다(위치는 동기화하지 않고 시작점/끝점/시간만 공유).
+		self._from = from
+		self._to = to
+		self._t = 0
+		self._z = self.Entity.TransformComponent.WorldPosition.z
+		self._flying = true
+		local renderer = self.Entity.SpriteRendererComponent
+		if isvalid(renderer) then
+			renderer.OrderInLayer = 20
+		end
+	end
+
+	method void UpdateFlight(number delta)
+		-- 시작점→본진 직선 보간에 포물선(4t(1-t)) 높이를 더한다.
+		self._t = math.min(1, self._t + delta / math.max(self.FlightTime, 0.01))
+		local t = self._t
+		local x = self._from.x + (self._to.x - self._from.x) * t
+		local y = self._from.y + (self._to.y - self._from.y) * t + self.ArcHeight * 4 * t * (1 - t)
+		self.Entity.TransformComponent.WorldPosition = Vector3(x, y, self._z)
+	end
+
+end

@@ -1,0 +1,474 @@
+@Component
+script MechanicSkillComponent extends Component
+
+	@Sync
+	property integer charges = 2
+
+	@Sync
+	property boolean casting = false
+
+	@Sync
+	property number rechargeRemaining = 0
+
+	method table BuildKit()
+		    -- 수치는 MechanicHeroDataComponent가 단일 출처로 소유한다. 기존 호출부 호환을 위한 위임이다.
+		    ---@type MechanicHeroDataComponent
+		    local data = self.Entity:GetComponent("script.MechanicHeroDataComponent")
+		    if data == nil then
+		        return {}
+		    end
+		    local kit = data:BuildKit()
+		    local adapter = self.Entity:GetComponent("script.HeroUnitSkill")
+		    if adapter ~= nil then return adapter:PrepareKit(kit, 11) end
+		    return kit
+	end
+
+	method table BuildVfx()
+		    -- VFX RUID/배율은 MechanicHeroDataComponent가 단일 출처로 소유한다. 기존 호출부 호환을 위한 위임이다.
+		    ---@type MechanicHeroDataComponent
+		    local data = self.Entity:GetComponent("script.MechanicHeroDataComponent")
+		    if data == nil then
+		        return {}
+		    end
+		    return data:BuildVfx()
+	end
+
+	method table BuildTitanTimeline()
+		    -- 서버 판정과 클라이언트 연출이 같은 프레임 기준을 사용한다. 피해 450을 25타로 나눈다.
+		    local skill = self:BuildKit().E
+		    local sequenceDuration = #self:BuildVfx().E.frames * skill.frameDuration
+		    local bursts = {}
+		    for _, frame in ipairs(skill.sequenceHitFrames) do
+		        table.insert(bursts, { at = skill.summonDuration + frame * skill.frameDuration, phase = "sequence" })
+		    end
+		    for _, frame in ipairs(skill.fallHitFrames) do
+		        table.insert(bursts, { at = skill.summonDuration + sequenceDuration + frame * skill.fallFrameDuration, phase = "fall" })
+		    end
+		    return { bursts = bursts, totalHits = #bursts * skill.hitsPerBurst,
+		        duration = skill.summonDuration + sequenceDuration + skill.fallDuration }
+	end
+
+	method void OnBeginPlay()
+		    -- 기존 직업처럼 플레이어에 전용 상태와 시각 helper를 붙인다.
+		    -- 컴포넌트 추가는 서버에서만 한다(클라이언트에서도 추가하면 복제본과 중복될 수 있다).
+		    if self:IsServer() then
+		        if self.Entity:GetComponent("script.MechanicEffectComponent") == nil then
+		            self.Entity:AddComponent("script.MechanicEffectComponent")
+		        end
+		        self._T.launchers = {} self._T.projectiles = {} self._T.titans = {}
+		        self._T.serial = 0 self.charges = self:BuildKit().W.maxCharges self.rechargeRemaining = 0
+		        self._T.boundsReady = false
+		        local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		        local shapes = core:GetAttackLogicComponent()
+		        local vfx = self:BuildVfx()
+		        for _, ruid in ipairs({ vfx.W.impact, vfx.T.impact, vfx.E.effect2, vfx.R.foreground }) do
+		            shapes:GetMeasuredEffectBounds(ruid)
+		        end
+		        for _, ruid in ipairs(vfx.E.frames) do shapes:GetMeasuredEffectBounds(ruid) end
+		        self._T.boundsReady = true
+		    end
+	end
+
+	method Component GetEffects()
+		    -- 별도 전역 관리자 없이 같은 플레이어의 helper에 접근한다.
+		    return self.Entity:GetComponent("script.MechanicEffectComponent")
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean IsEnemy(Entity target)
+		    -- 공통 진영/피격 상태를 조회할 뿐 HP는 직접 변경하지 않는다.
+		    if not isvalid(target) or not target.EnabledInHierarchy or target.CurrentMap ~= self.Entity.CurrentMap then return false end
+		    if not _CombatTeamLogic:IsEnemy(self.Entity, target) then return false end
+		    local unit = target:GetComponent("script.Unit_Info")
+		    if unit ~= nil then return not unit.IsDead and unit.Hp > 0 end
+		    local structure = target:GetComponent("script.Structure_Info")
+		    if structure ~= nil then return not structure.IsDestroyed end
+		    local hit = target:GetComponent("script.UnitHitComponent")
+		    if hit ~= nil then return not hit.isDead and hit.hp > 0 end
+		    if target:GetComponent("script.TrainingDummyComponent") ~= nil then return true end
+		    return target.PlayerComponent ~= nil and not target.PlayerComponent:IsDead()
+	end
+
+	@ExecSpace("ServerOnly")
+	method table FindTargets(Vector2 origin, number range)
+		    -- 공격 cycle에만 탐색하고 병기별 거리 순서로 독립 타겟을 선택한다.
+		    local result = {} local seen = {}
+		    for _, typeName in ipairs({ "script.Unit_Info", "script.Structure_Info", "script.UnitHitComponent", "script.TrainingDummyComponent", "PlayerComponent" }) do
+		        for _, comp in ipairs(self.Entity.CurrentMap:GetChildComponentsByTypeName(typeName, true)) do
+		            local e = comp.Entity
+		            if not seen[e.Id] and self:IsEnemy(e) then
+		                seen[e.Id] = true
+		                local distance = (e.TransformComponent.WorldPosition:ToVector2() - origin):Magnitude()
+		                if distance <= range then table.insert(result, { entity = e, distance = distance }) end
+		            end
+		        end
+		    end
+		    table.sort(result, function(a, b) return a.distance < b.distance end)
+		    return result
+	end
+
+	@ExecSpace("ServerOnly")
+	method Entity SpawnVisual(string label, string ruid, Vector2 origin, number scale)
+		    -- 기존 body-less 시각 모델을 재사용한다. 설치 병기는 별도 탱커 유닛이 아니다.
+		    self._T.serial = self._T.serial + 1
+		    local e = _SpawnService:SpawnByModelId("projectile", "Mechanic_" .. tostring(self.Entity.Id) .. "_" .. label .. tostring(self._T.serial), origin:ToVector3(), self.Entity.CurrentMap)
+		    if isvalid(e) then
+		        e.SpriteRendererComponent.SpriteRUID = ruid
+		        e.TransformComponent.Scale = Vector3(scale, scale, 1)
+		    end
+		    return e
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Hit(string key, Vector2 origin, Vector2 size, Vector2 direction, integer damage, integer limit, boolean impact)
+		    -- 엔진 Attack과 기존 Core 필터를 거쳐서만 피해/HitEvent를 발생시킨다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local shape = size.y == 0 and CircleShape(origin, size.x) or BoxShape(origin, size, 0)
+		    if direction:Magnitude() > 0 then shape = core:BuildFrontBox(origin, direction, size.x, size.y) end
+		    if key == "E" and self._T.titanHitShape ~= nil then
+		        shape = self._T.titanHitShape
+		    elseif key == "R" then
+		        local vfx = self:BuildVfx().R
+		        local measured = core:GetAttackLogicComponent():BuildMeasuredEffectBox(vfx.foreground, origin, direction, self:BuildKit().R.visualScale)
+		        if measured ~= nil then shape = measured end
+		    elseif key == "W" or key == "T" then
+		        local measured = core:GetAttackLogicComponent():BuildMeasuredEffectBox(self:BuildVfx()[key].impact, origin, Vector2(-1, 0), 1)
+		        if measured ~= nil then shape = measured end
+		    end
+		    core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		    local info = "MECH_" .. key .. ":" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(damage)
+		    core:BeginAttackTargetFilter(info, limit)
+		    local ok, hits = pcall(function() return core:PerformAttack(shape, info) end)
+		    core:EndAttackTargetFilter(info)
+		    if not ok then error(hits) end
+		    if impact then
+		        local effects = self:GetEffects()
+		        for _, h in ipairs(hits) do
+		            if isvalid(h.Entity) and effects ~= nil then
+		                effects:Play("impact", self:BuildVfx()[key].impact, h.Entity.TransformComponent.WorldPosition:ToVector2(), Vector2(1, 0), 1, 2, false)
+		            end
+		        end
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TryCast(string key, Vector2 aim)
+		    -- Core 소유권 검사를 통과한 입력만 처리하며 W만 일괄 충전 정책을 사용한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if core:GetSelectedHeroId() ~= "mechanic" or _CombatTeamLogic:IsDead(self.Entity) or self.casting then return end
+		    local kit = self:BuildKit() local skill = kit[key]
+		    if type(skill) ~= "table" then return end
+		    local effects = self:GetEffects() if effects == nil then return end
+		    local now = _UtilLogic.ElapsedSeconds
+		    core._T.cooldownEndAt = core._T.cooldownEndAt or {}
+		    local cdKey = "11:" .. key
+		    if key == "W" then
+		        if self.charges <= 0 then return end
+		    elseif now < (core._T.cooldownEndAt[cdKey] or 0) then return end
+		    local origin = self.Entity.TransformComponent.WorldPosition:ToVector2()
+		    local difference = aim - origin
+		    local direction = Vector2(difference.x < 0 and -1 or 1, 0)
+		    if key == "W" or key == "E" or key == "R" then
+		        -- W/E/R은 커서가 아니라 이동 코드와 같은 실제 아바타 방향을 읽는다. 캐릭터 방향은 덮어쓰지 않는다.
+		        direction = core:GetCurrentFacingDirection(direction)
+		    else
+		        if self.Entity.PlayerControllerComponent ~= nil then self.Entity.PlayerControllerComponent.LookDirectionX = direction.x end
+		    end
+		    self._T.activeMap = self.Entity.CurrentMap
+		    local vfx = self:BuildVfx()[key]
+		    if key == "Q" then
+		        core:CastGeneric(kit.name, key, skill, direction, aim)
+		    elseif key == "W" then
+		        local point = origin + (difference:Magnitude() > skill.placementRange and difference:Normalize() * skill.placementRange or difference)
+		        local e = self:SpawnVisual("Launcher", vfx.idle, point, skill.visualScale)
+		        if not isvalid(e) then return end
+		        -- 대포는 설치 순간 캐릭터가 보는 방향을 유지한다. 커서는 설치 위치만 정한다.
+		        e.SpriteRendererComponent.FlipX = direction.x > 0
+		        if #self._T.launchers >= skill.maxLaunchers then self:RemoveLauncher(1) end
+		        table.insert(self._T.launchers, { entity = e, age = 0, nextAttack = 0, skill = skill })
+		        if self.charges == skill.maxCharges and self.rechargeRemaining <= 0 then self.rechargeRemaining = skill.recharge end
+		        self.charges = self.charges - 1
+		    elseif key == "E" then
+		        local point = origin - direction * skill.behindOffset
+		        local hitCenter = point + direction * (skill.length * 0.5)
+		        table.insert(self._T.titans, { origin = hitCenter, elapsed = 0, skill = skill,
+		            visualOrigin = point, direction = direction, timeline = self:BuildTitanTimeline(), fired = 0 })
+		        effects:BeginTitan(point, direction, hitCenter)
+		    elseif key == "R" then
+		        local hit = _CombatTeamLogic:GetReceiver(self.Entity)
+		        local body = self.Entity.KinematicbodyComponent
+		        local old = hit ~= nil and (hit._T.immuneUntil or 0) or 0
+		        self._T.channel = { origin = origin, direction = direction, elapsed = 0, fired = 0, skill = skill,
+		            oldImmune = old, deadline = math.max(old, now + skill.windup + skill.duration + 0.1),
+		            speed = body.SpeedFactor, layers = false }
+		        if hit ~= nil then hit._T.immuneUntil = self._T.channel.deadline end
+		        body.SpeedFactor = Vector2.zero self.Entity.MovementComponent:Stop()
+		        self.casting = true
+		        effects:Play("R", vfx.effect, origin, direction, skill.visualScale, skill.windup, false)
+		    elseif key == "T" then
+		        if self._T.carrier ~= nil then return end
+		        local point = origin + Vector2(0, skill.height)
+		        local e = self:SpawnVisual("Carrier", vfx.effect, point, skill.visualScale)
+		        if not isvalid(e) then return end
+		        e.SpriteRendererComponent.FlipX = direction.x > 0
+		        self._T.carrier = { entity = e, age = -skill.windup, fired = 0, skill = skill,
+		            ownerPosition = origin, facing = direction.x }
+		    end
+		    if key ~= "W" then core._T.cooldownEndAt[cdKey] = now + (core.designNoCooldown and 0 or skill.cooldown) end
+		    core:AcceptActorCast(key, skill)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Fire(table source, string key, Entity target)
+		    -- projectile의 원점은 런처/캐리어 Entity이며 각 투사체가 독립 target을 보유한다.
+		    if not isvalid(source.entity) or not self:IsEnemy(target) then return end
+		    local skill = source.skill
+		    local origin = source.entity.TransformComponent.WorldPosition:ToVector2()
+		    local facingRight = target.TransformComponent.WorldPosition.x >= origin.x
+		    if key == "W" then source.entity.SpriteRendererComponent.FlipX = facingRight end
+		    local e = self:SpawnVisual("Missile", self:BuildVfx()[key].projectile, origin, skill.projectileScale)
+		    if not isvalid(e) then return end
+		    e.SpriteRendererComponent.FlipX = facingRight
+		    table.insert(self._T.projectiles, { entity = e, target = target, source = source.entity,
+		        key = key, skill = skill, age = 0, hits = key == "T" and skill.hitsPerProjectile or 1 })
+	end
+
+	@ExecSpace("ServerOnly")
+	method void RemoveLauncher(integer index)
+		    -- 런처 종료 시 자신의 예약/발사체만 취소하며 다른 병기를 건드리지 않는다.
+		    local rec = self._T.launchers[index]
+		    for i = #self._T.projectiles, 1, -1 do
+		        local p = self._T.projectiles[i]
+		        if p.key == "W" and p.source == rec.entity then
+		            if isvalid(p.entity) then p.entity:Destroy() end
+		            table.remove(self._T.projectiles, i)
+		        end
+		    end
+		    if isvalid(rec.entity) then rec.entity:Destroy() end
+		    table.remove(self._T.launchers, index)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TickWeapons(number delta)
+		    -- 충전, 설치 수명, 발사 예약을 서로 독립적으로 갱신한다.
+		    local vfx = self:BuildVfx()
+		    for i = #self._T.launchers, 1, -1 do
+		        local rec = self._T.launchers[i] local skill = rec.skill
+		        rec.age = rec.age + delta
+		        if not isvalid(rec.entity) or rec.age >= skill.duration then self:RemoveLauncher(i)
+		        else
+		            if rec.pending ~= nil and rec.age >= rec.releaseAt then
+		                self:Fire(rec, "W", rec.pending) rec.pending = nil
+		            end
+		            if rec.idleAt ~= nil and rec.age >= rec.idleAt then rec.entity.SpriteRendererComponent.SpriteRUID = vfx.W.idle rec.idleAt = nil end
+		            if rec.age >= rec.nextAttack then
+		                rec.nextAttack = rec.age + skill.attackInterval
+		                local targets = self:FindTargets(rec.entity.TransformComponent.WorldPosition:ToVector2(), skill.range)
+		                if #targets > 0 then
+		                    rec.pending = targets[1].entity rec.releaseAt = rec.age + skill.fireDelay rec.idleAt = rec.age + skill.fireDuration
+		                    rec.entity.SpriteRendererComponent.FlipX = rec.pending.TransformComponent.WorldPosition.x >= rec.entity.TransformComponent.WorldPosition.x
+		                    rec.entity.SpriteRendererComponent.SpriteRUID = vfx.W.fire
+		                end
+		            end
+		        end
+		    end
+		    local rec = self._T.carrier
+		    if rec ~= nil then
+		        local skill = rec.skill rec.age = rec.age + delta
+		        if isvalid(rec.entity) then
+		            local ownerPosition = self.Entity.TransformComponent.WorldPosition:ToVector2()
+		            local moved = ownerPosition - rec.ownerPosition
+		            if math.abs(moved.x) > 0.001 then
+		                local facing = moved.x < 0 and -1 or 1
+		                if facing ~= rec.facing then  end
+		                rec.facing = facing
+		            end
+		            rec.ownerPosition = ownerPosition
+		            local goal = ownerPosition + Vector2(0, skill.height)
+		            local offset = (goal - rec.entity.TransformComponent.WorldPosition:ToVector2()) * (1 - math.exp(-skill.followRate * delta))
+		            rec.entity.TransformComponent:Translate(offset.x, offset.y)
+		            rec.entity.SpriteRendererComponent.FlipX = rec.facing > 0
+		        end
+		        if not isvalid(rec.entity) then self._T.carrier = nil
+		        elseif rec.age >= skill.duration then
+		            if not rec.ending then
+		                rec.ending = true rec.pending = nil rec.entity.SpriteRendererComponent.SpriteRUID = vfx.T.effect2
+		            end
+		            if rec.age >= skill.duration + skill.endDuration then rec.entity:Destroy() self._T.carrier = nil end
+		        elseif rec.age >= 0 then
+		            if not rec.started then rec.started = true rec.entity.SpriteRendererComponent.SpriteRUID = vfx.T.idle end
+		            if rec.pending ~= nil and rec.age >= rec.releaseAt then
+		                for _, target in ipairs(rec.pending) do self:Fire(rec, "T", target) end rec.pending = nil
+		            end
+		            if rec.idleAt ~= nil and rec.age >= rec.idleAt then rec.entity.SpriteRendererComponent.SpriteRUID = vfx.T.idle rec.idleAt = nil end
+		            if rec.fired < skill.cycleCount and rec.age >= rec.fired * skill.cycleInterval then
+		                rec.fired = rec.fired + 1
+		                local targets = self:FindTargets(rec.entity.TransformComponent.WorldPosition:ToVector2(), skill.range)
+		                if #targets > 0 then
+		                    rec.pending = {}
+		                    for n = 1, skill.projectileCount do table.insert(rec.pending, targets[((n - 1) % #targets) + 1].entity) end
+		                    rec.releaseAt = rec.age + skill.fireDelay rec.idleAt = rec.age + skill.fireDuration
+		                    rec.entity.SpriteRendererComponent.SpriteRUID = vfx.T.fire
+		                end
+		            end
+		        end
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TickProjectiles(number delta)
+		    -- 매 프레임 연속 유도 이동하며 도착 시 각 타격을 별도 Attack으로 전달한다.
+		    for i = #self._T.projectiles, 1, -1 do
+		        local rec = self._T.projectiles[i] rec.age = rec.age + delta
+		        local remove = not isvalid(rec.entity) or not self:IsEnemy(rec.target) or rec.age >= rec.skill.projectileLifetime
+		        if not remove then
+		            local origin = rec.entity.TransformComponent.WorldPosition:ToVector2()
+		            local goal = rec.target.TransformComponent.WorldPosition:ToVector2()
+		            local difference = goal - origin
+		            local distance = difference:Magnitude()
+		            if distance <= rec.skill.projectileSpeed * delta then
+		                rec.entity.TransformComponent.Position = goal:ToVector3()
+		                for n = 1, rec.hits do self:Hit(rec.key, goal, Vector2(rec.skill.hitRadius, 0), Vector2.zero, rec.skill.damage, 1, n == 1) end
+		                remove = true
+		            else
+		                local p = origin + difference:Normalize() * rec.skill.projectileSpeed * delta
+		                rec.entity.TransformComponent.Position = p:ToVector3()
+		                rec.entity.SpriteRendererComponent.FlipX = difference.x > 0
+		            end
+		        end
+		        if remove then if isvalid(rec.entity) then rec.entity:Destroy() end table.remove(self._T.projectiles, i) end
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TickCasts(number delta)
+		    -- E는 연속 sprite 2회와 낙하 3회에 각 5타, R은 기존 0.1초 공격을 유지한다.
+		    for i = #self._T.titans, 1, -1 do
+		        local rec = self._T.titans[i] rec.elapsed = rec.elapsed + delta
+		        local bursts = rec.timeline.bursts
+		        while rec.fired < #bursts and rec.elapsed >= bursts[rec.fired + 1].at do
+		            rec.fired = rec.fired + 1
+		            local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		            local visual = self:BuildVfx().E
+		            local visualOrigin = rec.visualOrigin
+		            local visualDirection = rec.direction
+		            local ruid = visual.effect2
+		            if bursts[rec.fired].phase == "sequence" then
+		                local frame = math.min(#visual.frames, rec.skill.sequenceHitFrames[rec.fired] + 1)
+		                ruid = visual.frames[frame]
+		            else
+		                local center = rec.skill.fallVisualCenter * rec.skill.visualScale
+		                visualOrigin = rec.origin - Vector2(center.x * rec.direction.x, center.y)
+		                visualDirection = rec.direction * -1
+		            end
+		            self._T.titanHitShape = core:GetAttackLogicComponent():BuildMeasuredEffectBox(ruid, visualOrigin, visualDirection, rec.skill.visualScale)
+		            for n = 1, rec.skill.hitsPerBurst do
+		                self:Hit("E", rec.origin, Vector2(rec.skill.length, rec.skill.width), Vector2.zero,
+		                    math.floor(rec.skill.damage / rec.timeline.totalHits), rec.skill.maxTargets, n == 1)
+		            end
+		            self._T.titanHitShape = nil
+		        end
+		        if rec.elapsed >= rec.timeline.duration then table.remove(self._T.titans, i) end
+		    end
+		    local rec = self._T.channel
+		    if rec == nil then return end
+		    rec.elapsed = rec.elapsed + delta local skill = rec.skill
+		    self.Entity.MovementComponent:Stop()
+		    if rec.elapsed >= skill.windup then
+		        if not rec.layers then
+		            rec.layers = true
+		            local effects = self:GetEffects() local vfx = self:BuildVfx().R
+		            effects:Play("R", vfx.background, rec.origin, rec.direction, skill.visualScale, skill.duration + 0.1, true)
+		            effects:Play("R", vfx.foreground, rec.origin, rec.direction, skill.visualScale, skill.duration + 0.1, true)
+		        end
+		        local due = math.min(skill.tickCount, math.floor((rec.elapsed - skill.windup + 0.000001) / skill.tickInterval))
+		        local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		        while rec.fired < due do
+		            rec.fired = rec.fired + 1
+		            self:Hit("R", rec.origin, Vector2(skill.length, skill.width), rec.direction, skill.damage, skill.maxTargets, rec.fired % 3 == 1)
+		        end
+		        if rec.elapsed >= skill.windup + skill.duration then self:FinishChannel(true) end
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void FinishChannel(boolean normalEnd)
+		    -- 자신이 설정한 무적/이동 제한만 복원하며 예외/이탈도 같은 경로로 정리한다.
+		    local rec = self._T.channel if rec == nil then self.casting = false return end
+		    local hit = _CombatTeamLogic:GetReceiver(self.Entity)
+		    if hit ~= nil and hit._T.immuneUntil == rec.deadline then hit._T.immuneUntil = rec.oldImmune end
+		    local body = self.Entity.KinematicbodyComponent
+		    if body ~= nil and body.SpeedFactor == Vector2.zero then body.SpeedFactor = rec.speed end
+		    self._T.channel = nil self.casting = false
+		    local effects = self:GetEffects()
+		    if effects ~= nil then
+		        effects:ClearGroup("R")
+		        if normalEnd then effects:Play("R_end", self:BuildVfx().R.effect2, rec.origin, rec.direction, rec.skill.visualScale, rec.skill.endDuration, false) end
+		    end
+	end
+
+	method void OnUpdate(number delta)
+		    -- 서버 예외 시에도 병기/무적을 정리하고 클라이언트는 이동 입력만 차단한다.
+		    if self:IsClient() then
+		        if self.casting and self.Entity == _UserService.LocalPlayer then
+		            local move = self.Entity:GetComponent("script.ClickToMoveComponent")
+		            if move ~= nil then move:StopMovement() end
+		            self.Entity.MovementComponent:Stop()
+		        end
+		        return
+		    end
+		    -- 소환체는 이탈 시 사라져도 첫 소비로 시작한 35초 일괄 충전은 계속 진행한다.
+		    if self.rechargeRemaining > 0 then
+		        self.rechargeRemaining = math.max(0, self.rechargeRemaining - delta)
+		        if self.rechargeRemaining == 0 then self.charges = self:BuildKit().W.maxCharges  end
+		    end
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if core == nil or core:GetSelectedHeroId() ~= "mechanic" or _CombatTeamLogic:IsDead(self.Entity)
+		        or (self._T.activeMap ~= nil and self._T.activeMap ~= self.Entity.CurrentMap) then
+		        if self._T.activeMap ~= nil then self:Cleanup() end return
+		    end
+		    if self._T.boundsReady ~= true or self._T.updating == true then return end
+		    self._T.updating = true
+		    local ok, reason = pcall(function() self:TickWeapons(delta) self:TickProjectiles(delta) self:TickCasts(delta) end)
+		    self._T.updating = false
+		    if not ok then self:Cleanup() log_error("Mechanic: cancelled after error " .. tostring(reason)) end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Cleanup()
+		    -- 캐리어 자연 종료와 달리 이탈/사망/컴포넌트 종료는 비행 중 projectile도 취소한다.
+		    self:FinishChannel(false)
+		    for _, rec in ipairs(self._T.launchers or {}) do if isvalid(rec.entity) then rec.entity:Destroy() end end
+		    for _, rec in ipairs(self._T.projectiles or {}) do if isvalid(rec.entity) then rec.entity:Destroy() end end
+		    if self._T.carrier ~= nil and isvalid(self._T.carrier.entity) then self._T.carrier.entity:Destroy() end
+		    self._T.launchers = {} self._T.projectiles = {} self._T.titans = {} self._T.carrier = nil self._T.activeMap = nil
+		    local effects = self:GetEffects() if effects ~= nil then effects:ClearGroup("ALL") end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnMapLeave(Entity map)
+		    -- 이전 맵의 공격 예약을 보존하지 않는다.
+		    self:Cleanup()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnEndPlay()
+		    -- 모든 종료 경로에서 무적/이동 제한/소환체를 해제한다.
+		    self:Cleanup()
+	end
+
+	@ExecSpace("ServerOnly")
+	@EventSender("Self")
+	handler HandleDeath(DeadEvent event)
+		    -- 즉시 사망 시 채널과 병기를 정리한다.
+		    self:Cleanup()
+	end
+
+	@ExecSpace("ServerOnly")
+	@EventSender("Self")
+	handler HandleRevive(ReviveEvent event)
+		    -- 기존 즉시 리스폰 경로도 채널 중단으로 처리한다.
+		    self:Cleanup()
+	end
+
+end

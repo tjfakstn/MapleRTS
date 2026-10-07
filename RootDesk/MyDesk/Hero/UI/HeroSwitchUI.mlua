@@ -1,0 +1,190 @@
+@Component
+script HeroSwitchUI extends Component
+
+	property Entity heroNameTextEntity = "f0457729-f462-4be7-94b2-f20344cd0f0f"
+
+	property Entity openButton = "64d321dc-d2bd-4298-bfc1-335bdb319c95"
+
+	property Entity dialog = "54fc46f2-2200-4600-9529-433ff328685c"
+
+	property Entity titleText = "5dc44466-5e9e-4af7-9416-b1aaa0e1c418"
+
+	property Entity messageText = "38181a8e-dcd0-4772-8bba-0199850068ba"
+
+	property Entity currentText = "21e392a6-4b69-4901-9920-c0f686b516d8"
+
+	property Entity backButton = "b1ec7417-2564-47de-83c0-b547c7d253dd"
+
+	property Entity closeButton = "36c4d52d-b725-45bb-a2c6-21b5bc795803"
+
+	property Entity option1 = "065471cf-ca47-4faf-80da-64cb2a28e71a"
+
+	property Entity option2 = "5c9edddd-118e-4968-81eb-87f2af2e6bdf"
+
+	property Entity option3 = "9f652aac-3d8e-4c5e-9e1c-9690a25077aa"
+
+	property Entity option4 = "10c478fc-688a-48c0-8357-ec43bb845883"
+
+	property Entity option5 = "ae4661aa-d71a-41a4-a4fa-27bceb96db85"
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		    -- 상시 HUD에서 별도 대화창을 열고 다섯 개의 선택지를 재사용한다.
+		    self._T.handlers = {}
+		    self._T.options = { self.option1, self.option2, self.option3, self.option4, self.option5 }
+		    self._T.groups = {
+		        { name = "모험가", ids = { "dark_knight", "bishop", "bowmaster", "night_lord", "captain" } },
+		        { name = "시그너스", ids = { "soul_master", "flame_wizard", "night_walker", "striker", "wind_breaker" } },
+		        { name = "레지스탕스", ids = { "mechanic", "wild_hunter", "battle_mage", "xenon", "blaster" } }
+		    }
+		    self:BindClick(self.openButton, function() self:Open() end)
+		    self:BindClick(self.backButton, function() self:ShowPage(0) end)
+		    self:BindClick(self.closeButton, function() self:Close() end)
+		    for i, button in ipairs(self._T.options) do
+		        local slot = i
+		        self:BindClick(button, function() self:Choose(slot) end)
+		    end
+		    self.dialog.Enable = false
+		    self:RefreshText()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void BindClick(Entity button, any action)
+		    -- 클릭 구독은 한 번만 등록하고 수명 종료 시 해제한다.
+		    local clickHandle = button:ConnectEvent(ButtonClickEvent, function()
+		        _SoundService:PlaySound("972843e759204d3e9ad84e7d3fa94f83", 0.35)
+		        action()
+		    end)
+		    table.insert(self._T.handlers, { entity = button, clickHandle = clickHandle })
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Open()
+		    -- 기존 이동 목표와 미발사 차징을 정리하고 로컬 입력만 잠근다.
+		    local player = _UserService.LocalPlayer
+		    if not isvalid(player) then return end
+		    local core = player:GetComponent("script.HeroSkillComponent")
+		    if core == nil then return end
+		    self._T.player = player
+		    self._T.map = player.CurrentMap
+		    core.heroSelectionOpen = true
+		    local input = player:GetComponent("script.HeroSkillInputComponent")
+		    if input ~= nil and input._T.galeChargeStartAt ~= nil then
+		        input._T.galeChargeStartAt = nil
+		        core:StopSustainedAttachedEffect()
+		    end
+		    local move = player:GetComponent("script.ClickToMoveComponent")
+		    if move ~= nil then move:StopMovement() end
+		    self._T.pendingId = nil
+		    self.dialog.Enable = true
+		    self:ShowPage(0)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ShowPage(integer groupIndex)
+		    -- 첫 화면은 세 계열, 다음 화면은 해당 계열의 다섯 직업을 표시한다.
+		    if self._T.pendingId ~= nil then return end
+		    self._T.groupIndex = groupIndex
+		    local core = self._T.player:GetComponent("script.HeroSkillComponent")
+		    local group = self._T.groups[groupIndex]
+		    self.titleText.TextGUIRendererComponent.Text = group == nil and "어떤 계열을 선택하시겠어요?" or (group.name .. " · 직업 선택")
+		    self.messageText.TextGUIRendererComponent.Text = group == nil and "원하는 계열을 눌러 주세요. 언제든 다시 선택할 수 있어요." or "원하는 직업을 누르면 해당 직업의 스킬이 적용됩니다."
+		    self.backButton.Enable = group ~= nil
+		    for i, button in ipairs(self._T.options) do
+		        button.Enable = group ~= nil or i <= 3
+		        if button.Enable then
+		            local text = ""
+		            if group == nil then
+		                text = self._T.groups[i].name .. "를 선택하겠습니다."
+		            else
+		                local entry = core:GetHeroEntryById(group.ids[i])
+		                text = entry.name .. " 선택"
+		                if core:GetSelectedHeroId() == entry.id then text = text .. "  (현재 직업)" end
+		            end
+		            button.TextGUIRendererComponent.Text = "<color=#D7633B>›</color>  <u>" .. text .. "</u>"
+		        end
+		    end
+		    self:RefreshText()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Choose(integer slot)
+		    -- 직업 ID만 기존 소유권 검증 RPC에 전달하고 동기화 응답을 기다린다.
+		    if not self.dialog.Enable or self._T.pendingId ~= nil then return end
+		    local group = self._T.groups[self._T.groupIndex]
+		    if group == nil then
+		        if slot <= 3 then self:ShowPage(slot) end
+		        return
+		    end
+		    self:SelectHeroById(group.ids[slot])
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SelectHeroById(string requestedHeroId)
+		    -- 서버 선택이 반영되기 전 성공으로 표시하지 않는다.
+		    local player = _UserService.LocalPlayer
+		    if not isvalid(player) then return end
+		    local core = player:GetComponent("script.HeroSkillComponent")
+		    if core == nil or core:GetHeroEntryById(requestedHeroId) == nil then return end
+		    if core:GetSelectedHeroId() == requestedHeroId then self:Close() return end
+		    self._T.pendingId = requestedHeroId
+		    self._T.pendingUntil = _UtilLogic.ElapsedSeconds + 5
+		    self.messageText.TextGUIRendererComponent.Text = "직업을 변경하고 있어요..."
+		    core:RequestSelectHeroById(requestedHeroId)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		    -- 동기화 확인과 플레이어·맵 변경 시 입력 잠금 해제를 담당한다.
+		    if not isvalid(self.dialog) or not self.dialog.Enable then return end
+		    local player = self._T.player
+		    if not isvalid(player) or player ~= _UserService.LocalPlayer or player.CurrentMap ~= self._T.map then
+		        self:Close()
+		        return
+		    end
+		    local core = player:GetComponent("script.HeroSkillComponent")
+		    if core == nil then self:Close() return end
+		    if self._T.pendingId ~= nil then
+		        if core:GetSelectedHeroId() == self._T.pendingId then
+		            self:Close()
+		        elseif _UtilLogic.ElapsedSeconds >= self._T.pendingUntil then
+		            self._T.pendingId = nil
+		            self.messageText.TextGUIRendererComponent.Text = "변경을 확인하지 못했어요. 다시 선택해 주세요."
+		        end
+		    end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Close()
+		    -- 이 대화창의 제한만 해제하고 다른 스킬의 이동 제한은 유지한다.
+		    if isvalid(self._T.player) then
+		        local core = self._T.player:GetComponent("script.HeroSkillComponent")
+		        if core ~= nil then core.heroSelectionOpen = false end
+		    end
+		    self._T.pendingId = nil
+		    if isvalid(self.dialog) then self.dialog.Enable = false end
+		    self:RefreshText()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshText()
+		    -- HUD와 대화창에 실제 선택된 직업을 표시한다.
+		    local player = _UserService.LocalPlayer
+		    if not isvalid(player) then return end
+		    local core = player:GetComponent("script.HeroSkillComponent")
+		    if core == nil then return end
+		    if isvalid(self.heroNameTextEntity) then self.heroNameTextEntity.TextGUIRendererComponent.Text = core:GetHeroDisplayText() end
+		    if isvalid(self.currentText) then self.currentText.TextGUIRendererComponent.Text = "현재 직업 : " .. core:GetHeroEntryById(core:GetSelectedHeroId()).name end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		    -- 열린 창의 잠금과 이 컴포넌트가 등록한 클릭 구독을 정리한다.
+		    self:Close()
+		    for _, rec in ipairs(self._T.handlers or {}) do
+		        if isvalid(rec.entity) then rec.entity:DisconnectEvent(ButtonClickEvent, rec.clickHandle) end
+		    end
+		    self._T.handlers = {}
+	end
+
+end

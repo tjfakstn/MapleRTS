@@ -1,0 +1,417 @@
+@Logic
+script JobAdvanceLogic extends Logic
+
+	@DisplayName("2차 전직(W) 메소")
+	property integer Tier2Meso = 150
+
+	@DisplayName("2차 전직(W) 에르다")
+	property integer Tier2Erda = 8
+
+	@DisplayName("2차 전직(W) 연구 시간(초)")
+	property number Tier2Time = 45
+
+	@DisplayName("3차 전직(E) 메소")
+	property integer Tier3Meso = 225
+
+	@DisplayName("3차 전직(E) 에르다")
+	property integer Tier3Erda = 12
+
+	@DisplayName("3차 전직(E) 연구 시간(초)")
+	property number Tier3Time = 60
+
+	@DisplayName("4차 전직(R) 메소")
+	property integer Tier4Meso = 300
+
+	@DisplayName("4차 전직(R) 에르다")
+	property integer Tier4Erda = 15
+
+	@DisplayName("4차 전직(R) 연구 시간(초)")
+	property number Tier4Time = 80
+
+	@DisplayName("5차 전직(T) 메소")
+	property integer Tier5Meso = 400
+
+	@DisplayName("5차 전직(T) 에르다")
+	property integer Tier5Erda = 19
+
+	@DisplayName("5차 전직(T) 연구 시간(초)")
+	property number Tier5Time = 100
+
+	@DisplayName("모험가 3차 조건 건물(| = 또는)")
+	property string AdvTier3Cond = "헤네시스 무기점|전사의 성소|마법 도서관|다크로드의 은신처"
+
+	@DisplayName("시그너스 3차 조건 건물")
+	property string CygTier3Cond = "기사단 훈련소|기사단 사령부|정령의 성소"
+
+	@DisplayName("에델슈타인 3차 조건 건물")
+	property string EdeTier3Cond = "에델슈타인 정비소|에델슈타인 발전소"
+
+	@DisplayName("모험가 4차 조건 건물(| = 또는)")
+	property string AdvTier4Cond = "버섯의 성|엘리니아 마나 제단"
+
+	@DisplayName("모험가 5차 조건 건물")
+	property string AdvTier5Cond = "엘리니아 마나 제단"
+
+	@DisplayName("시그너스 4차 조건 건물")
+	property string CygTier4Cond = "기사단 전략실"
+
+	@DisplayName("시그너스 5차 조건 건물")
+	property string CygTier5Cond = "여제의 서재"
+
+	@DisplayName("에델슈타인 4차 조건 건물")
+	property string EdeTier4Cond = "레지스탕스 연구소"
+
+	@DisplayName("에델슈타인 5차 조건 건물")
+	property string EdeTier5Cond = "레지스탕스 사령부"
+
+	@DisplayName("전직 완료 이펙트(확정: A 황금 문장 0646ffe4)")
+	property string CompleteEffectRuid = "0646ffe4a14841b0bcd1d9735d8f4e16"
+
+	@DisplayName("전직 완료 이펙트 크기")
+	property number CompleteEffectScale = 0.6
+
+	@DisplayName("전직 완료 효과음")
+	property string CompleteSoundRuid = "51c0090fe47b4331ab9b936dbce94fbd"
+
+	@DisplayName("전직 완료 효과음 볼륨")
+	property number CompleteSoundVolume = 0.8
+
+	@DisplayName("전직관 건물 모델(쉼표) — 플레이어당 1개만 지을 수 있다")
+	property string InstructorModels = "model://a7af6b4a-b96c-4acf-8fc8-21a3cf9131e8,model://b8803e90-6017-4684-a2f1-bc748ba47594,model://791d3969-b7ea-4820-852e-f6e37b89ec62"
+
+	@HideFromInspector
+	property number _checkTimer = 0
+
+	method string KeyForTier(integer tier)
+		-- 전직 단계 → 그 단계에서 열리는 스킬 키(1차 Q … 5차 T).
+		local keys = { "Q", "W", "E", "R", "T" }
+		return keys[tier] or ""
+	end
+
+	method integer TierForKey(string key)
+		-- 스킬 키 → 그 키가 열리는 전직 단계(모르는 키는 1 = 처음부터 열림).
+		if key == "W" then return 2 end
+		if key == "E" then return 3 end
+		if key == "R" then return 4 end
+		if key == "T" then return 5 end
+		return 1
+	end
+
+	method table TierCost(integer tier)
+		-- 전직 단계별 비용·연구 시간 { meso, erda, time }. 2~5차만 의미가 있다.
+		if tier == 2 then return { meso = self.Tier2Meso, erda = self.Tier2Erda, time = self.Tier2Time } end
+		if tier == 3 then return { meso = self.Tier3Meso, erda = self.Tier3Erda, time = self.Tier3Time } end
+		if tier == 4 then return { meso = self.Tier4Meso, erda = self.Tier4Erda, time = self.Tier4Time } end
+		if tier == 5 then return { meso = self.Tier5Meso, erda = self.Tier5Erda, time = self.Tier5Time } end
+		return { meso = 0, erda = 0, time = 0 }
+	end
+
+	method string TierCondition(string camp, integer tier)
+		-- 전직관 말고 추가로 필요한 건물(3·4·5차). 형식은 BuildRequirementLogic 조건 문자열(| = 또는, , = 그리고).
+		if tier == 3 then
+			if camp == "Adv" then return self.AdvTier3Cond end
+			if camp == "Cyg" then return self.CygTier3Cond end
+			if camp == "Ede" then return self.EdeTier3Cond end
+		elseif tier == 4 then
+			if camp == "Adv" then return self.AdvTier4Cond end
+			if camp == "Cyg" then return self.CygTier4Cond end
+			if camp == "Ede" then return self.EdeTier4Cond end
+		elseif tier == 5 then
+			if camp == "Adv" then return self.AdvTier5Cond end
+			if camp == "Cyg" then return self.CygTier5Cond end
+			if camp == "Ede" then return self.EdeTier5Cond end
+		end
+		return ""
+	end
+
+	method table Instructor(string heroId)
+		-- 영웅 직업 → 실제 메이플 전직 교관 { name, stand(평소 애니), busy(연구 중 애니, 없으면 stand) }.
+		-- RUID는 리소스 팩 npc/<id>.img의 stand/say 클립(설계 문서 3-2).
+		local t = {
+			dark_knight = { "주먹펴고 일어서", "ec40238056d14dc895e93767d9bf6f90", "" },
+			bishop = { "하인즈", "fb911e3df47b4b54997950df0726285a", "" },
+			bowmaster = { "헬레나", "4d71a2a1d659408fbdf5dac3152134e6", "1c500dece4574e4eabcfd31e24087236" },
+			night_lord = { "다크로드", "4801a0f7b2664b8da9b73d2b3ea25fd4", "" },
+			captain = { "카이린", "77788a12ebf447eaab6cbbc2fb5365b3", "63d6b6a887f3430484cb1f47a481cbe2" },
+			soul_master = { "미하일", "c2b527a1dca7407d864f236577d07efe", "4edeb22046a04584be6a5b15f15d2731" },
+			flame_wizard = { "오즈", "6c5085b4082649f6a74e18c28fc5e2ce", "51d134f1fb2a4e6dafa319eb79342bb2" },
+			night_walker = { "이카르트", "81e2fdcb095442c0b3e83772c9a0d6dd", "b2aceb65a11c40c8a4cd42c38f0b1bc7" },
+			striker = { "호크아이", "57015588d0c54eccbfa53bbddf195033", "f05f8682491045e5bd2ab8908d41b5ee" },
+			wind_breaker = { "이리나", "b13ff57a24ee42e8ba810129ddf1fbf2", "dd0016f77c0f43b298ed9fa74f67b12c" },
+			mechanic = { "체키", "31c23e8bee9647ceac4c88c1ec034bab", "" },
+			wild_hunter = { "벨", "eceef54c707b4e26bb6ff13a7f87fe8c", "79fa3ca5f8d24d3fb103cd6efd839145" },
+			battle_mage = { "헨리테", "bcec54a0464c4b06a3fcb7b627856cd5", "74fbe0eba89a4c69a0f4840a0923da03" },
+			xenon = { "지그문트", "7a2be46f7c104ae488d84164ea83435a", "51d07e24cce441c9a9397b78f885362b" },
+			blaster = { "일렉스", "2d5fcc8af17e4e4ba82b72222b393352", "2735dbb542744fb7964ccc512a3152d9" },
+		}
+		local row = t[heroId]
+		if row == nil then return nil end
+		local busy = row[3]
+		if busy == "" then busy = row[2] end
+		return { name = row[1], stand = row[2], busy = busy }
+	end
+
+	method string JobName(string heroId, string heroName, integer tier)
+		-- 이름표용 직업 이름. 모험가는 원작 차수별 이름(검사 → 스피어맨 → 버서커 → 다크나이트), 나머지는 "직업명 (N차)".
+		local adv = {
+			dark_knight = { "검사", "스피어맨", "버서커", "다크나이트" },
+			bishop = { "매지션", "클레릭", "프리스트", "비숍" },
+			bowmaster = { "아처", "헌터", "레인저", "보우마스터" },
+			night_lord = { "로그", "어쌔신", "허밋", "나이트로드" },
+			captain = { "해적", "건슬링거", "발키리", "캡틴" },
+		}
+		local names = adv[heroId]
+		if names ~= nil then
+			if tier <= 4 then return names[math.max(1, tier)] end
+			return names[4] .. " (5차)"
+		end
+		local base = heroName
+		if base == nil or base == "" then base = self:HeroName(heroId) end
+		return base .. " (" .. tostring(math.max(1, tier)) .. "차)"
+	end
+
+	method string HeroName(string heroId)
+		-- 직업 id → 한글 직업명(LobbyController.GetCampJobs와 같은 15직업). 모르면 "영웅".
+		local t = {
+			dark_knight = "다크나이트", bishop = "비숍", bowmaster = "보우마스터", night_lord = "나이트로드", captain = "캡틴",
+			soul_master = "소울마스터", flame_wizard = "플레임위자드", night_walker = "나이트워커", striker = "스트라이커", wind_breaker = "윈드브레이커",
+			mechanic = "메카닉", wild_hunter = "와일드헌터", battle_mage = "배틀메이지", xenon = "제논", blaster = "블래스터",
+		}
+		return t[heroId] or "영웅"
+	end
+
+	method string SkillName(string heroId, string key)
+		-- 툴팁용 스킬 이름(HeroData의 Q~T 이름, 설계 문서 8장). 모르면 "".
+		local t = {
+			dark_knight = { "스피어 풀링", "라만차 스피어", "궁니르 디센트", "다크 임페일", "피어스 사이클론" },
+			bishop = { "홀리 애로우", "홀리 파운틴", "엔젤레이", "제네시스", "피스메이커" },
+			bowmaster = { "애로우 블로우", "애로우 봄", "언카운터블 애로우", "폭풍의 시", "잔영의 시" },
+			night_lord = { "럭키 세븐", "트리플 스로우", "쇼다운 챌린지", "쿼드러플 스로우", "스로우 블래스팅" },
+			captain = { "매그넘 샷", "더블 배럴 샷", "헤드 샷", "래피드 파이어", "불릿 파티" },
+			soul_master = { "트리플 슬래시", "섀도우 번 / 트레이스 컷", "라이트 플럭스 / 문 섀도우", "솔라 피어스 / 크레센트 디바이드", "크로스 더 스틱스" },
+			flame_wizard = { "플레임 바이트", "플레임 볼텍스", "플레임 템페스타", "카타클리즘", "인피니티 플레임 서클" },
+			night_walker = { "트리플 스로우", "쿼드러플 스로우", "퀸터플 스로우", "도미니언", "쉐도우 바이트" },
+			striker = { "회축 → 충아", "파도", "승천 → 뇌성", "", "교아탄" },
+			wind_breaker = { "브리즈 애로우", "거스트 샷", "페어리 턴", "천공의 노래", "하울링 게일" },
+			mechanic = { "매시브 파이어", "로봇 런처", "워머신: 타이탄", "메탈아머: 전탄발사", "메카 캐리어" },
+			wild_hunter = { "더블 샷", "크로스 로드", "와일드 샷", "램페이지 애즈 원", "재규어 맥시멈" },
+			battle_mage = { "트리플 블로우", "다크 체인", "피니쉬 블로우", "제네시스", "그림 리퍼" },
+			blaster = { "매그넘 펀치", "더킹", "더블 팡", "발칸 펀치", "벙커 버스터" },
+		}
+		local row = t[heroId]
+		if row == nil then return "" end
+		return row[self:TierForKey(key)] or ""
+	end
+
+	method PlayerInfo PlayerInfoOf(string userId)
+		-- userId의 PlayerInfo(없으면 nil). 서버·클라 모두 쓸 수 있다.
+		if userId == nil or userId == "" then return nil end
+		local user = _UserService:GetUserEntityByUserId(userId)
+		if not isvalid(user) then return nil end
+		---@type PlayerInfo
+		local info = user:GetComponent("script.PlayerInfo")
+		return info
+	end
+
+	method boolean IsKeyUnlocked(string userId, string key)
+		-- userId 플레이어의 영웅이 key 스킬을 쓸 수 있는지. PlayerInfo가 없는 대상(테스트용 영웅 등)은 막지 않는다.
+		local info = self:PlayerInfoOf(userId)
+		if info == nil then return true end
+		return info.JobTier >= self:TierForKey(key)
+	end
+
+	method boolean IsInstructorModel(string modelId)
+		-- modelId가 전직관 건물 모델인지("model://uuid" / "uuid" 둘 다 받는다).
+		if modelId == nil or modelId == "" then return false end
+		local bare = (string.gsub(modelId, "^model://", ""))
+		for part in string.gmatch(self.InstructorModels, "[^,]+") do
+			if (string.gsub(part, "^model://", "")) == bare then return true end
+		end
+		return false
+	end
+
+	method boolean HasInstructor(Entity map, string playerId)
+		-- playerId가 이미 전직관을 갖고 있는지(건설 중 포함, 파괴된 것 제외) — 플레이어당 1개 제한.
+		if not isvalid(map) then return false end
+		local list = map:GetChildComponentsByTypeName("script.JobAdvanceAction", true)
+		if list == nil then return false end
+		for _, comp in ipairs(list) do
+			---@type Structure_Info
+			local s = comp.Entity:GetComponent("script.Structure_Info")
+			if s ~= nil and s.PlayerID == playerId and not s.IsDestroyed then return true end
+		end
+		return false
+	end
+
+	method string LockText(string key)
+		-- 잠긴 스킬 칸 사유("2차 전직" 등 — 커맨드카드가 뒤에 " 필요"를 붙인다).
+		return tostring(self:TierForKey(key)) .. "차 전직(전직관)"
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnBeginPlay()
+		-- 연구 진행 표(userId → { building, tier, endAt, total })를 비운다.
+		self._T.research = {}
+	end
+
+	@ExecSpace("Server")
+	method void RequestResearch(Entity building, integer tier)
+		-- 전직관(building)에서 tier차 전직 연구를 시작한다. 소유·완공·순서·조건·재화를 서버에서 모두 검증한다.
+		local uid = senderUserId
+		if not isvalid(building) then return end
+		---@type Structure_Info
+		local sinfo = building:GetComponent("script.Structure_Info")
+		if sinfo == nil or building:GetComponent("script.JobAdvanceAction") == nil then return end
+		if sinfo.PlayerID ~= uid or sinfo.IsDestroyed then return end
+		if sinfo.IsUnderConstruction then
+			_UIToast_:ShowMessage("건설이 끝난 뒤에 전직할 수 있습니다", uid)
+			return
+		end
+		local info = self:PlayerInfoOf(uid)
+		if info == nil then return end
+		if self._T.research == nil then self._T.research = {} end
+		if self._T.research[uid] ~= nil then
+			_UIToast_:ShowMessage("이미 전직 연구 중입니다", uid)
+			return
+		end
+		if tier <= info.JobTier then
+			_UIToast_:ShowMessage("이미 완료한 전직입니다", uid)
+			return
+		end
+		if tier ~= info.JobTier + 1 then
+			_UIToast_:ShowMessage(tostring(tier - 1) .. "차 전직을 먼저 마쳐야 합니다", uid)
+			return
+		end
+		local cond = self:TierCondition(info.SelectedCamp, tier)
+		if cond ~= "" and not _BuildRequirementLogic:HasAliveStructure(building.CurrentMap, uid, cond) then
+			_UIToast_:ShowMessage(_BuildRequirementLogic:GetRequirementText(cond) .. " 필요", uid)
+			return
+		end
+		local cost = self:TierCost(tier)
+		if not info:TrySpend(cost.meso, cost.erda) then
+			_UIToast_:ShowMessage(info:ShortageMessage(cost.meso, cost.erda), uid)
+			return
+		end
+		local now = _UtilLogic.ServerElapsedSeconds
+		self._T.research[uid] = { building = building, tier = tier, endAt = now + cost.time }
+		info.ResearchTier = tier
+		info.ResearchTotal = cost.time
+		info.ResearchEndTime = now + cost.time
+		_UIToast_:ShowMessage(tostring(tier) .. "차 전직 연구 시작 (" .. tostring(math.floor(cost.time)) .. "초)", uid)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnUpdate(number delta)
+		-- 0.25초마다 진행 중인 연구를 확인한다: 전직관이 사라졌으면 취소, 시간이 됐으면 완료.
+		self._checkTimer += delta
+		if self._checkTimer < 0.25 then return end
+		self._checkTimer = 0
+		local research = self._T.research
+		if research == nil then return end
+		local now = _UtilLogic.ServerElapsedSeconds
+		local done = {}
+		local lost = {}
+		for uid, r in pairs(research) do
+			local alive = isvalid(r.building)
+			if alive then
+				---@type Structure_Info
+				local s = r.building:GetComponent("script.Structure_Info")
+				alive = s ~= nil and not s.IsDestroyed
+			end
+			if not alive then
+				table.insert(lost, uid)
+			elseif now >= r.endAt then
+				table.insert(done, uid)
+			end
+		end
+		for _, uid in ipairs(lost) do self:CancelResearch(uid, "전직관이 파괴되어 전직 연구가 취소되었습니다") end
+		for _, uid in ipairs(done) do self:CompleteResearch(uid) end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ClearResearchState(string userId)
+		-- 진행 표와 PlayerInfo의 연구 표시 값을 비운다(환불 없음).
+		if self._T.research ~= nil then self._T.research[userId] = nil end
+		local info = self:PlayerInfoOf(userId)
+		if info ~= nil then
+			info.ResearchTier = 0
+			info.ResearchTotal = 0
+			info.ResearchEndTime = 0
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CancelResearch(string userId, string message)
+		-- 연구 취소(전직관 파괴). 비용은 돌려주지 않는다 — 전직관을 지켜야 할 이유.
+		self:ClearResearchState(userId)
+		if message ~= "" then _UIToast_:ShowMessage(message, userId) end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CompleteResearch(string userId)
+		-- 연구 완료: 전직 단계를 올리고, 영웅이 살아 있으면 머리 위 전직 이펙트 + 효과음, 소유자에게 안내 토스트.
+		local r = (self._T.research ~= nil) and self._T.research[userId] or nil
+		if r == nil then return end
+		local tier = r.tier
+		local map = isvalid(r.building) and r.building.CurrentMap or nil
+		self:ClearResearchState(userId)
+		local info = self:PlayerInfoOf(userId)
+		if info == nil then return end
+		info.JobTier = math.max(info.JobTier, tier)
+		_MatchStatsLogic:SetTier(userId, info.JobTier)
+		local key = self:KeyForTier(tier)
+		local skill = self:SkillName(info.SelectedHeroId, key)
+		local msg = tostring(tier) .. "차 전직 완료! " .. key .. " 스킬 사용 가능"
+		if skill ~= "" then msg = msg .. " — " .. skill end
+		_UIToast_:ShowMessage(msg, userId)
+		local hero = self:FindHero(map, userId)
+		if isvalid(hero) then self:PlayAdvanceFx(hero, userId) end
+	end
+
+	@ExecSpace("ServerOnly")
+	method Entity FindHero(Entity map, string userId)
+		-- map 안에서 userId 소유의 살아 있는 영웅 유닛(HeroUnit)을 찾는다. 없으면 nil.
+		if not isvalid(map) then return nil end
+		local heroes = map:GetChildComponentsByTypeName("script.HeroUnit", true)
+		if heroes == nil then return nil end
+		for _, comp in ipairs(heroes) do
+			---@type HeroUnit
+			local h = comp
+			if h.OwnerUserId == userId then
+				local unit = h.Entity.Unit_Info
+				if unit == nil or not unit.IsDead then return h.Entity end
+			end
+		end
+		return nil
+	end
+
+	@ExecSpace("Multicast")
+	method void PlayAdvanceFx(Entity hero, string ownerUserId)
+		-- 모든 클라: 영웅 머리 위 전직 이펙트(안개 속이면 그 클라에선 안 보임). 효과음은 소유자이거나 보이는 경우만.
+		if not isvalid(hero) then return end
+		local s = self.CompleteEffectScale
+		local played = 0
+		if self.CompleteEffectRuid ~= "" then
+			played = _FogOfWarLogic:PlayEffectAttachedSeen(self.CompleteEffectRuid, hero, Vector3(0, 0.9, 0), 0, Vector3(s, s, 1), false, nil)
+		end
+		local lp = _UserService.LocalPlayer
+		local mine = isvalid(lp) and isvalid(lp.PlayerComponent) and lp.PlayerComponent.UserId == ownerUserId
+		if self.CompleteSoundRuid ~= "" and (mine or played ~= 0) then
+			_SoundService:PlaySound(self.CompleteSoundRuid, self.CompleteSoundVolume)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ResetPlayer(PlayerInfo info)
+		-- 경기 종료/초기화: 1차로 되돌리고 진행 중인 연구를 버린다(LobbyController.ResetPlayerInfo가 호출).
+		if info == nil then return end
+		if isvalid(info.Entity) and isvalid(info.Entity.PlayerComponent) and self._T.research ~= nil then
+			self._T.research[info.Entity.PlayerComponent.UserId] = nil
+		end
+		info.JobTier = 1
+		info.ResearchTier = 0
+		info.ResearchTotal = 0
+		info.ResearchEndTime = 0
+	end
+
+end

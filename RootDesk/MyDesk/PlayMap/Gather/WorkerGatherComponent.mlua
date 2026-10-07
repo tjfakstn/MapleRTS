@@ -1,0 +1,388 @@
+@Component
+script WorkerGatherComponent extends Component
+
+	@Sync
+	property integer CarriedMeso = 0
+
+	@DisplayName("본진에 반납한 뒤 같은 광맥으로 자동 반복")
+	property boolean RepeatGather = true
+
+	@DisplayName("도착 판정 거리(world unit)")
+	property number ReachDistance = 0.3
+
+	@DisplayName("다른 일꾼에게 밀려 멈췄을 때 도착으로 인정하는 거리(world unit)")
+	property number ArriveTolerance = 0.9
+
+	@DisplayName("메소를 들었을 때 켜지는 자식 엔티티 이름")
+	property string CarryChildName = "MesoCarry"
+
+	@HideFromInspector
+	property integer _state = 0
+
+	@HideFromInspector
+	property Entity _source = nil
+
+	@HideFromInspector
+	property Entity _base = nil
+
+	@HideFromInspector
+	property Vector2 _dest = Vector2(0, 0)
+
+	@HideFromInspector
+	property number _gatherRemain = 0
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		self:ApplyCarryVisual(self.CarriedMeso > 0)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSyncProperty(string name, any value)
+		if name == "CarriedMeso" then
+			self:ApplyCarryVisual((tonumber(value) or 0) > 0)
+		end
+	end
+
+	method void ApplyCarryVisual(boolean show)
+		-- 일꾼 머리 위 Meso(자식 엔티티)를 켜고 끈다.
+		local child = self.Entity:GetChildByName(self.CarryChildName)
+		if isvalid(child) and child.Visible ~= show then
+			child.Visible = show
+		end
+	end
+
+	method string OwnerId()
+		-- 이 일꾼의 소유자 UserId(토스트 대상 / 본진 탐색용).
+		local info = self.Entity.Unit_Info
+		if info == nil then return "" end
+		return info.PlayerID
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Toast(string message)
+		-- 이 일꾼의 소유자에게만 안내 토스트를 띄운다.
+		local owner = self:OwnerId()
+		if message == "" or owner == "" then return end
+		if not isvalid(_UserService:GetUserEntityByUserId(owner)) then return end
+		_UIToast_:ShowMessage(message, owner)
+	end
+
+	@ExecSpace("Server")
+	method void RequestStartGather(Entity source)
+		-- Mouse_Command가 "메소 채집" 대기 중 우클릭으로 고른 광맥(source)에 대해 소유 클라이언트가 호출한다.
+		local info = self.Entity.Unit_Info
+		if info == nil or info.IsDead or info.RoleKey ~= "Worker" or info.PlayerID == "" or info.PlayerID ~= senderUserId then
+			return
+		end
+		self:StartGather(source)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void StartGather(Entity source)
+		local info = self.Entity.Unit_Info
+		if info == nil or info.IsDead or info.RoleKey ~= "Worker" then return end
+		if not isvalid(source) or source.CurrentMap ~= self.Entity.CurrentMap or source:GetComponent("script.MesoStructure") == nil or not self:IsStructureAlive(source) then
+			return
+		end
+		-- 건설 중인 일꾼은 채집할 수 없다. 건설 위치로 가던 중이면 건설 예약을 풀고 채집하러 간다.
+		if _BuildModeLogic:IsWorkerBusy(self.Entity) then
+			self:Toast("건설 중인 일꾼은 메소를 채집할 수 없습니다")
+			return
+		end
+		_BuildModeLogic:CancelBuildOrder(self.Entity)
+		
+		info:Stop()
+		info.target = nil
+		self._source = source
+		if self.CarriedMeso > 0 then
+			-- 이미 메소를 들고 있으면 먼저 본진에 반납한다.
+			self:BeginReturn()
+		else
+			self:BeginMoveToSource()
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnUpdate(number delta)
+		if self._state == 0 then
+			return
+		end
+		
+		local info = self.Entity.Unit_Info
+		if info == nil or info.IsDead then
+			self:CancelGather("", false)
+			return
+		end
+		-- 건설 명령이 떨어지면(건설 위치로 이동 시작) 또는 건설에 묶이면 채집을 중단한다.
+		if _BuildModeLogic:IsWorkerBusy(self.Entity) or _BuildModeLogic:IsBuildOrdered(self.Entity) then
+			self:CancelGather("", false)
+			return
+		end
+		
+		local move = self.Entity.UnitMoveComponent
+		local wp = self.Entity.TransformComponent.WorldPosition
+		local pos = Vector2(wp.x, wp.y)
+		
+		if self._state == 1 then
+			if not self:IsSourceUsable() then
+				self:CancelGather("메소 광맥이 사라져 채집을 중단합니다", true)
+				return
+			end
+			if self:HasArrived(move, pos) then
+				self:BeginGathering()
+			elseif self:WasMoveOverridden(move) then
+				self:CancelByCommand()
+			end
+		elseif self._state == 2 then
+			if not self:IsSourceUsable() then
+				self:CancelGather("메소 광맥이 사라져 채집을 중단합니다", true)
+				return
+			end
+			-- 채집 중에 이동 명령이 들어오면 채집을 취소한다.
+			if move.IsMove then
+				self:CancelByCommand()
+				return
+			end
+			self._gatherRemain -= delta
+			if self._gatherRemain <= 0 then
+				self:FinishGathering()
+			end
+		elseif self._state == 3 then
+			if not self:IsStructureAlive(self._base) then
+				-- 본진이 파괴됐으면 다른 본진을 찾아본다.
+				self:BeginReturn()
+				return
+			end
+			if self:HasArrived(move, pos) then
+				self:Deposit()
+			elseif self:WasMoveOverridden(move) then
+				self:CancelByCommand()
+			end
+		end
+	end
+
+	method boolean HasArrived(UnitMoveComponent move, Vector2 pos)
+		-- 목적지에 닿았는지 본다. 일꾼 여러 기가 같은 광맥/본진으로 몰리면 서로 밀려 정확히 닿지 못하고,
+		-- UnitMoveComponent는 목적지 근처(ArriveSlack)에서 밀리면 "도착"으로 치고 이동을 끝낸다.
+		-- 그렇게 멈춘 일꾼도 ArriveTolerance 안이면 도착으로 인정한다(예전엔 이걸 "이동 명령 덮어쓰기"로 오인해 채집을 취소했다).
+		local d = Vector2.Distance(pos, self._dest)
+		if d <= self.ReachDistance then return true end
+		return (not move.IsMove) and d <= self.ArriveTolerance
+	end
+
+	method boolean WasMoveOverridden(UnitMoveComponent move)
+		-- 채집이 내린 이동 명령(_dest)이 다른 명령(우클릭 이동, S 정지 등)으로 덮어써졌는지 확인한다.
+		if not move.IsMove then
+			return true
+		end
+		return Vector2.Distance(move.targetPos, self._dest) > 0.05
+	end
+
+	method boolean IsStructureAlive(Entity structure)
+		if not isvalid(structure) or structure.CurrentMap ~= self.Entity.CurrentMap then
+			return false
+		end
+		---@type Structure_Info
+		local sinfo = structure:GetComponent("script.Structure_Info")
+		if sinfo ~= nil and sinfo.IsDestroyed then
+			return false
+		end
+		return true
+	end
+
+	method boolean IsSourceUsable()
+		if not self:IsStructureAlive(self._source) then return false end
+		local src = self._source:GetComponent("script.MesoStructure")
+		return src ~= nil and not src:IsDepleted()
+	end
+
+	method void MoveTo(Vector2 dest)
+		self._dest = dest
+		self.Entity.UnitMoveComponent:FindTarget(dest)
+	end
+
+	method Vector2 ComputeApproachPoint(Entity target)
+		-- 건물은 이동 시 장애물(박스)이라 중심까지는 갈 수 없다 — 이 일꾼에서 가장 가까운 건물 바깥 가장자리 지점을 목표로 삼는다.
+		local tp = target.TransformComponent.WorldPosition
+		local wp = self.Entity.TransformComponent.WorldPosition
+		local map = self.Entity.CurrentMap
+		local r = self.Entity.UnitMoveComponent.AvoidRadius
+		
+		local boxes = _StructureObstacleLogic:GetBoxes(map)
+		for _, b in ipairs(boxes) do
+			if b.entity == target then
+				local ex = b.hx + r + 0.05
+				local ey = b.hy + r + 0.05
+				local x = math.min(math.max(wp.x, b.cx - ex), b.cx + ex)
+				local y = math.min(math.max(wp.y, b.cy - ey), b.cy + ey)
+				-- 같은 쪽에서 오는 일꾼들이 한 점에 몰려 서로 막지 않도록, 닿는 변을 따라 일꾼마다 조금씩 비껴 선다.
+				local seed = 0
+				local eid = tostring(self.Entity.Id)
+				for i = 1, #eid do seed = (seed * 31 + string.byte(eid, i)) % 9973 end
+				local off = ((seed % 7) - 3) * r * 0.8
+				if math.abs(x - b.cx) / ex >= math.abs(y - b.cy) / ey then
+					y = math.min(math.max(y + off, b.cy - ey), b.cy + ey)
+				else
+					x = math.min(math.max(x + off, b.cx - ex), b.cx + ex)
+				end
+				return _StructureObstacleLogic:PushOut(map, Vector2(x, y), r, nil)
+			end
+		end
+		-- 장애물 박스가 없는 대상(Trigger 없음)은 걸리는 게 없으니 중심으로 간다.
+		return Vector2(tp.x, tp.y)
+	end
+
+	method void BeginMoveToSource()
+		if not self:IsSourceUsable() then
+			self:CancelGather("메소 광맥이 사라져 채집을 중단합니다", true)
+			return
+		end
+		self:MoveTo(self:ComputeApproachPoint(self._source))
+		self._state = 1
+	end
+
+	method void BeginGathering()
+		-- 광맥 앞에 도착: 이동을 멈추고 광맥의 채집 시간(GatherTime)만큼 기다린다.
+		local move = self.Entity.UnitMoveComponent
+		if move.IsMove then
+			move:Stop()
+		end
+		---@type MesoStructure
+		local src = self._source:GetComponent("script.MesoStructure")
+		self._gatherRemain = src.GatherTime
+		self._state = 2
+	end
+
+	method void FinishGathering()
+		if self._state ~= 2 then return end
+		-- 채집 완료: 메소를 쥐여주고(머리 위에 Meso 표시), 바로 본진으로 출발한다.
+		self:PickMeso(self._source)
+		if self.CarriedMeso <= 0 then
+			self:CancelGather("메소 광맥이 고갈되어 채집을 중단합니다", true)
+			return
+		end
+		self:BeginReturn()
+	end
+
+	method void BeginReturn()
+		local base = self:FindBase()
+		if base == nil then
+			self:CancelGather("반납할 본진이 없습니다", true)
+			return
+		end
+		self._base = base
+		self:MoveTo(self:ComputeApproachPoint(base))
+		self._state = 3
+	end
+
+	method Entity FindBase()
+		-- 이 일꾼 소유자의 살아있는 본진(BuildingKey == "HQ") 중 이 일꾼에서 가장 가까운 것.
+		local map = self.Entity.CurrentMap
+		local myId = self:OwnerId()
+		if not isvalid(map) or myId == "" then
+			return nil
+		end
+		local wp = self.Entity.TransformComponent.WorldPosition
+		local mine = Vector2(wp.x, wp.y)
+		
+		local best = nil
+		local bestDist = math.huge
+		local comps = map:GetChildComponentsByTypeName("script.Structure_Info", true)
+		for _, comp in ipairs(comps) do
+			---@type Structure_Info
+			local sinfo = comp
+			local e = sinfo.Entity
+			if isvalid(e) and not sinfo.IsDestroyed and sinfo.PlayerID == myId and sinfo.BuildingKey == "HQ" then
+				local p = e.TransformComponent.WorldPosition
+				local d = Vector2.Distance(mine, Vector2(p.x, p.y))
+				if d < bestDist then
+					best = e
+					bestDist = d
+				end
+			end
+		end
+		return best
+	end
+
+	method void Deposit()
+		-- 본진 도착: 메소를 소유자 재화에 더한다.
+		self:DepositMeso()
+		
+		if self.RepeatGather and self:IsSourceUsable() then
+			self:BeginMoveToSource()
+		else
+			self._state = 0
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CancelByCommand()
+		if self._state == 0 then return end
+		-- 채집 중 다른 이동/정지 명령이 들어와 채집이 끊긴 경우. 메소를 든 상태였다면 그 메소를 잃는다.
+		local lost = self.CarriedMeso > 0
+		if lost then
+			self:DropMeso()
+		end
+		self:CancelGather(lost and "이동 명령으로 운반 중이던 메소를 잃었습니다" or "", false)
+	end
+
+	method void CancelGather(string message, boolean stopMove)
+		-- 채집을 접는다. 들고 있는 메소(CarriedMeso)는 그대로 두어, 다음 채집 명령 때 먼저 반납하게 한다.
+		self._state = 0
+		if stopMove then
+			local move = self.Entity.UnitMoveComponent
+			if move ~= nil then
+				move:Stop()
+			end
+		end
+		self:Toast(message)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void PickMeso(Entity source)
+		if self._state ~= 2 or self.CarriedMeso > 0 or self.Entity.Unit_Info.IsDead then return end
+		-- 채집이 끝난 일꾼에게 메소를 쥐여준다.
+		if not isvalid(source) then
+			return
+		end
+		---@type MesoStructure
+		local src = source:GetComponent("script.MesoStructure")
+		if src == nil then
+			return
+		end
+		if source ~= self._source or not self:IsSourceUsable() then return end
+		self.CarriedMeso = src:TakeMeso()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void DropMeso()
+		-- 운반 중이던 메소를 버린다(반납 없이 사라짐).
+		if self.CarriedMeso > 0 then
+			self.CarriedMeso = 0
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void DepositMeso()
+		-- 본진에 도착한 일꾼이 든 메소를 소유자의 PlayerInfo.Meso에 더한다.
+		local amount = self.CarriedMeso
+		if amount <= 0 then
+			return
+		end
+		
+		local owner = _UserService:GetUserEntityByUserId(self:OwnerId())
+		if not isvalid(owner) then
+			return
+		end
+		---@type PlayerInfo
+		local pinfo = owner:GetComponent("script.PlayerInfo")
+		if pinfo == nil then
+			return
+		end
+		
+		pinfo.Meso = pinfo.Meso + amount
+		_MatchStatsLogic:AddGathered(self:OwnerId(), amount, 0)
+		self.CarriedMeso = 0
+	end
+
+end

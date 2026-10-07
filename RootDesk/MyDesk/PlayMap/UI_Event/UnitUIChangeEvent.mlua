@@ -1,0 +1,18 @@
+@Event
+script UnitUIChangeEvent extends EventType
+
+	property string TargetUIName = ""
+
+	property table SelectedUnitTable = {}
+
+	property table SelectedEntities = {}
+
+	property Entity SelectedUnitEntity = nil
+
+	method void UIClear()
+		table.clear(self.SelectedUnitTable)
+		table.clear(self.SelectedEntities)
+		self.TargetUIName =""
+	end
+
+end

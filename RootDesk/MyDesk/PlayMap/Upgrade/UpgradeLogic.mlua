@@ -1,0 +1,165 @@
+@Logic
+script UpgradeLogic extends Logic
+
+	@DisplayName("최대 단계")
+	property integer MaxLevel = 3
+
+	@DisplayName("공격 1단계당 증가율(유닛 기본 공격력 × 이 값, 최소 1)")
+	property number AttackPerLevelRate = 0.12
+
+	@DisplayName("방어 1단계당 증가량")
+	property integer DefensePerLevel = 1
+
+	@DisplayName("표에 없는 업그레이드의 기본 아이콘 — 공격(빨간 주문서)")
+	property string AttackIconRuid = "3bf47e8c85714e6bb4bbd4e59ce8bbd2"
+
+	@DisplayName("표에 없는 업그레이드의 기본 아이콘 — 방어(방패)")
+	property string DefenseIconRuid = "01b857115f5e474ca78f7968a348cfc7"
+
+	method table Def(string camp, string group)
+		-- 진영·묶음 → 업그레이드 정의 { building, tier, A = { name, icon }, D = { name, icon } }. 표에 없으면 nil.
+		-- 아이콘은 그 계열 몬스터·진영의 원작 아이템(2026-10-06 선정). tier는 비용 등급(1 기본 / 2 중급 / 3 정예·공중, CostTable).
+		local t = {
+			["Adv:헤네시스"] = { building = "헤네시스 무기점", tier = 1,
+				A = { name = "버섯 뿔 연마", icon = "368a62ed834746738e8cabbcade860b2" },
+				D = { name = "버섯 갓 강화", icon = "0ed1b7cbeece48fa87e5f9ea37096d8d" } },
+			["Adv:페리온"] = { building = "전사의 성소", tier = 2,
+				A = { name = "보어 엄니 연마", icon = "e2f81d1a7a2744ecb33828c631eeb14a" },
+				D = { name = "강철 갑피 강화", icon = "4daebdff66c3413eaeb9cdec8eac7255" } },
+			["Adv:엘리니아"] = { building = "마법 도서관", tier = 2,
+				A = { name = "마력 증폭", icon = "4c75202b2ba540aaa3b740134cd0b729" },
+				D = { name = "요정의 가호", icon = "cd3c7bc5e9324599a706551623bbae32" } },
+			["Adv:커닝시티"] = { building = "다크로드의 은신처", tier = 3,
+				A = { name = "그림자 표창", icon = "5d2441df6e6f4446beb45b301cdba0f2" },
+				D = { name = "어둠의 망토", icon = "f294febc9f0f4986ba21df748981fa75" } },
+			["Cyg:기사단"] = { building = "기사단 훈련소", tier = 1,
+				A = { name = "기사단 검술", icon = "f0a2541f2cbe4caab623a2e6454f42c5" },
+				D = { name = "기사단 갑주", icon = "660cb03bfa404eb5a38bd7b7d69fbef9" } },
+			["Cyg:정예"] = { building = "기사단 사령부", tier = 3,
+				A = { name = "골렘 핵 활성", icon = "70276c5d2ea64a10baea16c0ff54db56" },
+				D = { name = "골렘 외피 강화", icon = "b1c0fd8c12b245958131db55e4d502e4" } },
+			["Cyg:정령"] = { building = "정령의 성소", tier = 2,
+				A = { name = "정령력 증폭", icon = "3c1695a6704e479290ff5aa496d560b5" },
+				D = { name = "정령의 보호", icon = "06b347ea8a0a4ede8a2e329995ce7cfa" } },   -- 정령의 보호 아이콘: 정령의 펜던트(2026-10-07, 예전 돌의 정령)
+			["Ede:일반"] = { building = "에델슈타인 정비소", tier = 1,
+				A = { name = "화력 개조", icon = "089bd401e9f442599767a6f23f63570e" },
+				D = { name = "장갑판 보강", icon = "9c64fb1af05941808040bbceaae980dd" } },
+			["Ede:정예"] = { building = "에델슈타인 발전소", tier = 3,
+				A = { name = "출력 증강", icon = "280503b59117408f9d40ccc3aa9dca0d" },
+				D = { name = "강철 장갑 개조", icon = "0d816e31605d427daa8556c693f1b6e2" } },
+		}
+		return t[(camp or "") .. ":" .. (group or "")]
+	end
+
+	method table CostTable(integer tier, string kind)
+		-- 비용 등급·종류별 단계 비용 { {메소, 에르다, 시간}, ... } (1~3단계). 방어는 2·3단계가 공격보다 조금 싸다.
+		-- 에르다는 2026-10-07 스타 비율 환산(에르다 1 ≈ 가스 13): 스타 공격·방어 업그레이드 가스 100/175/250 → 에르다 8/13/19(전 등급 공통).
+		local a = {
+			[1] = { { 100, 8, 40 }, { 175, 13, 55 }, { 250, 19, 70 } },
+			[2] = { { 125, 8, 45 }, { 200, 13, 60 }, { 275, 19, 75 } },
+			[3] = { { 150, 8, 50 }, { 225, 13, 65 }, { 300, 19, 80 } },
+		}
+		local d = {
+			[1] = { { 100, 8, 40 }, { 150, 13, 55 }, { 225, 19, 70 } },
+			[2] = { { 125, 8, 45 }, { 175, 13, 60 }, { 250, 19, 75 } },
+			[3] = { { 150, 8, 50 }, { 200, 13, 65 }, { 275, 19, 80 } },
+		}
+		local src = (kind == "D") and d or a
+		return src[tier] or src[1]
+	end
+
+	method table LevelCost(string camp, string group, string kind, integer level)
+		-- camp 진영 group 묶음 kind("A"/"D") 업그레이드의 level단계 비용·시간 { meso, erda, time }.
+		local def = self:Def(camp, group)
+		local tier = (def ~= nil) and def.tier or 1
+		local row = self:CostTable(tier, kind)[level]
+		if row == nil then return { meso = 0, erda = 0, time = 0 } end
+		return { meso = row[1], erda = row[2], time = row[3] }
+	end
+
+	method string UpgradeName(string camp, string group, string kind)
+		-- 업그레이드 이름("버섯 뿔 연마"). 표에 없으면 "공격 강화"/"방어 강화".
+		local def = self:Def(camp, group)
+		if def ~= nil and def[kind] ~= nil then return def[kind].name end
+		return self:KindName(kind) .. " 강화"
+	end
+
+	method string UpgradeIcon(string camp, string group, string kind)
+		-- 업그레이드 아이콘 RUID. 표에 없으면 공용 주문서/방패.
+		local def = self:Def(camp, group)
+		if def ~= nil and def[kind] ~= nil and def[kind].icon ~= "" then return def[kind].icon end
+		return (kind == "D") and self.DefenseIconRuid or self.AttackIconRuid
+	end
+
+	method string EffectText(string kind)
+		-- 툴팁용 효과 설명.
+		if kind == "D" then return "방어 +" .. tostring(self.DefensePerLevel) .. " / 단계" end
+		return "공격 +" .. tostring(math.floor(self.AttackPerLevelRate * 100 + 0.5)) .. "% (최소 +1) / 단계"
+	end
+
+	method string GroupOfLine(string camp, string line)
+		-- 유닛 계열(Unit_Info.Line) → 업그레이드 묶음. 업그레이드 건물이 따로 없는 계열은 가까운 묶음에 붙인다
+		-- (시그너스 진화 → 정예 = 기사단 사령부, 에델슈타인 공중 → 정예 = 에델슈타인 발전소).
+		if camp == "Cyg" and line == "진화" then return "정예" end
+		if camp == "Ede" and line == "공중" then return "정예" end
+		return line or ""
+	end
+
+	method string GroupLabel(string camp, string group)
+		-- 툴팁용 묶음 이름("헤네시스 계열", "정예·진화 계열").
+		if camp == "Cyg" and group == "정예" then return "정예·진화 계열" end
+		if camp == "Ede" and group == "정예" then return "정예·공중 계열" end
+		return group .. " 계열"
+	end
+
+	method string KindName(string kind)
+		-- "A" → 공격, "D" → 방어.
+		if kind == "D" then return "방어" end
+		return "공격"
+	end
+
+	method integer LevelOf(PlayerInfo info, string group, string kind)
+		-- info 플레이어의 group 묶음 kind("A"/"D") 단계(없으면 0).
+		if info == nil or group == nil or group == "" then return 0 end
+		local v = info.UpgradeLevels[group .. ":" .. kind]
+		if v == nil then return 0 end
+		return math.floor(v)
+	end
+
+	method integer AttackBonus(Unit_Info unit)
+		-- unit의 공격 업그레이드 보너스(기본 공격력 × 증가율, 최소 1) × 단계.
+		if unit == nil or unit.PlayerID == "" then return 0 end
+		local info = _JobAdvanceLogic:PlayerInfoOf(unit.PlayerID)
+		if info == nil then return 0 end
+		local lv = self:LevelOf(info, self:GroupOfLine(info.SelectedCamp, unit.Line), "A")
+		if lv <= 0 then return 0 end
+		local per = math.max(1, math.floor(unit.damage * self.AttackPerLevelRate + 0.5))
+		return per * lv
+	end
+
+	method integer DefenseBonus(Unit_Info unit)
+		-- unit의 방어 업그레이드 보너스(DefensePerLevel × 단계).
+		if unit == nil or unit.PlayerID == "" then return 0 end
+		local info = _JobAdvanceLogic:PlayerInfoOf(unit.PlayerID)
+		if info == nil then return 0 end
+		local lv = self:LevelOf(info, self:GroupOfLine(info.SelectedCamp, unit.Line), "D")
+		return lv * self.DefensePerLevel
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SetLevel(PlayerInfo info, string group, string kind, integer level)
+		-- 연구 완료 시 단계를 기록한다(StructureBuffAura.CompleteResearch).
+		if info == nil or group == "" then return end
+		info.UpgradeLevels[group .. ":" .. kind] = level
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ResetPlayer(PlayerInfo info)
+		-- 경기 종료/초기화: 모든 업그레이드 단계를 지운다(LobbyController.ResetPlayerInfo가 호출).
+		if info == nil then return end
+		local keys = {}
+		for k, _ in pairs(info.UpgradeLevels) do table.insert(keys, k) end
+		for _, k in ipairs(keys) do info.UpgradeLevels[k] = nil end
+	end
+
+end

@@ -1,0 +1,28 @@
+@Component
+script CaptainHeroDataComponent extends Component
+
+	method table BuildKit()
+		    return {
+		        name = "캡틴",
+		        role = "중거리 제압/집중 포화 — 근접 함포로 진입을 끊고, 저격·연사·사격지대로 전선을 지운다.",
+		        passive = "퀵 드로우: 짧은 선딜의 집중 사격 정체성. 별도 스택/추적 엔티티 없이 설계 데이터로 유지한다.",
+		        Q = { name = "매그넘 샷", skillClass = "heavy_line", targetIntent = "few", projectileCount = 0, hitCount = 1, burstCount = 0, tickCount = 0, shape = "front", length = 6.6, width = 1.35, telegraphShape = "front", telegraphLength = 6.6, telegraphWidth = 1.35, hitShape = "front", hitLength = 6.6, hitWidth = 1.35, visualVsHitDelta = 0, damage = 74, cooldown = 1.5, castWindup = 0.11, emitImpactPerTarget = true, maxTargets = 4, maxImpactFxCount = 4, effectForwardOffset = 0.72, telegraph = false, telegraphTime = 0.11, effectScaleMultiplier = 0.92, impactScaleMultiplier = 0.92 },
+		        W = { name = "더블 배럴 샷", skillClass = "heavy_line", targetIntent = "few", projectileCount = 0, hitCount = 1, burstCount = 0, tickCount = 0, shape = "front", length = 8.2, width = 2.35, telegraphShape = "front", telegraphLength = 8.2, telegraphWidth = 2.35, hitShape = "front", hitLength = 8.2, hitWidth = 2.35, visualVsHitDelta = 0, damage = 126, cooldown = 4.8, castWindup = 0.12, emitImpactPerTarget = true, maxTargets = 5, maxImpactFxCount = 5, effectForwardOffset = 0.84, telegraph = false, telegraphTime = 0.12, effectScaleMultiplier = 0.94, impactScaleMultiplier = 0.92 },
+		        E = { name = "헤드 샷", skillClass = "single_hit", targetIntent = "single", projectileCount = 0, hitCount = 1, burstCount = 0, tickCount = 0, shape = "front", length = 8.4, width = 0.7, telegraphShape = "front", telegraphLength = 8.4, telegraphWidth = 0.7, hitShape = "front", hitLength = 8.4, hitWidth = 0.7, visualVsHitDelta = 0, damage = 278, cooldown = 7.2, castWindup = 0.18, effectForwardOffset = 0.78, telegraph = false, telegraphTime = 0.18, effectScaleMultiplier = 0.94, impactScaleMultiplier = 0.92 },
+		        R = { name = "래피드 파이어", skillClass = "short_channel", targetIntent = "single", projectileCount = 1, hitCount = 84, burstCount = 0, tickCount = 84, tickInterval = 0.12, shape = "front", length = 8.0, width = 0.62, telegraphShape = "front", telegraphLength = 8.0, telegraphWidth = 0.62, hitShape = "front", hitLength = 8.0, hitWidth = 0.62, visualVsHitDelta = 0, damage = 48, cooldown = 17, projectile = true, castWindup = 0.18, projectileFireDelay = 0.02, projectileSpeed = 15.8, projectileStartForwardOffset = 0.72, effectForwardOffset = 0.52, effectBaseLength = 4.255, effectBaseWidth = 0.33, effectScaleMultiplier = 0.94, projectileScaleMultiplier = 0.92, impactScaleMultiplier = 0.92, followCasterDuringChannel = true, followCasterAimDuringChannel = true, telegraph = false, telegraphTime = 0.18 },
+		        -- 틱 간격을 0.4 -> 0.22로 좁혀 초당 4~5타가 들어가게 했다. 지속시간(약 8.4초)과 총 피해량은 유지.
+		        T = { name = "불릿 파티", skillClass = "short_channel", targetIntent = "many", projectileCount = 0, hitCount = 38, burstCount = 0, tickCount = 38, tickInterval = 0.22, shape = "self", length = 9.3, telegraphShape = "self", telegraphRadius = 9.3, hitShape = "self", hitRadius = 9.3, visualVsHitDelta = 0, damage = 31, cooldown = 115, castWindup = 0.18, emitImpactPerTarget = true, maxTargets = 18, maxImpactFxCount = 18, telegraph = false, telegraphTime = 0.18, effectBaseLength = 3.633, effectScaleMultiplier = 1.28, impactScaleMultiplier = 0.92 },
+		    }
+	end
+
+	method table BuildVfx()
+		    return {
+		        Q = { effect = "2b810ae1d1684488af89e5efed96c230", castSecondaryEffect = "75c0f52e07f14f18a7528b7b6ec2ad9c", castSecondaryForwardOffset = -0.44, castSecondaryScaleMultiplier = 0.88, impact = "abedebf35384483db234bef9500fe451", multiImpactEffect = "abedebf35384483db234bef9500fe451", multiImpactSecondaryEffect = "ab46bb0d55b8441e91c17c73dd2d9e3d", playCastEffectOnInput = true },
+		        W = { effect = "f7307df6600a46de836f66c7e26896ba", impact = "692869e1c36745f09937fc318a0de6fb", multiImpactEffect = "692869e1c36745f09937fc318a0de6fb", playCastEffectOnInput = true },
+		        E = { effect = "4bdd2ce1a97943b6a93475afc4a90a4c", impact = "09a4878dec8643f7b1da2bebfc94ee95", playCastEffectOnInput = true },
+		        R = { effect = "4475f02bcb66475391f28fe79469c770", tickEffect = "530b2dfe70af42f88705e3ed467bd00a", tickEffectDelay = 0.08, visualTickCount = 128, visualTickInterval = 0.08, tickSecondaryEffect = "1c0031b1f8ac4cb5a9256be39b5fa2c4", tickSecondaryEffectDelay = 0.12, tickSecondaryVisualTickCount = 84, tickSecondaryVisualTickInterval = 0.12, followCasterDuringChannel = true, followCasterAimDuringChannel = true, effect0 = "af5115902b124a6db4fe549c582428d3", ball = "af5115902b124a6db4fe549c582428d3", impact = "b27018a402ee45f39cd4e796dc228ddb", effect2 = "b3a764687e074c5cae57d22328d47687", endEffectDelay = 10.26, playCastEffectOnInput = true },
+		        T = { tickEffect = "ec2a2a71fc1845d68d8fef7ba6a7f22d", tickEffectDelay = 0, visualTickCount = 38, visualTickInterval = 0.22, followCasterDuringChannel = true, impact = "f0acd6949c5e47a6975771db240b5c87", multiImpactEffect = "f0acd6949c5e47a6975771db240b5c87" },
+		    }
+	end
+
+end

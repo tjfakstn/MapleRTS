@@ -1,0 +1,103 @@
+@Component
+script MechanicEffectComponent extends Component
+
+	@ExecSpace("Client")
+	method void Play(string group, string ruid, Vector2 origin, Vector2 direction, number scale, number lifetime, boolean looping)
+		    -- 메카닉 전용 연출 수명만 소유하며 판정/피해를 계산하지 않는다.
+		    if not isvalid(self.Entity.CurrentMap) then return end
+		    -- 전탄발사 원본은 왼쪽을 향한다. Q 및 설치 병기 리소스와 별개로 반전한다.
+		    local flip = direction.x < 0
+		    if group == "R" or group == "R_end" or group == "E" then flip = direction.x > 0 end
+		    local serial = _FogOfWarLogic:PlayEffectSeen(ruid, self.Entity.CurrentMap, origin:ToVector3(),
+		        0, Vector3(flip and -scale or scale, scale, 1), looping, nil)
+		    self._T.effects = self._T.effects or {}
+		    table.insert(self._T.effects, { serial = serial, remaining = lifetime, group = group })
+	end
+
+	@ExecSpace("Client")
+	method void BeginTitan(Vector2 origin, Vector2 direction, Vector2 hitCenter)
+		    -- 숫자 순서로 명시된 23개 sprite를 한 개체에서 이어 재생한다.
+		    local skills = self.Entity:GetComponent("script.MechanicSkillComponent")
+		    if skills == nil then return end
+		    local skill = skills:BuildKit().E
+		    local vfx = skills:BuildVfx().E
+		    self:Play("E", vfx.effect, origin, direction, skill.visualScale, skill.summonDuration, false)
+		    self._T.titans = self._T.titans or {}
+		    table.insert(self._T.titans, { elapsed = 0, origin = origin, direction = direction,
+		        skill = skill, vfx = vfx, frame = 0, entity = nil, falling = false,
+		        hitCenter = hitCenter, timeline = skills:BuildTitanTimeline(), shownBursts = 0 })
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		    -- 프레임 선택은 누적 시간 기반이며 끝난 개체와 effect serial을 정리한다.
+		    for i = #(self._T.effects or {}), 1, -1 do
+		        local rec = self._T.effects[i]
+		        rec.remaining = rec.remaining - delta
+		        if rec.remaining <= 0 then _EffectService:RemoveEffect(rec.serial) table.remove(self._T.effects, i) end
+		    end
+		    for i = #(self._T.titans or {}), 1, -1 do
+		        local rec = self._T.titans[i]
+		        rec.elapsed = rec.elapsed + delta
+		        local relative = rec.elapsed - rec.skill.summonDuration
+		        if relative >= 0 and relative < #rec.vfx.frames * rec.skill.frameDuration then
+		            local frame = math.min(#rec.vfx.frames, math.floor(relative / rec.skill.frameDuration) + 1)
+		            if not isvalid(rec.entity) then
+		                rec.entity = _SpawnService:SpawnByModelId("projectile", "MechanicTitanSequence", rec.origin:ToVector3(), self.Entity.CurrentMap)
+		                if isvalid(rec.entity) then
+		                    local s = rec.skill.visualScale
+		                    rec.entity.TransformComponent.Scale = Vector3(rec.direction.x > 0 and -s or s, s, 1)
+		                end
+		            end
+		            if isvalid(rec.entity) and rec.frame ~= frame then
+		                rec.entity.SpriteRendererComponent.SpriteRUID = rec.vfx.frames[frame]
+		                rec.frame = frame
+		            end
+		        elseif relative >= #rec.vfx.frames * rec.skill.frameDuration and not rec.falling then
+		            if isvalid(rec.entity) then rec.entity:Destroy() end
+		            rec.entity = nil
+		            rec.falling = true
+		            -- 낙하 원본은 오른쪽/아래로 치우친 피벗이다. 시각 중심을 서버 공격 중심에 맞춘다.
+		            local center = rec.skill.fallVisualCenter * rec.skill.visualScale
+		            local fallOrigin = rec.hitCenter - Vector2(center.x * rec.direction.x, center.y)
+		            self:Play("E_fall", rec.vfx.effect2, fallOrigin, rec.direction, rec.skill.visualScale, rec.skill.fallDuration, false)
+		        end
+		        while rec.shownBursts < #rec.timeline.bursts and rec.elapsed >= rec.timeline.bursts[rec.shownBursts + 1].at do
+		            rec.shownBursts = rec.shownBursts + 1
+		        end
+		        if rec.elapsed >= rec.timeline.duration then
+		            if isvalid(rec.entity) then rec.entity:Destroy() end
+		            table.remove(self._T.titans, i)
+		        end
+		    end
+	end
+
+	@ExecSpace("Client")
+	method void ClearGroup(string group)
+		    -- 채널 종료는 R 루프만 제거하여 동시에 진행 중인 E/W/T를 보존한다.
+		    for i = #(self._T.effects or {}), 1, -1 do
+		        local rec = self._T.effects[i]
+		        if group == "ALL" or rec.group == group then
+		            _EffectService:RemoveEffect(rec.serial)
+		            table.remove(self._T.effects, i)
+		        end
+		    end
+		    if group == "ALL" then
+		        for _, rec in ipairs(self._T.titans or {}) do if isvalid(rec.entity) then rec.entity:Destroy() end end
+		        self._T.titans = {}
+		    end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnMapLeave(Entity map)
+		    -- 이전 맵의 연출은 새 맵에 남기지 않는다.
+		    self:ClearGroup("ALL")
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		    -- 컴포넌트 종료 시 모든 연출 수명을 종료한다.
+		    self:ClearGroup("ALL")
+	end
+
+end

@@ -1,0 +1,66 @@
+@Component
+script MesoStructure extends Component
+
+	@DisplayName("채집에 걸리는 시간(초)")
+	property number GatherTime = 2.0
+
+	@DisplayName("1회 채집으로 얻는 메소")
+	property integer MesoAmount = 5
+
+	@DisplayName("총 매장량 (-1: 무한) — 2026-10-07 100만으로")
+	property integer TotalMeso = 1000000
+
+	@Sync
+	property integer RemainingMeso = -1
+
+	@ExecSpace("ServerOnly")
+	method void OnBeginPlay()
+		-- 게임마다 새 인스턴스 룸(맵)이 만들어지므로 재경기용 광맥 목록 등록은 더 이상 필요 없다.
+		-- (예전 LobbyController.mesoVeins는 삭제됨 — 남아 있으면 nil이라 table.insert 오류가 광맥 수만큼 난다.)
+		self:ResetReserve()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ResetReserve()
+		-- 매장량을 처음 값으로 되돌리고(사라졌던 광맥은 다시 켠다) 정보 UI의 체력 표시를 매장량과 맞춘다.
+		self.RemainingMeso = math.max(-1, self.TotalMeso)
+		if not self.Entity.Enable then self.Entity.Enable = true end
+		self:SyncHp()
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SyncHp()
+		-- 광맥의 체력(Structure_Info.Hp/MaxHp)은 남은 메소/총 매장량이다. 선택했을 때 정보 UI의 체력 바가 이 값을 보여준다.
+		---@type Structure_Info
+		local info = self.Entity:GetComponent("script.Structure_Info")
+		if info == nil or self.TotalMeso < 0 then return end
+		info.MaxHp = self.TotalMeso
+		info.Hp = math.max(0, self.RemainingMeso)
+	end
+
+	method boolean IsDepleted()
+		return self.RemainingMeso == 0
+	end
+
+	method string ReserveText()
+		if self.RemainingMeso < 0 then return "메소 · 무한" end
+		if self.RemainingMeso == 0 then return "메소 · 고갈" end
+		return "메소 잔량 " .. tostring(self.RemainingMeso)
+	end
+
+	@ExecSpace("ServerOnly")
+	method integer TakeMeso()
+		-- 서버 한 호출에서 차감까지 끝낸다. 중간 타이머/RPC/yield가 없어 마지막 잔량을 중복 지급하지 않는다.
+		local amount = math.max(0, self.MesoAmount)
+		if self.RemainingMeso < 0 then return amount end
+		amount = math.min(amount, self.RemainingMeso)
+		self.RemainingMeso = self.RemainingMeso - amount
+		self:SyncHp()
+		if amount > 0 and self.RemainingMeso == 0 then
+			-- 다 캔 광맥은 맵에서 사라진다(엔티티를 꺼 둔다 — 재경기 때 ResetReserve가 다시 켠다).
+			self.Entity.Enable = false
+		end
+		return amount
+	end
+
+end

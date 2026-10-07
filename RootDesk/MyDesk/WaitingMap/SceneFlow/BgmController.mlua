@@ -1,0 +1,109 @@
+@Logic
+script BgmController extends Logic
+
+	@DisplayName("판정 주기(초)")
+	property number TickInterval = 0.5
+
+	@DisplayName("다음 곡 전환 여유(초) — 길이 표가 조금 짧아도 끊기지 않게")
+	property number SwitchPadding = 0.2
+
+	@HideFromInspector
+	property number _tick = 0
+
+	@HideFromInspector
+	property string _playlistKey = ""
+
+	@HideFromInspector
+	property table _playlist = {}
+
+	@HideFromInspector
+	property integer _index = 0
+
+	@HideFromInspector
+	property number _trackEndAt = 0
+
+	@HideFromInspector
+	property integer _sceneVersion = -1
+
+	@HideFromInspector
+	property boolean _holdResult = false
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		self._tick = self._tick + delta
+		if self._tick < self.TickInterval then return end
+		self._tick = 0
+		
+		-- 맵 전환(로비 ↔ 게임)마다 결과곡 홀드를 풀고 목록을 다시 고른다.
+		if _SceneController.SceneVersion ~= self._sceneVersion then
+			self._sceneVersion = _SceneController.SceneVersion
+			self._holdResult = false
+			self._playlistKey = ""
+		end
+		if self._holdResult then return end
+		
+		local key = self:DesiredKey()
+		if key == "" then return end  -- 인게임인데 진영 동기화 전: 현재 곡 유지
+		
+		if key ~= self._playlistKey then
+			self:StartPlaylist(key)
+			return
+		end
+		
+		local n = #self._playlist
+		if n <= 1 then return end  -- 1곡은 엔진 BGM 반복에 맡긴다
+		if _UtilLogic.ElapsedSeconds >= self._trackEndAt then
+			self._index = (self._index % n) + 1
+			self:PlayIndex()
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method string DesiredKey()
+		-- "plaza"(로비 = 자유시장 광장) / "lobby"(방 대기실) / 진영 키("Adv"/"Cyg"/"Ede"). 인게임인데 진영을 아직 모르면 "".
+		if _SceneController.InRoomLobby then return "plaza" end
+		if not _SceneController.InGame then return "lobby" end
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) then return "" end
+		---@type PlayerInfo
+		local info = lp:GetComponent("script.PlayerInfo")
+		if info == nil or info.SelectedCamp == "" then return "" end
+		return info.SelectedCamp
+	end
+
+	@ExecSpace("ClientOnly")
+	method void StartPlaylist(string key)
+		self._playlistKey = key
+		self._playlist = _SoundResources:GetBgmList(key)
+		self._index = 0
+		if #self._playlist == 0 then
+			_SoundService:StopBGM(false)
+			return
+		end
+		self._index = 1
+		self:PlayIndex()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayIndex()
+		local track = self._playlist[self._index]
+		if track == nil then return end
+		_SoundService:PlayBGM(track.ruid, _SoundResources.BgmVolume * _GameSettingsLogic.BgmMult)
+		self._trackEndAt = _UtilLogic.ElapsedSeconds + track.length + self.SwitchPadding
+	end
+
+	@ExecSpace("Client")
+	method void PlayResult(boolean won)
+		-- 서버(LobbyController.EndMatch)가 대상 유저를 지정해 호출. 결과곡이 있으면 재생, 없으면 BGM 정지.
+		-- 로비 복귀(SceneVersion 변화)까지 홀드한다.
+		self._holdResult = true
+		self._playlistKey = ""
+		local ruid = won and _SoundResources.BgmVictory or _SoundResources.BgmDefeat
+		if ruid ~= nil and ruid ~= "" then
+			_SoundService:PlayBGM(ruid, _SoundResources.BgmVolume * _GameSettingsLogic.BgmMult)
+		else
+			_SoundService:StopBGM(false)
+		end
+	end
+
+end

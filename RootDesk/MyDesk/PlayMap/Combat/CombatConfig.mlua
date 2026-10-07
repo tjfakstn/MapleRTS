@@ -1,0 +1,152 @@
+@Logic
+script CombatConfig extends Logic
+
+	@DisplayName("근접 - 베기 명중 이펙트")
+	property string SlashRUID = "8f747df49c1a4ddc8c629e0bd8b8c5c0"
+
+	@DisplayName("광역/화염 - 폭발 명중 이펙트")
+	property string ExplosionRUID = "2c002468a1cd4e3e81d616d9cf5ad486"
+
+	@DisplayName("원거리 - 일반 명중 이펙트")
+	property string ImpactRUID = "174f536836b146f2ae474cd39deb119c"
+
+	@DisplayName("원거리 - 날아가는 투사체 모양")
+	property string ProjectileRUID = "3796c6c68f7e4e5e97bf8ac725a0b4f8"
+
+	@DisplayName("원거리 - 힐/지원 명중 이펙트")
+	property string HealRUID = "64397eb5e0a142408d564d1b37aa3d19"
+
+	@DisplayName("원거리 - 독 명중 이펙트")
+	property string PoisonRUID = "75ebf08b040842179c5001fd64347546"
+
+	@DisplayName("원거리 - 냉기 명중 이펙트")
+	property string FrostRUID = "2f5462e856d545db937ecb6b2277fbc7"
+
+	@DisplayName("원거리 - 저주 명중 이펙트")
+	property string DarkRUID = "182001a35e4d4cddabb9ee5968da1198"
+
+	@DisplayName("원거리 - 마법/상태이상 명중 이펙트")
+	property string MagicRUID = "5316d87fb5764639a10dfdf604348014"
+
+	property number MeleeAoeRadius = 2.0
+
+	property number ProjectileSpeed = 12
+
+	method boolean Has(string s, string sub)
+		-- 한글 부분 문자열 포함 여부(매직패턴 없이 평문 비교).
+		return string.find(s, sub, 1, true) ~= nil
+	end
+
+	method table ResolveByRole(string role, boolean rangedHint)
+		-- role: CSV '역할' 문자열. rangedHint: CSV Target/AttackRange 로 유추한 원거리 여부(SpawnUnit 계산).
+		-- 반환: { attackType, hitEffectRUID, projectileRUID, aoeRadius, projectileSpeed }
+		local r = role or ""
+		
+		local out = {}
+		out.attackType = "melee"
+		out.hitEffectRUID = self.SlashRUID
+		out.projectileRUID = ""
+		out.aoeRadius = self.MeleeAoeRadius
+		out.projectileSpeed = self.ProjectileSpeed
+		
+		-- 1) 광역 / 포격 → aoe
+		if self:Has(r, "광역") or self:Has(r, "포격") then
+			out.attackType = "aoe"
+			out.hitEffectRUID = self.ExplosionRUID
+			return out
+		end
+		
+		-- 2) 원거리 판정: 역할 키워드 또는 데이터 힌트(Target/AttackRange >= 2)
+		local ranged = rangedHint
+			or self:Has(r, "원거리") or self:Has(r, "공중") or self:Has(r, "저격")
+			or self:Has(r, "사격") or self:Has(r, "마법") or self:Has(r, "상태이상")
+		
+		if ranged then
+			out.attackType = "ranged"
+			out.projectileRUID = self.ProjectileRUID
+			out.hitEffectRUID = self.ImpactRUID
+		
+			if self:Has(r, "힐러") or self:Has(r, "지원") then
+				out.hitEffectRUID = self.HealRUID
+			elseif self:Has(r, "독") then
+				out.hitEffectRUID = self.PoisonRUID
+			elseif self:Has(r, "냉기") then
+				out.hitEffectRUID = self.FrostRUID
+			elseif self:Has(r, "저주") then
+				out.hitEffectRUID = self.DarkRUID
+			elseif self:Has(r, "마법") or self:Has(r, "상태이상") then
+				out.hitEffectRUID = self.MagicRUID
+			end
+			return out
+		end
+		
+		-- 3) 화염 계열 근접(화염돌격 등)
+		if self:Has(r, "화염") then
+			out.hitEffectRUID = self.ExplosionRUID
+			return out
+		end
+		
+		-- 4) 그 외 전부 근접(일꾼 / 근접 / 근거리 / 돌격 / 탱커 / 기본 / 견제)
+		return out
+	end
+
+	method table ResolveByRoleKey(string roleKey)
+		-- RoleKey(영문 식별자, CSV 'RoleKey' 열) → 공격 스타일 + 이펙트 RUID.
+		-- 한글 부분 문자열 매칭(ResolveByRole) 대신 정확한 키 비교라 오탐이 없다.
+		local out = {}
+		out.attackType = "melee"
+		out.hitEffectRUID = self.SlashRUID
+		out.projectileRUID = ""
+		out.aoeRadius = self.MeleeAoeRadius
+		out.projectileSpeed = self.ProjectileSpeed
+		
+		if roleKey == "MeleeAoe" then
+			out.attackType = "aoe"
+			out.hitEffectRUID = self.ExplosionRUID
+		elseif roleKey == "FireAssault" then
+			out.hitEffectRUID = self.ExplosionRUID
+		elseif roleKey == "RangedBasic" or roleKey == "RangedMage" then
+			out.attackType = "ranged"
+			out.projectileRUID = self.ProjectileRUID
+			out.hitEffectRUID = self.ImpactRUID
+		elseif roleKey == "RangedHealer" or roleKey == "RangedSupport" then
+			out.attackType = "ranged"
+			out.projectileRUID = self.ProjectileRUID
+			out.hitEffectRUID = self.HealRUID
+		elseif roleKey == "RangedPoison" then
+			out.attackType = "ranged"
+			out.projectileRUID = self.ProjectileRUID
+			out.hitEffectRUID = self.PoisonRUID
+		elseif roleKey == "RangedFrost" then
+			out.attackType = "ranged"
+			out.projectileRUID = self.ProjectileRUID
+			out.hitEffectRUID = self.FrostRUID
+		elseif roleKey == "RangedCurse" then
+			out.attackType = "ranged"
+			out.projectileRUID = self.ProjectileRUID
+			out.hitEffectRUID = self.DarkRUID
+		elseif roleKey == "EliteAfflictor" then
+			out.attackType = "ranged"
+			out.projectileRUID = self.ProjectileRUID
+			out.hitEffectRUID = self.MagicRUID
+		elseif roleKey == "AerialBasic" or roleKey == "AerialScout" or roleKey == "AerialElite" or roleKey == "AerialStealth" then
+			out.attackType = "ranged"
+			out.projectileRUID = self.ProjectileRUID
+			out.hitEffectRUID = self.ImpactRUID
+		end
+		-- RangedHealer의 주 임무는 SpecialAbilityComponent가 매 틱 수행하는 아군 회복이다.
+		-- 다만 공격 명령을 받았을 때 비주얼이 근접으로 보이지 않도록 style은 ranged로 맞춰둔다.
+		-- MeleeBasic / MeleeSwarm / MeleeTank / AssaultBasic / EliteAssault / EliteGuard / GroundStealth / Worker → 기본 melee 유지.
+		
+		return out
+	end
+
+	method table Resolve(string roleKey, string role, boolean rangedHint)
+		-- RoleKey(영문, 신규 CSV)가 있으면 그쪽을 우선 사용하고, 없으면 기존 한글 역할 문자열 매칭으로 폴백한다.
+		if roleKey ~= nil and roleKey ~= "" then
+			return self:ResolveByRoleKey(roleKey)
+		end
+		return self:ResolveByRole(role, rangedHint)
+	end
+
+end

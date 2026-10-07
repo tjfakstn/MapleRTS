@@ -1,0 +1,33 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "codeblock://5ef1c771-771d-47e5-8316-5ff2ba8e0c9b",
+  "ContentType": "x-mod/codeblock",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "CoreVersion": {
+        "Major": 0,
+        "Minor": 2
+      },
+      "ScriptVersion": {
+        "Major": 1,
+        "Minor": 1
+      },
+      "Description": "",
+      "Id": "5ef1c771-771d-47e5-8316-5ff2ba8e0c9b",
+      "Language": 1,
+      "Name": "HeroSkillAttackLogicComponent",
+      "Type": 1,
+      "Source": 0,
+      "Target": null
+    }
+  }
+}

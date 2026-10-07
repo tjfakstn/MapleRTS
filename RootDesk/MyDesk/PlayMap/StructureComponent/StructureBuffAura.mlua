@@ -1,0 +1,230 @@
+@Component
+script StructureBuffAura extends Component
+
+	@DisplayName("(사용 안 함) 옛 오라 공격 배율")
+	property number DamageMultiplier = 1.1
+
+	@DisplayName("(사용 안 함) 옛 오라 방어 배율")
+	property number DefenseMultiplier = 1.1
+
+	@DisplayName("업그레이드 대상 계열(Unit_Info.Line)")
+	property string TargetLine = ""
+
+	@DisplayName("(사용 안 함) 옛 오라 주기")
+	property number TickInterval = 1.0
+
+	@Sync
+	property string ResearchKind = ""
+
+	@Sync
+	property integer ResearchLevel = 0
+
+	@Sync
+	property number ResearchEndTime = 0
+
+	@Sync
+	property number ResearchTotal = 0
+
+	@HideFromInspector
+	property any _tickTimerId = nil
+
+	@HideFromInspector
+	property number _checkTimer = 0
+
+	method Structure_Info Info()
+		-- 이 건물의 Structure_Info.
+		---@type Structure_Info
+		local s = self.Entity:GetComponent("script.Structure_Info")
+		return s
+	end
+
+	method PlayerInfo OwnerInfo()
+		-- 소유자 PlayerInfo(없으면 nil).
+		local s = self:Info()
+		if s == nil then return nil end
+		return _JobAdvanceLogic:PlayerInfoOf(s.PlayerID)
+	end
+
+	method table GetUpgradeActions()
+		-- 커맨드카드용 연구 버튼 2칸(공격/방어). 내 완공 건물일 때만. CommandCardLogic.BuildForEntity가 붙인다.
+		local s = self:Info()
+		if s == nil or s.IsDestroyed or s.IsUnderConstruction or self.TargetLine == "" then return {} end
+		local info = self:OwnerInfo()
+		if info == nil then return {} end
+		local list = {}
+		local camp = info.SelectedCamp
+		for _, kind in ipairs({ "A", "D" }) do
+			local cur = _UpgradeLogic:LevelOf(info, self.TargetLine, kind)
+			local nextLv = cur + 1
+			local upName = _UpgradeLogic:UpgradeName(camp, self.TargetLine, kind)
+			local cost = _UpgradeLogic:LevelCost(camp, self.TargetLine, kind, math.min(nextLv, _UpgradeLogic.MaxLevel))
+			local act = {
+				ActionID = "Upgrade",
+				UnitModel = "",
+				Ruid = _UpgradeLogic:UpgradeIcon(camp, self.TargetLine, kind),
+				Building = self.Entity,
+				Arg = kind,
+				Label = upName .. " " .. tostring(nextLv),
+				TipTitle = upName .. " " .. tostring(nextLv) .. "단계",
+				TipInfo = _UpgradeLogic:GroupLabel(camp, self.TargetLine) .. " · " .. _UpgradeLogic:EffectText(kind)
+					.. " · 현재 " .. tostring(cur) .. "/" .. tostring(_UpgradeLogic.MaxLevel),
+				CostMeso = cost.meso,
+				CostErda = cost.erda,
+				CostTime = cost.time,
+				Locked = false,
+				LockReason = "",
+				Done = false,
+			}
+			if cur >= _UpgradeLogic.MaxLevel then
+				act.Done = true
+				act.Locked = true
+				act.Label = upName .. " 완료"
+				act.TipTitle = upName .. " — 최대 단계"
+				act.CostMeso = nil
+				act.CostErda = nil
+				act.CostTime = nil
+			elseif self.ResearchKind ~= "" and self.ResearchKind ~= kind then
+				act.Locked = true
+				act.LockReason = "다른 연구 완료"
+			end
+			table.insert(list, act)
+		end
+		return list
+	end
+
+	method number ResearchRemain()
+		-- 진행 중인 연구의 남은 시간(초, 없으면 0).
+		if self.ResearchKind == "" then return 0 end
+		return math.max(0, self.ResearchEndTime - _UtilLogic.ServerElapsedSeconds)
+	end
+
+	@ExecSpace("ClientOnly")
+	method string StatusText()
+		-- 정보 패널 상태 줄: 연구 중이면 "공격 2단계 연구 중 · 12.3s 남음", 아니면 현재 단계 요약.
+		local info = self:OwnerInfo()
+		if info == nil or self.TargetLine == "" then return "" end
+		if self.ResearchKind ~= "" then
+			local remain = self:ResearchRemain()
+			return _UpgradeLogic:UpgradeName(info.SelectedCamp, self.TargetLine, self.ResearchKind) .. " " .. tostring(self.ResearchLevel) .. "단계 연구 중 · " .. tostring(math.ceil(remain * 10) / 10) .. "s 남음"
+		end
+		return _UpgradeLogic:GroupLabel(info.SelectedCamp, self.TargetLine) .. " · 공격 " .. tostring(_UpgradeLogic:LevelOf(info, self.TargetLine, "A"))
+			.. " / 방어 " .. tostring(_UpgradeLogic:LevelOf(info, self.TargetLine, "D"))
+	end
+
+	@ExecSpace("ClientOnly")
+	method number ResearchProgress()
+		-- 연구 진행률 0~1(연구 중이 아니면 -1).
+		if self.ResearchKind == "" or self.ResearchTotal <= 0 then return -1 end
+		return 1 - self:ResearchRemain() / self.ResearchTotal
+	end
+
+	@ExecSpace("Server")
+	method void RequestResearch(string kind)
+		-- 소유 클라이언트의 연구 요청. 소유·완공·중복·최대 단계·재화를 서버에서 모두 검증한다.
+		local uid = senderUserId
+		if kind ~= "A" and kind ~= "D" then return end
+		local s = self:Info()
+		if s == nil or s.PlayerID ~= uid or s.IsDestroyed or self.TargetLine == "" then return end
+		if s.IsUnderConstruction then
+			_UIToast_:ShowMessage("건설이 끝난 뒤에 연구할 수 있습니다", uid)
+			return
+		end
+		if self.ResearchKind ~= "" then
+			_UIToast_:ShowMessage("이 건물은 이미 연구 중입니다", uid)
+			return
+		end
+		local info = self:OwnerInfo()
+		if info == nil then return end
+		local level = _UpgradeLogic:LevelOf(info, self.TargetLine, kind) + 1
+		if level > _UpgradeLogic.MaxLevel then
+			_UIToast_:ShowMessage("이미 최대 단계입니다", uid)
+			return
+		end
+		if self:IsSameResearchElsewhere(s.PlayerID, kind) then
+			_UIToast_:ShowMessage("다른 건물에서 같은 연구가 진행 중입니다", uid)
+			return
+		end
+		local cost = _UpgradeLogic:LevelCost(info.SelectedCamp, self.TargetLine, kind, level)
+		if not info:TrySpend(cost.meso, cost.erda) then
+			_UIToast_:ShowMessage(info:ShortageMessage(cost.meso, cost.erda), uid)
+			return
+		end
+		local now = _UtilLogic.ServerElapsedSeconds
+		self.ResearchKind = kind
+		self.ResearchLevel = level
+		self.ResearchTotal = cost.time
+		self.ResearchEndTime = now + cost.time
+		_UIToast_:ShowMessage(_UpgradeLogic:UpgradeName(info.SelectedCamp, self.TargetLine, kind) .. " " .. tostring(level) .. "단계 연구 시작 (" .. tostring(math.floor(cost.time)) .. "초)", uid)
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean IsSameResearchElsewhere(string playerId, string kind)
+		-- 같은 소유자의 다른 업그레이드 건물이 같은 묶음·같은 종류를 연구 중인지(같은 단계를 두 번 사지 않게).
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return false end
+		local list = map:GetChildComponentsByTypeName("script.StructureBuffAura", true)
+		if list == nil then return false end
+		for _, comp in ipairs(list) do
+			---@type StructureBuffAura
+			local other = comp
+			if other ~= self and other.TargetLine == self.TargetLine and other.ResearchKind == kind then
+				local os = other:Info()
+				if os ~= nil and os.PlayerID == playerId and not os.IsDestroyed then return true end
+			end
+		end
+		return false
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnUpdate(number delta)
+		-- 0.25초마다 진행 중인 연구 확인: 건물이 파괴됐으면 취소, 시간이 됐으면 완료.
+		if self.ResearchKind == "" then return end
+		self._checkTimer += delta
+		if self._checkTimer < 0.25 then return end
+		self._checkTimer = 0
+		local s = self:Info()
+		if s == nil or s.IsDestroyed then
+			self:ClearResearch()
+			return
+		end
+		if _UtilLogic.ServerElapsedSeconds >= self.ResearchEndTime then
+			self:CompleteResearch()
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ClearResearch()
+		-- 진행 표시 값을 비운다.
+		self.ResearchKind = ""
+		self.ResearchLevel = 0
+		self.ResearchTotal = 0
+		self.ResearchEndTime = 0
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CompleteResearch()
+		-- 연구 완료: 소유자의 단계를 올리고 안내 토스트. 커맨드카드는 Structure_Info 동기화(RefreshCard)·ResearchKind 동기화로 갱신된다.
+		local s = self:Info()
+		local info = self:OwnerInfo()
+		local kind = self.ResearchKind
+		local level = self.ResearchLevel
+		-- 단계를 먼저 기록하고 진행 표시를 지운다(클라이언트가 ResearchKind 변화로 카드를 다시 만들 때 새 단계가 보이게).
+		if info ~= nil then _UpgradeLogic:SetLevel(info, self.TargetLine, kind, level) end
+		self:ClearResearch()
+		if s == nil or info == nil then return end
+		_UIToast_:ShowMessage(_UpgradeLogic:UpgradeName(info.SelectedCamp, self.TargetLine, kind) .. " " .. tostring(level) .. "단계 완료! (" .. _UpgradeLogic:GroupLabel(info.SelectedCamp, self.TargetLine) .. ")", s.PlayerID)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSyncProperty(string name, any value)
+		-- 연구 시작/완료가 동기화되면 이 건물을 선택 중인 클라이언트의 커맨드카드를 다시 만든다(다른 칸 잠금/단계 표시 갱신).
+		-- PlayerInfo.UpgradeLevels 동기화가 조금 늦게 올 수 있어 0.3초 뒤에 한 번 더 갱신한다.
+		if name ~= "ResearchKind" then return end
+		if _SelectionLogic.Focus == self.Entity then _CommandCardLogic:RefreshCard() end
+		local me = self.Entity
+		_TimerService:SetTimerOnce(function()
+			if isvalid(me) and _SelectionLogic.Focus == me then _CommandCardLogic:RefreshCard() end
+		end, 0.3)
+	end
+
+end

@@ -1,0 +1,91 @@
+@Logic
+script BattleResultUI extends Logic
+
+	property Entity resultRoot = "0fb219da-7b42-4413-a001-83bc31cb1cda"
+
+	property Entity defeatBadge = "7754416a-27c4-4069-9352-34b00f5533e9"
+
+	property Entity victoryBadge = "3d51f8a4-3c25-469c-8040-253a7f24fbfe"
+
+	property TextGUIRendererComponent detailText = "2c92a7a8-9526-4646-a2c1-1418c6a90637"
+
+	property number revealTime = 0
+
+	property number returnRemaining = -1
+
+	property string activeResult = ""
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		-- 결과 화면은 서버가 해당 참가자에게 결과를 보낼 때만 연다.
+		self:HideResult()
+	end
+
+	@ExecSpace("Client")
+	method void ShowResult(boolean won, number returnSeconds)
+		-- 서버의 참가자별 RPC: 먼저 탈락한 유저의 Defeat도 즉시 표시한다.
+		if not isvalid(self.resultRoot) or not isvalid(self.defeatBadge) or not isvalid(self.victoryBadge) then
+			log_error("[BattleResultUI] 결과 UI 바인딩 누락")
+			return
+		end
+		local result = won and "Victory" or "Defeat"
+		if self.activeResult ~= result then self.revealTime = 0 end
+		self.activeResult = result
+		self.returnRemaining = returnSeconds
+		self.defeatBadge.Enable = not won
+		self.victoryBadge.Enable = won
+		self.resultRoot.Enable = true
+		self:UpdatePresentation(0)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- 로비로 이동하면 닫고, 경기 화면에서는 등장 애니메이션과 복귀 안내를 갱신한다.
+		if self.activeResult == "" then return end
+		local player = _UserService.LocalPlayer
+		if isvalid(player) and isvalid(player.CurrentMap) and player.CurrentMap.Name ~= _LobbyController.GameMapName then
+			self:HideResult()
+			return
+		end
+		self:UpdatePresentation(delta)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdatePresentation(number delta)
+		-- 0.45초 동안 배지를 부드럽게 확대하며 표시한다.
+		self.revealTime = math.min(self.revealTime + delta, 0.45)
+		local t = self.revealTime / 0.45
+		local scale = 0.86 + 0.14 * (1 - (1 - t) ^ 3)
+		self.resultRoot.CanvasGroupComponent.GroupAlpha = t
+		local badge = self.activeResult == "Victory" and self.victoryBadge or self.defeatBadge
+		if isvalid(badge) then badge.UITransformComponent.UIScale = Vector3(scale, scale, 1) end
+		if self.returnRemaining >= 0 then
+			self.returnRemaining = math.max(0, self.returnRemaining - delta)
+			self.detailText.Text = tostring(math.ceil(self.returnRemaining)) .. "초 뒤 대기실로 돌아갑니다"
+		else
+			self.detailText.Text = "본진이 파괴되었습니다 · 남은 전투가 끝나면 대기실로 이동합니다"
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void HideResult()
+		-- 이전 경기의 화면과 카운트다운을 정리한다.
+		if isvalid(self.resultRoot) then self.resultRoot.Enable = false end
+		self.activeResult = ""
+		self.revealTime = 0
+		self.returnRemaining = -1
+	end
+
+	@ExecSpace("Client")
+	method void DismissResult()
+		-- 서버가 경기 종료 결과표를 띄우기 직전에 호출해 먼저 탈락 Defeat 화면을 치운다.
+		self:HideResult()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		-- 플레이 테스트 종료 시 결과 표시 상태를 초기화한다.
+		self:HideResult()
+	end
+
+end

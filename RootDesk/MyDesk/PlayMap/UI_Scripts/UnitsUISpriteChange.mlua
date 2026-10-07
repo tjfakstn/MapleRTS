@@ -1,0 +1,147 @@
+@Component
+script UnitsUISpriteChange extends Component
+
+	property table UnitsSprite = {}
+
+	property table SelectedEntities = {}
+
+	property integer SlotCount = 12
+
+	@HideFromInspector
+	property table _slots = {}
+
+	@HideFromInspector
+	property table _fills = {}
+
+	@HideFromInspector
+	property boolean _cached = false
+
+	@HideFromInspector
+	property table _clickHandlers = {}
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		self.Entity.Enable = false
+		-- 칸을 누르면 그 유닛 하나만 선택한다(스타크래프트의 다중 선택 초상 클릭).
+		self._clickHandlers = {}
+		for i = 1, self.SlotCount do
+			local slot = self.Entity:GetChildByName("Slot" .. tostring(i))
+			if isvalid(slot) then
+				local idx = i
+				local h = slot:ConnectEvent(ButtonClickEvent, function() self:OnSlotClick(idx) end)
+				table.insert(self._clickHandlers, { entity = slot, cb = h })
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		for _, rec in ipairs(self._clickHandlers) do
+			if isvalid(rec.entity) then rec.entity:DisconnectEvent(ButtonClickEvent, rec.cb) end
+		end
+		self._clickHandlers = {}
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSlotClick(integer idx)
+		-- idx번 칸의 유닛을 단독 선택한다. 이미 죽었거나 사라졌으면 무시한다.
+		local e = self.SelectedEntities[idx]
+		if not isvalid(e) or e.UnitMoveComponent == nil then return end
+		if not _SelectionLogic:IsMyAliveUnit(e) then return end
+		_SelectionLogic:SelectUnits({ e.UnitMoveComponent })
+	end
+
+	@ExecSpace("ClientOnly")
+	method void CacheRefs()
+		if self._cached then return end
+		self._slots = {}
+		self._fills = {}
+		for i = 1, self.SlotCount do
+			local slot = self.Entity:GetChildByName("Slot" .. tostring(i))
+			if isvalid(slot) then
+				self._slots[i] = slot
+				local bg = slot:GetChildByName("HpBg")
+				if isvalid(bg) then
+					local fill = bg:GetChildByName("Fill")
+					if isvalid(fill) then self._fills[i] = fill end
+				end
+			end
+		end
+		self._cached = true
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UnitsUIChange()
+		self:CacheRefs()
+		local count = 0
+		for i = 1, self.SlotCount do
+			local slot = self._slots[i]
+			if isvalid(slot) then
+				local ruid = self.UnitsSprite[i]
+				if ruid ~= nil and ruid ~= "" then
+					count = count + 1
+					slot.Enable = true
+					local icon = slot:GetChildByName("Icon")
+					if isvalid(icon) and icon.SpriteGUIRendererComponent ~= nil then
+						icon.SpriteGUIRendererComponent.ImageRUID = DataRef(ruid)
+					end
+					-- 영웅은 모두 같은 초상 스프라이트라 구분이 안 된다 — 선택된 그 영웅이 실제로 입은 아바타를 보인다.
+					local unit = self.SelectedEntities[i]
+					local isHero = isvalid(unit) and unit:GetComponent("script.HeroUnitSkill") ~= nil
+					local avatar = slot:GetChildByName("Avatar")
+					if isvalid(icon) then icon.Enable = not (isHero and isvalid(avatar)) end
+					if isvalid(avatar) then
+						avatar.Enable = isHero
+						avatar.Visible = isHero
+						if isHero then _HeroPortraitLogic:CopyEquip(unit, avatar) end
+					end
+				else
+					slot.Enable = false
+				end
+			end
+		end
+		local countText = self.Entity:GetChildByName("CountText")
+		if isvalid(countText) and countText.TextGUIRendererComponent ~= nil then
+			local total = #self.UnitsSprite
+			if total > self.SlotCount then
+				countText.TextGUIRendererComponent.Text = tostring(total) .. "기 선택 (" .. tostring(self.SlotCount) .. "기까지 표시)"
+			else
+				countText.TextGUIRendererComponent.Text = tostring(total) .. "기 선택"
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- 칸별 HP 바. 유닛이 죽거나 사라지면 0으로.
+		for i = 1, self.SlotCount do
+			local fill = self._fills[i]
+			local slot = self._slots[i]
+			if isvalid(fill) and isvalid(slot) and slot.Enable and fill.SpriteGUIRendererComponent ~= nil then
+				local ratio = 0
+				local e = self.SelectedEntities[i]
+				if isvalid(e) and e.Unit_Info ~= nil and e.Unit_Info.MaxHp > 0 then
+					ratio = e.Unit_Info.Hp / e.Unit_Info.MaxHp
+				end
+				if ratio < 0 then ratio = 0 end
+				if ratio > 1 then ratio = 1 end
+				fill.SpriteGUIRendererComponent.FillAmount = ratio
+			end
+		end
+	end
+
+	@EventSender("LocalPlayer")
+	handler HandleUnitUIChangeEvent(UnitUIChangeEvent event)
+		if event.TargetUIName == self.Entity.Name then
+			self.UnitsSprite = event.SelectedUnitTable
+			self.SelectedEntities = event.SelectedEntities or {}
+			self:UnitsUIChange()
+			self.Entity.Enable = true
+			self.Entity.Visible = true
+		else
+			self.Entity.Enable = false
+			self.Entity.Visible = false
+		end
+	end
+
+end

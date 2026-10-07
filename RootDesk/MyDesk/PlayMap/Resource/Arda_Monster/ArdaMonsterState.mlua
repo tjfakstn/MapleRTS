@@ -1,0 +1,140 @@
+@Component
+script ArdaMonsterState extends Component
+
+	@DisplayName("서 있는 모습 RUID(비우면 모델의 기본 스프라이트)")
+	property string IdleRUID = ""
+
+	@DisplayName("이동 모션 RUID")
+	property string MoveRUID = ""
+
+	@DisplayName("공격 모션 RUID")
+	property string AttackRUID = ""
+
+	@DisplayName("피격 모션 RUID")
+	property string HitRUID = ""
+
+	@DisplayName("사망 모션 RUID")
+	property string DeadRUID = ""
+
+	@DisplayName("피격 상태 유지 시간(초)")
+	property number HitDuration = 0.35
+
+	@DisplayName("애니메이션 재생 속도")
+	property number AnimPlayRate = 1.0
+
+	@DisplayName("원본 스프라이트가 왼쪽을 보는가(오른쪽으로 갈 때 좌우 반전)")
+	property boolean SpriteFacesLeft = true
+
+	@HideFromInspector
+	property string CurrentState = "IDLE"
+
+	@HideFromInspector
+	property string _baseSprite = ""
+
+	@HideFromInspector
+	property string _appliedRuid = ""
+
+	@HideFromInspector
+	property number _prevHp = 0
+
+	@HideFromInspector
+	property boolean _hpReady = false
+
+	@HideFromInspector
+	property number _hitTimer = 0
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		local renderer = self.Entity.SpriteRendererComponent
+		if isvalid(renderer) then
+			self._baseSprite = renderer.SpriteRUID
+			self._appliedRuid = self._baseSprite
+		end
+		self.CurrentState = "IDLE"
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		local renderer = self.Entity.SpriteRendererComponent
+		if not isvalid(renderer) then return end
+		
+		---@type ArdaMonster
+		local am = self.Entity:GetComponent("script.ArdaMonster")
+		---@type Unit_Info
+		local info = self.Entity:GetComponent("script.Unit_Info")
+		
+		-- 이동/공격 방향에 맞춰 좌우 반전.
+		if am ~= nil then
+			local flip = (am.FacingRight == self.SpriteFacesLeft)
+			if renderer.FlipX ~= flip then
+				renderer.FlipX = flip
+			end
+		end
+		
+		if info ~= nil and info.Hp > 0 then
+			self._hpReady = true
+		end
+		
+		-- 1) DEAD (최우선, 진입 후 잠금)
+		if self.CurrentState == "DEAD" then return end
+		if info ~= nil and (info.IsDead or (self._hpReady and info.Hp <= 0)) then
+			self:ChangeState("DEAD")
+			return
+		end
+		
+		-- 2) HIT: Hp 감소 감지(유닛에게 맞은 순간).
+		if info ~= nil then
+			if self._hpReady and info.Hp < self._prevHp then
+				self._hitTimer = self.HitDuration
+				self:ChangeState("HIT")
+			end
+			self._prevHp = info.Hp
+		end
+		if self.CurrentState == "HIT" then
+			self._hitTimer = self._hitTimer - delta
+			if self._hitTimer > 0 then return end
+		end
+		
+		-- 3) ATTACK > MOVE > IDLE
+		local nextState = "IDLE"
+		if am ~= nil then
+			if am.IsAttacking then
+				nextState = "ATTACK"
+			elseif am.IsMoving then
+				nextState = "MOVE"
+			end
+		end
+		self:ChangeState(nextState)
+	end
+
+	method void ChangeState(string newState)
+		if self.CurrentState == "DEAD" then return end
+		if newState == self.CurrentState then return end
+		self.CurrentState = newState
+		self:PlayFor(newState)
+	end
+
+	method string RuidFor(string state)
+		if state == "MOVE" then return self.MoveRUID end
+		if state == "ATTACK" then return self.AttackRUID end
+		if state == "HIT" then return self.HitRUID end
+		if state == "DEAD" then return self.DeadRUID end
+		return self.IdleRUID
+	end
+
+	method void PlayFor(string state)
+		-- 상태의 RUID를 렌더러에 적용한다. RUID가 비어 있으면 서 있는 모습(없으면 기본 스프라이트)으로 대신한다.
+		local renderer = self.Entity.SpriteRendererComponent
+		if not isvalid(renderer) then return end
+		
+		local ruid = self:RuidFor(state)
+		if ruid == "" then ruid = self.IdleRUID end
+		if ruid == "" then ruid = self._baseSprite end
+		if ruid == "" or ruid == self._appliedRuid then return end
+		
+		self._appliedRuid = ruid
+		renderer.PlayRate = self.AnimPlayRate
+		renderer.SpriteRUID = ruid
+	end
+
+end

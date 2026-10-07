@@ -1,0 +1,264 @@
+@Component
+script ResultUI extends Component
+
+	property string GameMapName = "map02"
+
+	@HideFromInspector
+	property any _btnHandler = nil
+
+	@HideFromInspector
+	property number _remain = 0
+
+	@HideFromInspector
+	property boolean _shown = false
+
+	@HideFromInspector
+	property boolean _leaving = false
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		-- 결과 화면을 숨기고, MatchStatsLogic에 자신을 등록하고, 버튼을 연결한다.
+		local screen = self:Screen()
+		if isvalid(screen) then screen.Enable = false end
+		_MatchStatsLogic:RegisterUI(self)
+		local btn = self:Find("Screen/Btn")
+		if isvalid(btn) then
+			self._btnHandler = btn:ConnectEvent(ButtonClickEvent, function() self:OnLeave() end)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		-- 버튼 연결 해제.
+		local btn = self:Find("Screen/Btn")
+		if self._btnHandler ~= nil and isvalid(btn) then btn:DisconnectEvent(ButtonClickEvent, self._btnHandler) end
+		self._btnHandler = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method Entity Screen()
+		-- 결과 화면 루트(Controller의 형제 "Screen").
+		local root = self.Entity.Parent
+		if not isvalid(root) then return nil end
+		return root:GetChildByName("Screen")
+	end
+
+	@ExecSpace("ClientOnly")
+	method Entity Find(string path)
+		-- 그룹 루트 기준 "A/B/C" 경로의 자식 엔티티(없으면 nil).
+		local e = self.Entity.Parent
+		for part in string.gmatch(path, "[^/]+") do
+			if not isvalid(e) then return nil end
+			e = e:GetChildByName(part)
+		end
+		if isvalid(e) then return e end
+		return nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetText(Entity parent, string child, string text)
+		-- parent의 자식 텍스트(child == ""이면 parent 자신).
+		if not isvalid(parent) then return end
+		local e = parent
+		if child ~= "" then e = parent:GetChildByName(child) end
+		if isvalid(e) and e.TextGUIRendererComponent ~= nil then e.TextGUIRendererComponent.Text = text end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetImage(Entity parent, string child, string ruid)
+		-- parent의 자식 스프라이트에 RUID(애니메이션 클립 가능)를 넣는다. 비면 숨김.
+		if not isvalid(parent) then return end
+		local e = parent:GetChildByName(child)
+		if not isvalid(e) or e.SpriteGUIRendererComponent == nil then return end
+		e.Enable = (ruid ~= nil and ruid ~= "")
+		if e.Enable then e.SpriteGUIRendererComponent.ImageRUID = DataRef(ruid) end
+	end
+
+	method string Comma(number n)
+		-- 1234567 → "1,234,567".
+		local s = tostring(math.floor(n))
+		local out = s
+		while true do
+			local replaced, count = string.gsub(out, "^(-?%d+)(%d%d%d)", "%1,%2")
+			out = replaced
+			if count == 0 then break end
+		end
+		return out
+	end
+
+	method string CampName(string camp)
+		if camp == "Adv" then return "모험가" end
+		if camp == "Cyg" then return "시그너스" end
+		if camp == "Ede" then return "에델슈타인" end
+		return camp
+	end
+
+	method Color CampColor(string camp)
+		if camp == "Adv" then return Color(0.243, 0.482, 0.839, 1) end
+		if camp == "Cyg" then return Color(0.851, 0.663, 0.227, 1) end
+		if camp == "Ede" then return Color(0.878, 0.349, 0.180, 1) end
+		return Color(0.4, 0.45, 0.55, 1)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Show(table data)
+		-- 결과표를 채우고 화면을 연다. data = MatchStatsLogic.BuildResult 결과.
+		local screen = self:Screen()
+		if not isvalid(screen) or data == nil then return end
+		local rows = data.rows or {}
+		local lp = _UserService.LocalPlayer
+		local me = (isvalid(lp) and isvalid(lp.PlayerComponent)) and lp.PlayerComponent.UserId or ""
+		
+		-- 내 결과로 배너를 정한다(참가자가 아니면 "경기 종료").
+		local myRes = ""
+		for _, r in ipairs(rows) do
+			if r.uid == me then myRes = r.res end
+		end
+		local banner = "경기 종료"
+		local bannerColor = Color(0.85, 0.88, 0.95, 1)
+		if myRes == "win" then
+			banner = "승리"
+			bannerColor = Color(1, 0.835, 0.29, 1)
+		elseif myRes == "lose" or myRes == "gg" then
+			banner = "패배"
+			bannerColor = Color(0.878, 0.4, 0.4, 1)
+		end
+		local b = self:Find("Screen/Banner")
+		if isvalid(b) and b.TextGUIRendererComponent ~= nil then
+			b.TextGUIRendererComponent.Text = banner
+			b.TextGUIRendererComponent.FontColor = bannerColor
+		end
+		self:SetText(self:Find("Screen/Sub"), "", tostring(#rows) .. "인 개인전 · 결과")
+		
+		-- 항목별 1위(노란 숫자)와 총점 막대 기준.
+		local best = { prod = 0, kill = 0, raze = 0, score = 0 }
+		for _, r in ipairs(rows) do
+			for k, _ in pairs(best) do
+				if (r[k] or 0) > best[k] then best[k] = r[k] end
+			end
+		end
+		local gold = "#FFD54A"
+		for i = 1, 4 do
+			local row = self:Find("Screen/Panel/Row" .. tostring(i))
+			local r = rows[i]
+			if isvalid(row) then
+				row.Enable = (r ~= nil)
+				if r ~= nil then self:FillRow(row, r, me, best, gold) end
+			end
+		end
+		
+		local m = math.floor((data.duration or 0) / 60)
+		local sec = math.floor((data.duration or 0) % 60)
+		self:SetText(self:Find("Screen/Meta"), "", "경기 시간 <b>" .. tostring(m) .. ":" .. string.format("%02d", sec) .. "</b>  ·  노란 숫자 = 그 항목 1위")
+		self._remain = data.seconds or 30
+		self._shown = true
+		self._leaving = false
+		screen.Enable = true
+		self:UpdateButton()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void FillRow(Entity row, table r, string me, table best, string gold)
+		-- 플레이어 한 줄을 채운다(이름 규칙은 tools/build_result_ui.cjs와 같다).
+		local resText = "패배"
+		local resColor = "#E06666"
+		if r.res == "win" then
+			resText = "승리"
+			resColor = gold
+		elseif r.res == "gg" then
+			resText = "항복"
+			resColor = "#9AA3B5"
+		end
+		self:SetText(row, "Res", "<color=" .. resColor .. ">" .. resText .. "</color>")
+		self:SetText(row, "Nick", r.nick or "")
+		local you = row:GetChildByName("You")
+		if isvalid(you) then you.Enable = (r.uid == me) end
+		local meBg = row:GetChildByName("Me")
+		if isvalid(meBg) then meBg.Enable = (r.uid == me) end
+		local camp = row:GetChildByName("Camp")
+		if isvalid(camp) then
+			if camp.SpriteGUIRendererComponent ~= nil then camp.SpriteGUIRendererComponent.Color = self:CampColor(r.camp or "") end
+			self:SetText(camp, "", self:CampName(r.camp or ""))
+		end
+		
+		-- 영웅: 전직 교관 얼굴 + 직업 이름 + 최종 전직.
+		local ins = _JobAdvanceLogic:Instructor(r.heroId or "")
+		local face = row:GetChildByName("Face")
+		if isvalid(face) then self:SetImage(face, "Img", (ins ~= nil) and ins.stand or "") end
+		self:SetText(row, "Job", _JobAdvanceLogic:HeroName(r.heroId or ""))
+		self:SetText(row, "Tier", "<color=#7FE08A><b>" .. tostring(r.tier or 1) .. "차</b></color> 전직")
+		
+		local function num(v, key)
+			local s = tostring(math.floor(v or 0))
+			if key ~= "" and (v or 0) > 0 and v == best[key] then return "<color=" .. gold .. ">" .. s .. "</color>" end
+			return s
+		end
+		local function pair(a, b, key)
+			local left = "<color=#8FE38F>" .. tostring(math.floor(a or 0)) .. "</color>"
+			if (a or 0) > 0 and a == best[key] then left = "<color=" .. gold .. ">" .. tostring(math.floor(a)) .. "</color>" end
+			return left .. "<color=#56627E> / </color><color=#F08080>" .. tostring(math.floor(b or 0)) .. "</color>"
+		end
+		self:SetText(row, "Prod", num(r.prod, "prod"))
+		self:SetText(row, "Kill", pair(r.kill, r.lost, "kill"))
+		self:SetText(row, "Raze", pair(r.raze, r.blost, "raze"))
+		self:SetText(row, "Meso", "<color=#FFC83D>●</color> " .. self:Comma(r.meso or 0))
+		self:SetText(row, "Erda", "<color=#6FD3FF>●</color> " .. self:Comma(r.erda or 0))
+		
+		-- 가장 많이 만든 유닛(없으면 "—").
+		self:SetImage(row, "UnitImg", r.unitRuid or "")
+		if (r.unitCount or 0) > 0 then
+			self:SetText(row, "UnitName", r.unitName or "")
+			self:SetText(row, "UnitCnt", "<color=" .. gold .. ">× " .. tostring(r.unitCount) .. "</color>")
+		else
+			self:SetText(row, "UnitName", "—")
+			self:SetText(row, "UnitCnt", "")
+		end
+		
+		-- 총점 + 막대(1위 대비 비율, 1위는 금색).
+		local isBest = (r.score or 0) > 0 and r.score == best.score
+		self:SetText(row, "Score", isBest and ("<color=" .. gold .. ">" .. self:Comma(r.score) .. "</color>") or self:Comma(r.score or 0))
+		local bar = row:GetChildByName("BarBg")
+		local fill = isvalid(bar) and bar:GetChildByName("Fill") or nil
+		if isvalid(fill) and fill.SpriteGUIRendererComponent ~= nil then
+			fill.SpriteGUIRendererComponent.FillAmount = (best.score > 0) and math.min(1, (r.score or 0) / best.score) or 0
+			fill.SpriteGUIRendererComponent.Color = isBest and Color(1, 0.835, 0.29, 1) or Color(0.62, 0.69, 0.82, 1)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateButton()
+		-- 버튼 글자: "로비로 돌아가기  27".
+		self:SetText(self:Find("Screen/Btn"), "", "로비로 돌아가기  <size=22>" .. tostring(math.max(0, math.ceil(self._remain))) .. "</size>")
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- 남은 시간 표시. 게임 맵을 벗어나면(로비로 이동됨) 화면을 닫는다.
+		if not self._shown then return end
+		local lp = _UserService.LocalPlayer
+		if isvalid(lp) and isvalid(lp.CurrentMap) and lp.CurrentMap.Name ~= self.GameMapName then
+			self:Hide()
+			return
+		end
+		local before = math.ceil(self._remain)
+		self._remain = math.max(0, self._remain - delta)
+		if math.ceil(self._remain) ~= before then self:UpdateButton() end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnLeave()
+		-- "로비로 돌아가기": 서버에 먼저 보내 달라고 요청한다(중복 클릭 방지).
+		if self._leaving then return end
+		self._leaving = true
+		_LobbyController:RequestLeaveResult()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Hide()
+		-- 결과 화면 닫기.
+		self._shown = false
+		local screen = self:Screen()
+		if isvalid(screen) then screen.Enable = false end
+	end
+
+end

@@ -1,0 +1,8 @@
+@Event
+script BuildListShowEvent extends EventType
+
+	property Entity Worker = nil
+
+	property table BuildList = {}
+
+end

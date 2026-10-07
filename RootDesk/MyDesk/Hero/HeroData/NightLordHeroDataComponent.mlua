@@ -1,0 +1,27 @@
+@Component
+script NightLordHeroDataComponent extends Component
+
+	method table BuildKit()
+		    return {
+		        name = "나이트로드",
+		        role = "단일 표적 처형/표창 난사 — 약한 표식으로 시작해 좁은 압축기와 확산 난사로 고가치 표적을 제거한다.",
+		        passive = "암살 표식: 쇼다운 챌린지에 맞은 적은 5초 동안 받는 피해가 20% 증가한다.",
+		        Q = { name = "럭키 세븐", skillClass = "burst_fire", targetIntent = "single", projectileCount = 3, hitCount = 3, burstCount = 3, shotInterval = 0.11, burstDuration = 0.33, tickCount = 0, shape = "front", length = 7.1, width = 0.82, telegraphShape = "front", telegraphLength = 7.1, telegraphWidth = 0.82, hitShape = "front", hitLength = 7.1, hitWidth = 0.82, visualVsHitDelta = 0, damage = 34, cooldown = 1.3, projectile = true, castWindup = 0.12, projectileFireDelay = 0.08, projectileSpeed = 14.6, projectileStartForwardOffset = 0.62, projectileLateralStep = 0, telegraph = false, telegraphTime = 0.12, throwBlastingEnhanced = true, effectScaleMultiplier = 0.86, projectileScaleMultiplier = 0.92, impactScaleMultiplier = 0.92 },
+		        W = { name = "트리플 스로우", skillClass = "burst_fire", targetIntent = "single", projectileCount = 4, hitCount = 4, burstCount = 4, shotInterval = 0.1, burstDuration = 0.4, tickCount = 0, shape = "front", length = 7.2, width = 0.5, telegraphShape = "front", telegraphLength = 7.2, telegraphWidth = 0.5, hitShape = "front", hitLength = 7.2, hitWidth = 0.5, visualVsHitDelta = 0, damage = 62, cooldown = 5.1, projectile = true, castWindup = 0.12, projectileFireDelay = 0.07, projectileSpeed = 14.8, projectileStartForwardOffset = 0.62, projectileLateralStep = 0, telegraph = false, telegraphTime = 0.12, throwBlastingEnhanced = true, effectScaleMultiplier = 0.88, projectileScaleMultiplier = 0.92, impactScaleMultiplier = 0.92 },
+		        E = { name = "쇼다운 챌린지", skillClass = "cone_aoe", targetIntent = "many", projectileCount = 0, hitCount = 1, burstCount = 0, tickCount = 0, shape = "front", length = 6.4, width = 3.0, telegraphShape = "front", telegraphLength = 6.4, telegraphWidth = 3.0, hitShape = "front", hitLength = 6.4, hitWidth = 3.0, visualVsHitDelta = 0, damage = 72, cooldown = 10.2, castWindup = 0.12, maxTargets = 6, emitImpactPerTarget = true, maxImpactFxCount = 6, mark = true, markDuration = 5, markMultiplier = 1.2, maxMarkFxCount = 6, telegraph = false, telegraphTime = 0.12, effectScaleMultiplier = 0.9, impactScaleMultiplier = 0.92 },
+		        R = { name = "쿼드러플 스로우", skillClass = "burst_fire", targetIntent = "single", projectileCount = 5, hitCount = 5, burstCount = 5, shotInterval = 0.09, burstDuration = 0.45, tickCount = 0, shape = "front", length = 7.4, width = 0.52, telegraphShape = "front", telegraphLength = 7.4, telegraphWidth = 0.52, hitShape = "front", hitLength = 7.4, hitWidth = 0.52, visualVsHitDelta = 0, damage = 74, cooldown = 8.4, projectile = true, castWindup = 0.12, projectileFireDelay = 0.06, projectileSpeed = 15.0, projectileStartForwardOffset = 0.62, projectileLateralStep = 0, telegraph = false, telegraphTime = 0.12, throwBlastingEnhanced = true, effectScaleMultiplier = 0.9, projectileScaleMultiplier = 0.92, impactScaleMultiplier = 0.92 },
+		        T = { name = "스로우 블래스팅", skillClass = "self_buff", targetIntent = "self", projectileCount = 0, hitCount = 0, burstCount = 0, tickCount = 0, shape = "self", length = 9, telegraphShape = "self", telegraphRadius = 9, hitShape = "self", hitRadius = 9, visualVsHitDelta = 0, damage = 0, cooldown = 115, castWindup = 0.16, throwBlastingBuff = true, throwBlastingDuration = 15, throwBlastingRangeMultiplier = 2.0, throwBlastingBonusDamageMultiplier = 0.5, throwBlastingExplosionRadius = 0.72, throwBlastingReducedCooldown = 1, telegraph = false, telegraphTime = 0.16, effectScaleMultiplier = 0.95 },
+		    }
+	end
+
+	method table BuildVfx()
+		    return {
+		        Q = { effect = "7318763662cb4c8f93450a19b5191ebb", effect0 = "5ff5e80f964343c78966da45b6e1a80f", ball = "5ff5e80f964343c78966da45b6e1a80f", impact = "7368bd9bbc74484285ef2b832fbd89e9", playCastEffectOnInput = true },
+		        W = { effect = "3cf9b68a0ab04210a1188bcaf941c229", effect0 = "5ff5e80f964343c78966da45b6e1a80f", ball = "5ff5e80f964343c78966da45b6e1a80f", impact = "50f17cdc93e84047a0d33740a9dc0721", playCastEffectOnInput = true },
+		        E = { effect = "f669f51ac74c4fafbc67b61b831f234d", impact = "a5e0cd046ae2448b84e4e772214e04f4", multiImpactEffect = "a5e0cd046ae2448b84e4e772214e04f4", markEffect = "92769570ed544cf6ab869849e92e9e10", markEffectInterval = 0.8, markVerticalOffset = 0.55, markScaleMultiplier = 0.92, playCastEffectOnInput = true },
+		        R = { effect = "db19194fc2804ac887c0d5add5cf28cd", effect0 = "5ff5e80f964343c78966da45b6e1a80f", ball = "5ff5e80f964343c78966da45b6e1a80f", impact = "cd68537df1a94574b10300decbd54ea6", playCastEffectOnInput = true },
+		        T = { effect = "434fc1741d6040409f06c84551d3ffdf", throwBlastEffect = "05d7453010f94cc3a0b854bcd05b2f14", throwBlastFollowupEffect = "45836bbc70344b258ed3afb7ed864bd1", throwBlastExplosionEffect = "d577a8e657734fe99ce518df9ecde358", throwBlastFollowupDelay = 0.08, throwBlastExplosionDelay = 0.16, throwBlastScaleMultiplier = 0.8, playCastEffectOnInput = true },
+		    }
+	end
+
+end

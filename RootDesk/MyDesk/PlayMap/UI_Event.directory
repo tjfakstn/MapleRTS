@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "directory://79d402f6d8ea8bf7b56fd85379c58415",
+  "ContentType": "x-mod/directory",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "entry_id": "directory://79d402f6d8ea8bf7b56fd85379c58415",
+      "name": "UI_Event",
+      "lock": false,
+      "folding": false,
+      "nameEditable": true
+    }
+  }
+}

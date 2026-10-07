@@ -1,0 +1,169 @@
+@Logic
+script MatchStatsLogic extends Logic
+
+	@DisplayName("결과 화면 유지 시간(초) — 지나면 모두 로비로")
+	property number ResultScreenSeconds = 30
+
+	@DisplayName("총점: 생산 유닛 1기당")
+	property number ScoreProduced = 10
+
+	@DisplayName("총점: 처치 1기당")
+	property number ScoreKill = 20
+
+	@DisplayName("총점: 파괴한 건물 1개당")
+	property number ScoreRaze = 150
+
+	@DisplayName("총점: 메소 나누기(메소 ÷ 이 값)")
+	property number ScoreMesoDiv = 10
+
+	@DisplayName("총점: 에르다 1당")
+	property number ScoreErda = 30
+
+	@DisplayName("총점: 전직 단계 1당")
+	property number ScoreTier = 200
+
+	@HideFromInspector
+	property string _attacker = ""
+
+	@ExecSpace("ServerOnly")
+	method void BeginMatch()
+		-- 경기 시작(본진·시작 일꾼 스폰 뒤): 표를 비우고 시작 시각을 기록한다. 시작 일꾼은 "생산"에 넣지 않는다.
+		self._T.stats = {}
+		self._T.startAt = _UtilLogic.ServerElapsedSeconds
+		self._attacker = ""
+	end
+
+	@ExecSpace("ServerOnly")
+	method table Stat(string userId)
+		-- userId의 집계 행(없으면 만든다). 집계 중이 아니면 nil.
+		if self._T.stats == nil or userId == nil or userId == "" then return nil end
+		local s = self._T.stats[userId]
+		if s == nil then
+			s = { prod = 0, kill = 0, lost = 0, raze = 0, blost = 0, meso = 0, erda = 0, tier = 1, units = {}, ruids = {} }
+			self._T.stats[userId] = s
+		end
+		return s
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SetAttacker(string ownerUserId)
+		-- 지금부터 들어가는 피해의 공격자(소유자 UserId). 피해 처리 직후 ClearAttacker로 지운다.
+		self._attacker = ownerUserId or ""
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ClearAttacker()
+		self._attacker = ""
+	end
+
+	@ExecSpace("ServerOnly")
+	method void AddProduced(string userId, string modelId, Entity unit)
+		-- 건물에서 유닛 1기 생산. 가장 많이 만든 유닛 그림용으로 모델별 수와 스프라이트 RUID를 기억한다.
+		local s = self:Stat(userId)
+		if s == nil then return end
+		s.prod = s.prod + 1
+		s.units[modelId] = (s.units[modelId] or 0) + 1
+		if s.ruids[modelId] == nil and isvalid(unit) and unit.SpriteRendererComponent ~= nil then
+			s.ruids[modelId] = unit.SpriteRendererComponent.SpriteRUID
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnUnitDied(string ownerUserId)
+		-- 유닛 사망: 소유자 "잃음" +1, 현재 공격자(다른 플레이어)면 "처치" +1.
+		if self._T.stats == nil then return end
+		local victim = self:Stat(ownerUserId)
+		if victim ~= nil then victim.lost = victim.lost + 1 end
+		if self._attacker ~= "" and self._attacker ~= ownerUserId then
+			local killer = self:Stat(self._attacker)
+			if killer ~= nil then killer.kill = killer.kill + 1 end
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnStructureDestroyed(string ownerUserId)
+		-- 건물 파괴: 소유자 "잃은 건물" +1, 현재 공격자면 "파괴" +1.
+		if self._T.stats == nil then return end
+		local victim = self:Stat(ownerUserId)
+		if victim ~= nil then victim.blost = victim.blost + 1 end
+		if self._attacker ~= "" and self._attacker ~= ownerUserId then
+			local razer = self:Stat(self._attacker)
+			if razer ~= nil then razer.raze = razer.raze + 1 end
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void AddGathered(string userId, number meso, number erda)
+		-- 채집으로 들어온 자원(반납·Erda 획득 시점).
+		local s = self:Stat(userId)
+		if s == nil then return end
+		s.meso = s.meso + math.floor(meso or 0)
+		s.erda = s.erda + math.floor(erda or 0)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SetTier(string userId, integer tier)
+		-- 전직 완료(JobAdvanceLogic) — 항복·접속 종료로 PlayerInfo가 사라져도 최종 전직을 표에 남기기 위해 따로 기록한다.
+		local s = self:Stat(userId)
+		if s == nil then return end
+		s.tier = math.max(s.tier, tier)
+	end
+
+	@ExecSpace("ServerOnly")
+	method table BuildResult(table participants, string winnerUserId)
+		-- participants(LobbyController: uid → { camp, heroId, nick, eliminated, surrendered })로 결과표를 만든다.
+		-- 행 순서: 승자 → 패배 → 항복, 같은 그룹 안에서는 총점 높은 순.
+		local rows = {}
+		for uid, rec in pairs(participants) do
+			local s = self:Stat(uid) or { prod = 0, kill = 0, lost = 0, raze = 0, blost = 0, meso = 0, erda = 0, tier = 1, units = {}, ruids = {} }
+			local res = "lose"
+			if uid == winnerUserId then res = "win" elseif rec.surrendered then res = "gg" end
+			local topModel, topCount = "", 0
+			for m, n in pairs(s.units) do
+				if n > topCount then
+					topModel = m
+					topCount = n
+				end
+			end
+			local topName = ""
+			if topModel ~= "" then
+				local data = _UnitCommandData:GetUnitData(topModel)
+				topName = (data ~= nil) and data.Name or ""
+			end
+			local div = (self.ScoreMesoDiv > 0) and self.ScoreMesoDiv or 10
+			local score = math.floor(s.prod * self.ScoreProduced + s.kill * self.ScoreKill + s.raze * self.ScoreRaze
+				+ s.meso / div + s.erda * self.ScoreErda + s.tier * self.ScoreTier)
+			table.insert(rows, {
+				uid = uid, res = res, nick = rec.nick or uid, camp = rec.camp or "", heroId = rec.heroId or "",
+				tier = s.tier, prod = s.prod, kill = s.kill, lost = s.lost, raze = s.raze, blost = s.blost,
+				meso = s.meso, erda = s.erda, unitName = topName, unitCount = topCount, unitRuid = s.ruids[topModel] or "",
+				score = score,
+			})
+		end
+		local rank = { win = 0, lose = 1, gg = 2 }
+		table.sort(rows, function(a, b)
+			if rank[a.res] ~= rank[b.res] then return rank[a.res] < rank[b.res] end
+			return a.score > b.score
+		end)
+		local duration = 0
+		if self._T.startAt ~= nil then duration = math.floor(_UtilLogic.ServerElapsedSeconds - self._T.startAt) end
+		return { rows = rows, duration = duration, seconds = self.ResultScreenSeconds, winner = winnerUserId }
+	end
+
+	@ExecSpace("Multicast")
+	method void ShowResult(table data)
+		-- 모든 클라: 결과 화면을 연다(ResultUI가 OnBeginPlay에서 self._T.ui로 자신을 등록해 둔다).
+		local ui = self._T.ui
+		if ui == nil then
+			return
+		end
+		ui:Show(data)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RegisterUI(any ui)
+		-- 결과 화면 컨트롤러(ResultUI) 등록.
+		self._T.ui = ui
+	end
+
+end

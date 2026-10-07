@@ -1,0 +1,28 @@
+@Logic
+script DragLogic extends Logic
+
+	method Vector2 ScreenToUI(Vector2 ScreenPoint)
+		return _UILogic:ScreenToUIPosition(ScreenPoint)
+	end
+
+	method Vector2 ScreenToWorld(Vector2 ScreenPoint)
+		return _UILogic:ScreenToWorldPosition(ScreenPoint)
+	end
+
+	method boolean IsInside(number targetPos, number Pos1, number Pos2)
+		--Unit의 위치를 받아들여서 Drag 사각형 안에 있는지 확인--
+		local min = 0
+		local max = 0
+		
+		if Pos1 >= Pos2 then
+			min = Pos2
+			max = Pos1
+		else
+			min = Pos1
+			max = Pos2
+		end
+		
+		return (targetPos >= min) and (targetPos <= max) 
+	end
+
+end

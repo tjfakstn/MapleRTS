@@ -1,0 +1,18 @@
+@Logic
+script HealTargetLogic extends Logic
+
+	property boolean IsTargeting = false
+
+	property Entity Healer = nil
+
+	method void BeginTargeting(Entity healer)
+		self.IsTargeting = true
+		self.Healer = healer
+	end
+
+	method void EndTargeting()
+		self.IsTargeting = false
+		self.Healer = nil
+	end
+
+end

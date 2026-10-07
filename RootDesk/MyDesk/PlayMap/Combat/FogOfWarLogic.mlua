@@ -1,0 +1,316 @@
+@Logic
+script FogOfWarLogic extends Logic
+
+	@DisplayName("게임 맵 이름")
+	property string PlayMapName = "map02"
+
+	@DisplayName("안개 칸 모델")
+	property string CellModelId = "fogcell"
+
+	@DisplayName("칸 크기(월드)")
+	property number CellSize = 0.5
+
+	@DisplayName("시야 갱신 주기(초)")
+	property number TickInterval = 0.15
+
+	@DisplayName("미탐사 지역 불투명도")
+	property number UnexploredAlpha = 1.0
+
+	@DisplayName("탐사한 지역(시야 밖) 불투명도")
+	property number ExploredAlpha = 0.55
+
+	@DisplayName("시야 경계 번짐 폭(월드)")
+	property number EdgeSoftness = 1.0
+
+	@DisplayName("밝기 변화 속도(초당 불투명도)")
+	property number FadeSpeed = 4.0
+
+	@DisplayName("안개 켜기")
+	property boolean FogEnabled = true
+
+	@DisplayName("프레임당 안개 칸 생성 수(시작 렉 방지)")
+	property integer CellsPerFrame = 60
+
+	@DisplayName("안개 점 스프라이트(가장자리가 흐린 원)")
+	property string BlobRuid = "e439962b2aa3489e9497f04ecc9dc947"
+
+	@DisplayName("안개 점 원본 크기(월드, 64px)")
+	property number BlobNativeSize = 0.64
+
+	@DisplayName("안개 점 크기(칸 크기의 배수)")
+	property number BlobSpread = 3.0
+
+	@DisplayName("겹침 보정 계수")
+	property number OverlapGain = 1.8
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- 게임 맵에서만 안개를 유지한다. 맵을 벗어나면(로비/재경기) 칸을 지우고 탐사 기록을 비운다.
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) or not isvalid(lp.PlayerComponent) then return end
+		local map = lp.CurrentMap
+		if not self.FogEnabled or not isvalid(map) or map.Name ~= self.PlayMapName then
+			if self._T.cells ~= nil then self:Teardown() end
+			return
+		end
+		if self._T.cells == nil or self._T.map ~= map then
+			self:Teardown()
+			if not self:Setup(map) then return end
+		end
+		
+		self:SpawnPendingCells()
+		self._T.acc = (self._T.acc or 0) + delta
+		if self._T.acc >= self.TickInterval or self._T.light == nil then
+			self._T.acc = 0
+			self:RebuildLight(map, lp.PlayerComponent.UserId)
+		end
+		self:UpdateCells(delta)
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean Setup(Entity map)
+		-- 화면을 덮을 칸 수(가로·세로 + 여유 2줄)를 정하고 FogCell을 클라 로컬로 스폰한다.
+		local w = _UILogic.ScreenWidth
+		local h = _UILogic.ScreenHeight
+		local viewW = 12.8
+		local viewH = 7.2
+		if w ~= nil and h ~= nil and w > 0 and h > 0 then
+			local bl = _UILogic:ScreenToWorldPosition(Vector2(0, 0))
+			local tr = _UILogic:ScreenToWorldPosition(Vector2(w, h))
+			viewW = math.max(1, math.abs(tr.x - bl.x))
+			viewH = math.max(1, math.abs(tr.y - bl.y))
+		end
+		local c = self.CellSize
+		-- 점이 칸보다 커서 화면 밖 칸의 점도 가장자리에 번져 들어오므로 여유 줄을 넉넉히 둔다.
+		local cols = math.ceil(viewW / c) + 6
+		local rows = math.ceil(viewH / c) + 6
+		-- 칸 520여 개를 맵 바로 아래에 두면 맵 자식을 훑는 로직(VisionLogic/미니맵)이 매번 전부 돌게 되므로
+		-- 그림 없는 컨테이너(FogLayer) 하나 아래에 모은다.
+		local layer = _SpawnService:SpawnByModelId(self.CellModelId, "FogLayer", Vector3(0, 0, 0), map)
+		if layer == nil then
+			return false
+		end
+		layer.SpriteRendererComponent.Enable = false
+		-- 칸은 한 프레임에 다 만들지 않고 SpawnPendingCells가 프레임당 CellsPerFrame개씩 나눠 만든다(경기 시작 렉 방지).
+		self._T.cells = {}
+		self._T.nextCell = 0
+		self._T.layer = layer
+		self._T.cols = cols
+		self._T.rows = rows
+		self._T.map = map
+		self._T.explored = {}
+		self._T.light = nil
+		return true
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SpawnPendingCells()
+		-- 아직 안 만든 칸을 이번 프레임 몫(CellsPerFrame)만큼 만든다. 다 만들면 아무것도 하지 않는다.
+		local total = self._T.cols * self._T.rows
+		local n = self._T.nextCell
+		if n >= total then return end
+		local layer = self._T.layer
+		if not isvalid(layer) then return end
+		-- 네모 칸을 그대로 그리면 모자이크처럼 보여서, 가장자리가 흐린 원(BlobRuid)을 칸의 BlobSpread배 크기로
+		-- 겹쳐 깐다. 이웃 점끼리 번지며 스타2처럼 부드러운 그라데이션이 된다(불투명도 보정은 BlobAlpha).
+		local s = self.CellSize * self.BlobSpread / self.BlobNativeSize
+		local last = math.min(total, n + math.max(1, self.CellsPerFrame)) - 1
+		for k = n, last do
+			local e = _SpawnService:SpawnByModelId(self.CellModelId, "FogCell", Vector3(0, 0, 0), layer)
+			if e == nil then
+				self._T.nextCell = total
+				return
+			end
+			e.TransformComponent.Scale = Vector3(s, s, 1)
+			if self.BlobRuid ~= "" then e.SpriteRendererComponent.SpriteRUID = self.BlobRuid end
+			e.SpriteRendererComponent.Color = Color(0, 0, 0, self:BlobAlpha(self.UnexploredAlpha))
+			table.insert(self._T.cells, { e = e, i = k % self._T.cols, j = k // self._T.cols, ix = nil, iy = nil, a = self.UnexploredAlpha })
+		end
+		self._T.nextCell = last + 1
+		if self._T.nextCell >= total then
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Teardown()
+		-- 칸 엔티티를 지우고 상태를 비운다.
+		if isvalid(self._T.layer) then _EntityService:Destroy(self._T.layer) end
+		self._T.layer = nil
+		self._T.cells = nil
+		self._T.map = nil
+		self._T.light = nil
+		self._T.explored = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RebuildLight(Entity map, string me)
+		-- 내 시야원마다 반경 안 칸에 밝기(0~1, 경계에서 EdgeSoftness만큼 번짐)를 찍고, 시야 안 칸은 탐사 기록에 남긴다.
+		-- 칸 번호는 ix = floor(x / CellSize) 기준, 키는 ix * 100000 + iy(맵이 ±수백 칸 이내라 겹치지 않는다).
+		local sources = _VisionLogic:CollectSources(map, me)
+		local light = {}
+		local explored = self._T.explored
+		local c = self.CellSize
+		local soft = math.max(0.01, self.EdgeSoftness)
+		for k = 1, #sources do
+			local src = sources[k]
+			local r = src.r
+			local x0 = math.floor((src.x - r) / c)
+			local x1 = math.floor((src.x + r) / c)
+			local y0 = math.floor((src.y - r) / c)
+			local y1 = math.floor((src.y + r) / c)
+			for ix = x0, x1 do
+				local dx = (ix + 0.5) * c - src.x
+				for iy = y0, y1 do
+					local dy = (iy + 0.5) * c - src.y
+					local d = math.sqrt(dx * dx + dy * dy)
+					if d < r then
+						local key = ix * 100000 + iy
+						explored[key] = true
+						local v = (r - d) / soft
+						if v > 1 then v = 1 end
+						local prev = light[key]
+						if prev == nil or v > prev then light[key] = v end
+					end
+				end
+			end
+		end
+		self._T.light = light
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateCells(number delta)
+		-- 화면 왼쪽 아래 칸 번호(ox, oy)를 구해 각 칸이 맡을 월드 칸을 정하고(바뀐 칸만 이동), 목표 불투명도로 서서히 맞춘다.
+		local w = _UILogic.ScreenWidth
+		local h = _UILogic.ScreenHeight
+		if w == nil or h == nil or w <= 0 or h <= 0 then return end
+		local bl = _UILogic:ScreenToWorldPosition(Vector2(0, 0))
+		local c = self.CellSize
+		local cols = self._T.cols
+		local rows = self._T.rows
+		local ox = math.floor(bl.x / c) - 3
+		local oy = math.floor(bl.y / c) - 3
+		local light = self._T.light or {}
+		local explored = self._T.explored or {}
+		local step = self.FadeSpeed * delta
+		for _, cell in ipairs(self._T.cells) do
+			local e = cell.e
+			if isvalid(e) then
+				-- 토러스 배치: 슬롯 i는 [ox, ox+cols) 안에서 i와 같은 나머지를 갖는 월드 칸을 맡는다.
+				local ix = ox + ((cell.i - ox) % cols)
+				local iy = oy + ((cell.j - oy) % rows)
+				local key = ix * 100000 + iy
+				local base = explored[key] and self.ExploredAlpha or self.UnexploredAlpha
+				local v = light[key] or 0
+				local target = base * (1 - v)
+				local a = cell.a
+				if ix ~= cell.ix or iy ~= cell.iy then
+					-- 화면 밖으로 나간 줄이 반대편 새 칸을 맡게 됐다 — 이전 칸의 밝기를 끌고 오지 않도록 바로 목표값으로 맞춘다.
+					cell.ix = ix
+					cell.iy = iy
+					e.TransformComponent.WorldPosition = Vector3((ix + 0.5) * c, (iy + 0.5) * c, 0)
+					cell.a = target
+					e.SpriteRendererComponent.Color = Color(0, 0, 0, self:BlobAlpha(target))
+				elseif a ~= target then
+					if math.abs(target - a) <= step then
+						a = target
+					elseif target > a then
+						a = a + step
+					else
+						a = a - step
+					end
+					cell.a = a
+					e.SpriteRendererComponent.Color = Color(0, 0, 0, self:BlobAlpha(a))
+				end
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean IsAreaExplored(Vector2 center, number w, number h)
+		-- 건물 배치용: 박스(중심·가로·세로, 월드)의 가운데와 네 귀퉁이(안쪽 40 %)가 모두 탐사된 곳인지. 안개가 꺼져 있으면 true.
+		if self._T.explored == nil then return true end
+		local hx = w * 0.4
+		local hy = h * 0.4
+		return self:IsExploredAt(center.x, center.y)
+			and self:IsExploredAt(center.x - hx, center.y - hy) and self:IsExploredAt(center.x + hx, center.y - hy)
+			and self:IsExploredAt(center.x - hx, center.y + hy) and self:IsExploredAt(center.x + hx, center.y + hy)
+	end
+
+	@ExecSpace("ClientOnly")
+	method number AreaFogAlpha(number x0, number y0, number x1, number y1)
+		-- 미니맵용: 월드 사각형 안을 3×3 지점으로 훑어 하나라도 시야 안이면 0, 하나라도 탐사됐으면 ExploredAlpha,
+		-- 아니면 UnexploredAlpha. 안개가 없으면 0.
+		local explored = self._T.explored
+		if explored == nil then return 0 end
+		local light = self._T.light or {}
+		local c = self.CellSize
+		local anyExplored = false
+		for a = 0, 2 do
+			local x = x0 + (x1 - x0) * (a + 0.5) / 3
+			for b = 0, 2 do
+				local y = y0 + (y1 - y0) * (b + 0.5) / 3
+				local key = math.floor(x / c) * 100000 + math.floor(y / c)
+				local v = light[key]
+				if v ~= nil and v > 0.5 then return 0 end
+				if explored[key] then anyExplored = true end
+			end
+		end
+		return anyExplored and self.ExploredAlpha or self.UnexploredAlpha
+	end
+
+	method number BlobAlpha(number target)
+		-- 점들이 겹쳐 그려지면 실제 어둡기가 목표보다 진해지므로, 겹친 결과가 target이 되도록 점 하나의 불투명도를 낮춘다.
+		-- (BlobSpread 3배 기준 실측: 겹침 결과 ≈ 1-(1-k)^1.8, 목표 0.55일 때 칸 안 어디서나 0.51~0.59). 거의 검정이면 1.
+		if target >= 0.97 then return 1 end
+		if target <= 0 then return 0 end
+		return 1 - (1 - target) ^ (1 / self.OverlapGain)
+	end
+
+	method boolean IsWorldPointSeen(number x, number y)
+		-- 월드 좌표가 지금 내 시야 안(밝은 칸)인지. 안개가 꺼져 있거나 서버면 항상 true.
+		if not self:IsClient() then return true end
+		local light = self._T.light
+		if light == nil then return true end
+		local c = self.CellSize
+		local v = light[math.floor(x / c) * 100000 + math.floor(y / c)]
+		return v ~= nil and v > 0
+	end
+
+	method integer PlayEffectSeen(string ruid, Entity instigator, Vector3 position, number zRotation, Vector3 scale, boolean isLoop, table options)
+		-- _EffectService:PlayEffect 대신 쓴다: 재생 위치가 내 시야 밖(안개 속)이면 이 클라에서는 재생하지 않는다(0 반환).
+		-- 상대 영웅 스킬·유닛 공격 이펙트가 안개 너머로 보이던 문제(스타처럼 시야 안에서만 보임). 서버에서 불리면 그대로 재생.
+		if not self:IsWorldPointSeen(position.x, position.y) then return 0 end
+		if options ~= nil then
+			return _EffectService:PlayEffect(ruid, instigator, position, zRotation, scale, isLoop == true, options)
+		end
+		return _EffectService:PlayEffect(ruid, instigator, position, zRotation, scale, isLoop == true)
+	end
+
+	method integer PlayEffectAttachedSeen(string ruid, Entity parentEntity, Vector3 localPosition, number localZRotation, Vector3 localScale, boolean isLoop, table options)
+		-- _EffectService:PlayEffectAttached 대신 쓴다: 붙일 대상 위치(+로컬 오프셋)가 시야 밖이면 재생하지 않는다(0 반환).
+		if isvalid(parentEntity) and isvalid(parentEntity.TransformComponent) then
+			local wp = parentEntity.TransformComponent.WorldPosition
+			if not self:IsWorldPointSeen(wp.x + localPosition.x, wp.y + localPosition.y) then return 0 end
+		end
+		if options ~= nil then
+			return _EffectService:PlayEffectAttached(ruid, parentEntity, localPosition, localZRotation, localScale, isLoop == true, options)
+		end
+		return _EffectService:PlayEffectAttached(ruid, parentEntity, localPosition, localZRotation, localScale, isLoop == true)
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean IsActive()
+		-- 지금 게임 맵에서 안개가 그려지고 있는지.
+		return self._T.explored ~= nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean IsExploredAt(number x, number y)
+		-- (미니맵 등에서 쓰기 위한) 월드 좌표가 탐사된 곳인지.
+		local explored = self._T.explored
+		if explored == nil then return true end
+		local c = self.CellSize
+		return explored[math.floor(x / c) * 100000 + math.floor(y / c)] == true
+	end
+
+end

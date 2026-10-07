@@ -1,0 +1,113 @@
+@Component
+script JobAdvanceAction extends ActionBase
+
+	method PlayerInfo OwnerInfo()
+		-- 이 전직관 소유자의 PlayerInfo(없으면 nil).
+		---@type Structure_Info
+		local sinfo = self.Entity:GetComponent("script.Structure_Info")
+		if sinfo == nil then return nil end
+		return _JobAdvanceLogic:PlayerInfoOf(sinfo.PlayerID)
+	end
+
+	method string TierIconRuid(integer tier)
+		-- 전직 단계별 버튼 아이콘: 원작 전직 퀘스트 아이템(2차 검은 구슬 / 3차 지혜의 목걸이 / 4차 영웅의 펜타곤 / 5차 아케인스톤).
+		local icons = {
+			[2] = "12f9f1f63c754667aff43127b7988daf",
+			[3] = "77d84671d8d14bb18837b043567c35a8",
+			[4] = "04909c0f37ee4f58b537091e11b9b914",
+			[5] = "55ca4a1fa8a547118cdb3589e4b5b8eb",
+		}
+		return icons[tier] or ""
+	end
+
+	method table ChangeActionUI()
+		-- 2차~5차 전직 버튼 4칸. 끝난 단계는 "완료"(어둡게), 다음 단계만 누를 수 있고, 그 뒤 단계는 잠금(필요 조건 표시).
+		---@type Structure_Info
+		local sinfo = self.Entity:GetComponent("script.Structure_Info")
+		if sinfo == nil or sinfo.IsUnderConstruction then return {} end
+		local info = self:OwnerInfo()
+		if info == nil then return {} end
+		local list = {}
+		for tier = 2, 5 do
+			local key = _JobAdvanceLogic:KeyForTier(tier)
+			local cost = _JobAdvanceLogic:TierCost(tier)
+			local skill = _JobAdvanceLogic:SkillName(info.SelectedHeroId, key)
+			local job = _JobAdvanceLogic:JobName(info.SelectedHeroId, "", tier)
+			local act = {
+				ActionID = "JobAdvance",
+				UnitModel = "",
+				Ruid = self:TierIconRuid(tier),
+				Building = self.Entity,
+				Arg = tostring(tier),
+				Label = tostring(tier) .. "차 전직",
+				TipTitle = tostring(tier) .. "차 전직 — " .. job,
+				CostMeso = cost.meso,
+				CostErda = cost.erda,
+				CostTime = cost.time,
+				TipInfo = "해금: " .. key .. ((skill ~= "") and (" " .. skill) or " 스킬"),
+				Locked = false,
+				LockReason = "",
+				Done = false,
+			}
+			if tier <= info.JobTier then
+				act.Done = true
+				act.Locked = true
+				act.Label = tostring(tier) .. "차 완료"
+			elseif tier > info.JobTier + 1 then
+				act.Locked = true
+				act.LockReason = tostring(tier - 1) .. "차 전직 완료"
+			else
+				local cond = _JobAdvanceLogic:TierCondition(info.SelectedCamp, tier)
+				if cond ~= "" and not _BuildRequirementLogic:HasAliveStructure(self.Entity.CurrentMap, sinfo.PlayerID, cond) then
+					act.Locked = true
+					act.LockReason = _BuildRequirementLogic:GetRequirementText(cond)
+				end
+			end
+			table.insert(list, act)
+		end
+		return list
+	end
+
+	method boolean IsResearching()
+		-- 소유자가 지금 전직 연구 중인지.
+		local info = self:OwnerInfo()
+		return info ~= nil and info.ResearchTier > 0
+	end
+
+	@ExecSpace("ClientOnly")
+	method string PortraitRuid()
+		-- 초상 칸에 띄울 교관 애니메이션: 평소 stand, 연구 중이면 말하는(busy) 클립. 교관을 모르면 "".
+		local info = self:OwnerInfo()
+		if info == nil then return "" end
+		local ins = _JobAdvanceLogic:Instructor(info.SelectedHeroId)
+		if ins == nil then return "" end
+		if info.ResearchTier > 0 then return ins.busy end
+		return ins.stand
+	end
+
+	@ExecSpace("ClientOnly")
+	method string StatusText()
+		-- 정보 패널 상태 줄: 연구 중이면 "3차 전직 연구 중 · 12.3s 남음", 아니면 "교관 ○○ · 직업 (N차)".
+		local info = self:OwnerInfo()
+		if info == nil then return "" end
+		if info.ResearchTier > 0 then
+			local remain = math.max(0, info.ResearchEndTime - _UtilLogic.ServerElapsedSeconds)
+			return tostring(info.ResearchTier) .. "차 전직 연구 중 · " .. tostring(math.ceil(remain * 10) / 10) .. "s 남음"
+		end
+		local ins = _JobAdvanceLogic:Instructor(info.SelectedHeroId)
+		local who = (ins ~= nil) and ("교관 " .. ins.name .. " · ") or ""
+		local job = _JobAdvanceLogic:JobName(info.SelectedHeroId, "", info.JobTier)
+		if info.JobTier >= 5 then return who .. job .. " · 모든 전직 완료" end
+		return who .. "현재 " .. job
+	end
+
+	@ExecSpace("ClientOnly")
+	method number ResearchProgress()
+		-- 연구 진행률 0~1(연구 중이 아니면 -1). 정보 패널 진행 바에 쓴다.
+		local info = self:OwnerInfo()
+		if info == nil or info.ResearchTier <= 0 or info.ResearchTotal <= 0 then return -1 end
+		local remain = math.max(0, info.ResearchEndTime - _UtilLogic.ServerElapsedSeconds)
+		return 1 - remain / info.ResearchTotal
+	end
+
+end

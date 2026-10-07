@@ -1,0 +1,290 @@
+@Component
+script NightWalkerHeroDataComponent extends Component
+
+	method table BuildKit()
+		    return {
+		    
+		                name = "나이트워커",
+		    
+		                -- 슬롯 재배치: 트리플 스로우 -> Q, 쿼드러플 스로우 -> W, 퀸터플 스로우 -> E
+		                        -- 현재 프로젝트에서는 실제 체감 발수가 1발 덜 보이는 경우가 있어 내부 발수는 1씩 더 잡는다.
+		                        Q = {
+		                 name = "트리플 스로우",
+		                 skillClass = "burst_fire",
+		                 targetIntent = "single",
+		                 projectileCount = 4,
+		                 hitCount = 4,
+		                 burstCount = 4,
+		                 shotInterval = 0.1,
+		                 burstDuration = 0.4,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 7.0,
+		                 width = 0.7,
+		                 telegraphShape = "front",
+		                 telegraphLength = 7.0,
+		                 telegraphWidth = 0.7,
+		                 hitShape = "front",
+		                 hitLength = 7.0,
+		                 hitWidth = 0.7,
+		                 visualVsHitDelta = 0,
+		                 damage = 60,
+		                 cooldown = 4.8,
+		                 projectile = true,
+		                 castWindup = 0.12,
+		                 projectileFireDelay = 0.07,
+		                 projectileSpeed = 14.4,
+		                 projectileStartForwardOffset = 0.62,
+		                 projectileLateralStep = 0,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectScaleMultiplier = 0.88,
+		                 projectileScaleMultiplier = 0.92,
+		                 impactScaleMultiplier = 0.92,
+		                 finalShotDamageMultiplier = 1.45,
+		                 finalShotIndex = 4
+		            },
+		    
+		                W = {
+		                 name = "쿼드러플 스로우",
+		                 skillClass = "burst_fire",
+		                 targetIntent = "single",
+		                 projectileCount = 5,
+		                 hitCount = 5,
+		                 burstCount = 5,
+		                 shotInterval = 0.09,
+		                 burstDuration = 0.45,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 7.2,
+		                 width = 0.72,
+		                 telegraphShape = "front",
+		                 telegraphLength = 7.2,
+		                 telegraphWidth = 0.72,
+		                 hitShape = "front",
+		                 hitLength = 7.2,
+		                 hitWidth = 0.72,
+		                 visualVsHitDelta = 0,
+		                 damage = 68,
+		                 cooldown = 7.2,
+		                 projectile = true,
+		                 castWindup = 0.18,
+		                 projectileFireDelay = 0.04,
+		                 projectileSpeed = 14.6,
+		                 projectileStartForwardOffset = 0.62,
+		                 projectileLateralStep = 0.08,
+		                 finalShotDamageMultiplier = 1.5,
+		                 finalShotIndex = 5,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectScaleMultiplier = 0.9,
+		                 projectileScaleMultiplier = 0.94,
+		                 impactScaleMultiplier = 0.94
+		            },
+		    
+		                E = {
+		                 name = "퀸터플 스로우",
+		                 skillClass = "burst_fire",
+		                 targetIntent = "single",
+		                 projectileCount = 6,
+		                 hitCount = 6,
+		                 burstCount = 6,
+		                 shotInterval = 0.085,
+		                 burstDuration = 0.51,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 7.4,
+		                 width = 0.74,
+		                 telegraphShape = "front",
+		                 telegraphLength = 7.4,
+		                 telegraphWidth = 0.74,
+		                 hitShape = "front",
+		                 hitLength = 7.4,
+		                 hitWidth = 0.74,
+		                 visualVsHitDelta = 0,
+		                 damage = 60,
+		                 cooldown = 8.5,
+		                 projectile = true,
+		                 castWindup = 0.2,
+		                 projectileFireDelay = 0.04,
+		                 projectileSpeed = 14.8,
+		                 projectileStartForwardOffset = 0.62,
+		                 projectileLateralStep = 0.08,
+		                 finalShotDamageMultiplier = 1.55,
+		                 finalShotIndex = 6,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectScaleMultiplier = 0.92,
+		                 projectileScaleMultiplier = 0.96,
+		                 impactScaleMultiplier = 0.96
+		            },
+		    
+		                R = {
+		                 name = "도미니언",
+		                 skillClass = "buff_self",
+		                 targetIntent = "self",
+		                 projectileCount = 0,
+		                 hitCount = 0,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "self",
+		                 length = 0,
+		                 width = 0,
+		                 damage = 0,
+		                 cooldown = 90,
+		                 castWindup = 0.18,
+		                 dominionBuff = true,
+		                 dominionDuration = 15,
+		                 dominionRangeMultiplier = 1.5,
+		                 dominionDamageMultiplier = 1.5,
+		                 dominionReducedCooldown = 1,
+		                 dominionExtraHitMultiplier = 0.5,
+		                 dominionExtraHitRadius = 0.72,
+		                 telegraph = false,
+		                 telegraphTime = 0.12
+		            },
+		    
+		                T = {
+		                 name = "쉐도우 바이트",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "many",
+		                 projectileCount = 0,
+		                 hitCount = 5,
+		                 burstCount = 0,
+		                 tickCount = 5,
+		                 tickInterval = 0.14,
+		                 shape = "self",
+		                 length = 9.6,
+		                 width = 9.6,
+		                 hitShape = "self",
+		                 hitRadius = 9.6,
+		                 telegraphShape = "self",
+		                 telegraphRadius = 9.6,
+		                 visualVsHitDelta = 0,
+		                 damage = 240,
+		                 cooldown = 115,
+		                 castWindup = 0.18,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 12,
+		                 maxImpactFxCount = 12,
+		                 mark = true,
+		                 markOnlyOnFirstHit = true,
+		                 markDuration = 5,
+		                 markMultiplier = 2.0,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectScaleMultiplier = 1.0,
+		                 impactScaleMultiplier = 0.98,
+		                 markScaleMultiplier = 0.9
+		            },
+		    
+		    
+		        }
+	end
+
+	method table BuildVfx()
+		    return {
+		    
+		                Q = {
+		                 effect = "afcbe9f1f576402295f55a143e5707ed",
+		                 effect0 = "610e972a2ad84dd8ae7fc0fc657b0f88",
+		                 ball = "610e972a2ad84dd8ae7fc0fc657b0f88",
+		                 finalProjectileRuid = "63af9dc845db4da2960172417b3eee5d",
+		                 impact = "4c42f0632fa249c29b8394c10d7634fe",
+		                 finalImpactEffect = "fbd2a362ae144963aa8a68f4f1bedb30",
+		                 finalShotIndex = 4,
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                W = {
+		                 effect = "08aa13242afa4f29925f13be72ef6fa7",
+		                 castSecondaryEffect = "8ec8ef64bcaa4a6fa820cd39a0827aa0",
+		                 castSecondaryDelay = 0.09,
+		                 effect0 = "610e972a2ad84dd8ae7fc0fc657b0f88",
+		                 ball = "610e972a2ad84dd8ae7fc0fc657b0f88",
+		                 finalProjectileRuid = "93fcd9d660184ecab77ddc7f213be31e",
+		                 impact = "e9d08712afa2479f8d9b2fc60712c8e2",
+		                 finalImpactEffect = "8fc08b2af4944a90be3f1822479c0fd9",
+		                 finalShotIndex = 5,
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                E = {
+		                 effect = "8f747df49c1a4ddc8c629e0bd8b8c5c0",
+		                 castSecondaryEffect = "ad4a1049a9244476a9400b37ad74c9da",
+		                 castSecondaryDelay = 0.09,
+		                 effect0 = "610e972a2ad84dd8ae7fc0fc657b0f88",
+		                 ball = "610e972a2ad84dd8ae7fc0fc657b0f88",
+		                 finalProjectileRuid = "9947a63e2d5b415ba47e9bb310e06a12",
+		                 impact = "9f9c45b3db4a46b999c5a819cccfedbd",
+		                 finalImpactEffect = "2a8b49e8f8914588bc8b5ad2be5b71e0",
+		                 finalShotIndex = 6,
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                R = {
+		                 effect = "9e304d1bac3841d3b319c30d17d9f394",
+		                 tickEffect = "5bebf2ee459f4266b682280e2d1b1933",
+		                 tickEffectDelay = 0.2,
+		                 visualTickCount = 5,
+		                 visualTickInterval = 3.0,
+		                 multiImpactEffect = "59848f0fad09429da0d3df5495fa0b63",
+		                 impactScaleMultiplier = 0.98,
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                T = {
+		                 effect = "ef43e8877d094b8f89d6f297755f9db8",
+		                 impact = "9bd5d699616942098fcf7db344763fdf",
+		                 multiImpactEffect = "9bd5d699616942098fcf7db344763fdf",
+		                 markEffect = "73c968d32eb24f8faa2b7b77b8b8a8c5",
+		                 markVerticalOffset = 0.78,
+		                 markEffectInterval = 0.9,
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                BAT = {
+		                 idleEffect = "f4a18d7b410542d4bd92f561f3371b67",
+		                 effect0 = "24a3595cb4da4ad8993ad50d735a9066",
+		                 ball = "24a3595cb4da4ad8993ad50d735a9066",
+		                 impact = "7dbb76261fc546d8870945c3db10d42c",
+		                 idleInterval = 0.18,
+		                 idleScaleMultiplier = 1.0,
+		                 projectileSpeed = 16.5,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		    
+		        }
+	end
+
+	method integer ResolveBatBounceCount(integer unlockTier)
+		    -- "1번 튕김"은 첫 대상 적중 후 추가로 1명에게 더 튄다는 뜻이다.
+		    if unlockTier <= 0 then return 0 end
+		    if unlockTier == 1 then return 1 end
+		    if unlockTier == 2 then return 2 end
+		    if unlockTier == 3 then return 3 end
+		    return 4
+	end
+
+	method table BuildBatConfig(integer unlockTier)
+		    -- 쉐도우 배트 수치의 단일 출처. 해금 단계(unlockTier)는 HeroSkillComponent의 nightWalkerBatUnlockTier가 넘겨준다.
+		    -- W 해금부터 박쥐가 1마리씩 늘고, 튕김 횟수도 W=1 / E=2 / R=3 / T=4에 맞춘다.
+		    return {
+		        totalBats = unlockTier,
+		        procChance = 0.3,
+		        maxBounces = self:ResolveBatBounceCount(unlockTier),
+		        bounceRadius = 2.8,
+		        projectileSpeed = 16.5,
+		        damageMultiplier = 0.55,
+		        hitRadius = 0.48,
+		        idleOffsets = {
+		            Vector2(-0.28, 0.18),
+		            Vector2(0.28, 0.14),
+		            Vector2(-0.22, -0.08),
+		            Vector2(0.22, -0.12),
+		        },
+		    }
+	end
+
+end

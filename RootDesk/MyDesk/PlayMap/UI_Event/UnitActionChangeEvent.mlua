@@ -1,0 +1,6 @@
+@Event
+script UnitActionChangeEvent extends EventType
+
+	property table ActionList = {}
+
+end

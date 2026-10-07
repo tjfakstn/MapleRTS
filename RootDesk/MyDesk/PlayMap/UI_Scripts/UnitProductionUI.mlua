@@ -1,0 +1,158 @@
+@Component
+script UnitProductionUI extends Component
+
+	property integer SlotIndex = 1
+
+	property Entity selectedTarget = nil
+
+	@HideFromInspector
+	property string _lastRuid = ""
+
+	@HideFromInspector
+	property number _lastTotal = 0
+
+	@HideFromInspector
+	property number _remaining = 0
+
+	@HideFromInspector
+	property any _icon = nil
+
+	@HideFromInspector
+	property any _timeText = nil
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		self:CacheRefs()
+		self:SetActive(false)
+	end
+
+	method void CacheRefs()
+		-- icon/timeText를 UUID 바인딩 대신 이름으로 찾는다 — 이 컴포넌트는 슬롯 4개(1~4)로
+		-- 복제된 동일 엔티티 각각에 붙어 있어, 인스턴스별 프로퍼티 오버라이드(UUID)가 아니라
+		-- "자기 자신의 Icon/TimeText 자식"을 찾는 방식이어야 각 슬롯이 자기 자식을 정확히 가리킨다.
+		if self._icon == nil then
+			local iconEntity = self.Entity:GetChildByName("Icon")
+			if isvalid(iconEntity) then self._icon = iconEntity.SpriteGUIRendererComponent end
+		end
+		if self._timeText == nil then
+			local timeEntity = self.Entity:GetChildByName("TimeText")
+			if isvalid(timeEntity) then self._timeText = timeEntity.TextGUIRendererComponent end
+		end
+	end
+
+	method void SetActive(boolean active)
+		-- 배경(자기 자신)과 아이콘/시간 텍스트를 함께 Visible로 켜고 끈다. Enable은 건드리지 않는다.
+		self.Entity.Visible = active
+		if isvalid(self._icon) then self._icon.Entity.Visible = active end
+		if isvalid(self._timeText) then self._timeText.Entity.Visible = active end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		self:CacheRefs()
+		if self._icon == nil or self._timeText == nil then return end
+		
+		if not isvalid(self.selectedTarget) then
+			self:SetActive(false)
+			return
+		end
+		
+		---@type StructureProductionQueue
+		local queue = self.selectedTarget:GetComponent("script.StructureProductionQueue")
+		if queue == nil then
+			-- 생산 대기열이 없는 건물: 업그레이드/전직 연구 중이면 1번 칸에 연구 아이콘 + 진행률 + 남은 시간(2026-10-07).
+			if self.SlotIndex == 1 and self:ShowResearch() then return end
+			self:SetActive(false)
+			self._lastRuid = ""
+			return
+		end
+		
+		local ruid = queue:GetSlotRuid(self.SlotIndex)
+		local total = queue:GetSlotTotal(self.SlotIndex)
+		
+		if ruid == "" or total <= 0 then
+			self:SetActive(false)
+			self._lastRuid = ""
+			return
+		end
+		
+		-- 이 칸의 유닛이 바뀜(새 생산·대기열이 한 칸씩 당겨짐) → 그림을 다시 넣는다.
+		if ruid ~= self._lastRuid or total ~= self._lastTotal then
+			self._lastRuid = ruid
+			self._lastTotal = total
+			self._remaining = total
+			-- 보이게 켠 뒤 그림을 넣고, 잠깐 뒤 한 번 더 넣는다(켜는 프레임에 바꾼 그림이 반영되지 않고 이전 생산 유닛 그림이
+			-- 남던 문제 — 2026-10-06 테스트: 주황버섯 생산 칸에 스포아 그림).
+			self:SetActive(true)
+			self._icon.ImageRUID = DataRef(ruid)
+			local want = ruid
+			_TimerService:SetTimerOnce(function()
+				if self._lastRuid == want and self._icon ~= nil then self._icon.ImageRUID = DataRef(want) end
+			end, 0.05)
+		end
+		
+		-- 스타식 대기열(2026-10-07): 1번(큰 칸)만 지금 만드는 중 — 서버가 동기화한 끝나는 시각으로 남은 시간을 보여 준다.
+		-- 2~5번(작은 칸)은 대기 중이라 시간을 표시하지 않는다.
+		if self.SlotIndex == 1 then
+			self._remaining = queue:HeadRemaining()
+			self._timeText.Text = tostring(math.ceil(self._remaining * 10) / 10) .. "s"
+		else
+			self._timeText.Text = ""
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean ShowResearch()
+		-- 선택한 내 건물이 연구 중이면 이 칸에 연구 아이콘·"NN%(줄바꿈)12.3s"를 띄우고 true. 아니면 false(호출부가 칸을 끈다).
+		local target = self.selectedTarget
+		---@type Structure_Info
+		local sinfo = target:GetComponent("script.Structure_Info")
+		local lp = _UserService.LocalPlayer
+		if sinfo == nil or sinfo.IsUnderConstruction or not isvalid(lp) or not isvalid(lp.PlayerComponent)
+			or lp.PlayerComponent.UserId ~= sinfo.PlayerID then
+			return false
+		end
+		local ruid = ""
+		local remain = 0
+		local progress = -1
+		---@type StructureBuffAura
+		local upgrade = target:GetComponent("script.StructureBuffAura")
+		if upgrade ~= nil and upgrade.ResearchKind ~= "" then
+			local owner = upgrade:OwnerInfo()
+			if owner ~= nil then ruid = _UpgradeLogic:UpgradeIcon(owner.SelectedCamp, upgrade.TargetLine, upgrade.ResearchKind) end
+			remain = upgrade:ResearchRemain()
+			progress = upgrade:ResearchProgress()
+		end
+		---@type JobAdvanceAction
+		local job = target:GetComponent("script.JobAdvanceAction")
+		if ruid == "" and job ~= nil and job:IsResearching() then
+			local owner = job:OwnerInfo()
+			if owner ~= nil then
+				ruid = job:TierIconRuid(owner.ResearchTier)
+				remain = math.max(0, owner.ResearchEndTime - _UtilLogic.ServerElapsedSeconds)
+			end
+			progress = job:ResearchProgress()
+		end
+		if ruid == "" or progress < 0 then return false end
+		if ruid ~= self._lastRuid then
+			self._lastRuid = ruid
+			self._lastTotal = 0
+			self:SetActive(true)
+			self._icon.ImageRUID = DataRef(ruid)
+			local want = ruid
+			_TimerService:SetTimerOnce(function()
+				if self._lastRuid == want and self._icon ~= nil then self._icon.ImageRUID = DataRef(want) end
+			end, 0.05)
+		end
+		self._timeText.Text = tostring(math.floor(progress * 100)) .. "%\n" .. tostring(math.ceil(remain * 10) / 10) .. "s"
+		return true
+	end
+
+	@EventSender("LocalPlayer")
+	handler HandleUnitUIChangeEvent(UnitUIChangeEvent event)
+		self.selectedTarget = event.SelectedUnitEntity
+		self._lastRuid = ""
+		self:SetActive(false)
+	end
+
+end

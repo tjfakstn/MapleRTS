@@ -1,0 +1,102 @@
+@Component
+script Keyboard_Command extends Component
+
+	property DragComponent Drag = "9e94ae08-23e0-4218-8142-635a72a8112c"
+
+	property string PlayMapName = "map02"
+
+	method void Attack()
+		-- (호환용) 선택 유닛 공격 명령. 실제 처리는 CommandCardLogic.
+		_CommandCardLogic:AttackSelected()
+	end
+
+	method void Stop()
+		-- (호환용) 선택 유닛 정지. 실제 처리는 CommandCardLogic.
+		_CommandCardLogic:StopSelected()
+	end
+
+	method void CastHeroSkill(string skillKey)
+		-- (호환용) 커서 위치를 조준점으로 영웅 스킬 시전. 실제 처리는 CommandCardLogic.
+		_CommandCardLogic:CastHeroSkill(skillKey, _UILogic:ScreenToWorldPosition(_InputService:GetCursorPosition()))
+	end
+
+	method boolean IsActiveMap()
+		-- 로컬 플레이어가 게임 맵(PlayMapName)에 있을 때만 입력을 받는다(로비에서 단축키 무시).
+		local lp = _UserService.LocalPlayer
+		return isvalid(lp) and isvalid(lp.CurrentMap) and lp.CurrentMap.Name == _LobbyController.GameMapName
+	end
+
+	@ExecSpace("ClientOnly")
+	method void CancelWaiting()
+		-- 다른 단축키를 누르면 대기 중이던 입력(위치 지정·힐/채집 대상 지정·건설 배치)을 먼저 취소하고 새 명령을 받는다.
+		local cancelled = _CommandCardLogic.PendingCommand ~= "" or _HealTargetLogic.IsTargeting or _GatherTargetLogic.IsTargeting
+		_SelectionLogic:CancelTargeting()
+		-- 건설은 위치를 고르는 중일 때만 취소한다(위치를 확정해 일꾼이 이동 중인 건설은 건드리지 않는다).
+		if _BuildModeLogic.IsPlacing and isvalid(_BuildModeLogic.ActiveGhost) then
+			---@type BuildGhostComponent
+			local ghost = _BuildModeLogic.ActiveGhost:GetComponent("script.BuildGhostComponent")
+			if ghost ~= nil and not ghost._confirmed then
+				ghost:Cancel()
+				cancelled = true
+			end
+		end
+		if cancelled then  end
+	end
+
+	@ExecSpace("ClientOnly")
+	@EventSender("Service", "InputService")
+	handler HandleKeyDownEvent(KeyDownEvent event)
+		-- Parameters
+		-- local inputValue = event.inputValue
+		-- local key = event.key
+		--------------------------------------------------------
+		if not self:IsActiveMap() then return end
+		local key = event.key
+		
+		if key == KeyboardKey.Escape then
+			_CommandCardLogic:Escape()
+			return
+		end
+		
+		if key == KeyboardKey.Tab then
+			self:CancelWaiting()
+			_SelectionLogic:CycleFocus()
+			return
+		end
+		
+		-- 숫자키 1~9 → 컨트롤 그룹 번호
+		local groups = {
+			[KeyboardKey.Alpha1] = 1, [KeyboardKey.Alpha2] = 2, [KeyboardKey.Alpha3] = 3,
+			[KeyboardKey.Alpha4] = 4, [KeyboardKey.Alpha5] = 5, [KeyboardKey.Alpha6] = 6,
+			[KeyboardKey.Alpha7] = 7, [KeyboardKey.Alpha8] = 8, [KeyboardKey.Alpha9] = 9,
+		}
+		local group = groups[key] or 0
+		if group > 0 then
+			self:CancelWaiting()
+			local ctrl = _InputService:IsKeyPressed(KeyboardKey.LeftControl) or _InputService:IsKeyPressed(KeyboardKey.RightControl)
+			if ctrl then
+				_SelectionLogic:AssignGroup(group)
+			else
+				_SelectionLogic:RecallGroup(group)
+			end
+			return
+		end
+		
+		-- 글자키(A~Z) → 커맨드카드 단축키 글자
+		local letters = {
+			[KeyboardKey.A] = "A", [KeyboardKey.B] = "B", [KeyboardKey.C] = "C", [KeyboardKey.D] = "D",
+			[KeyboardKey.E] = "E", [KeyboardKey.F] = "F", [KeyboardKey.G] = "G", [KeyboardKey.H] = "H",
+			[KeyboardKey.I] = "I", [KeyboardKey.J] = "J", [KeyboardKey.K] = "K", [KeyboardKey.L] = "L",
+			[KeyboardKey.M] = "M", [KeyboardKey.N] = "N", [KeyboardKey.O] = "O", [KeyboardKey.P] = "P",
+			[KeyboardKey.Q] = "Q", [KeyboardKey.R] = "R", [KeyboardKey.S] = "S", [KeyboardKey.T] = "T",
+			[KeyboardKey.U] = "U", [KeyboardKey.V] = "V", [KeyboardKey.W] = "W", [KeyboardKey.X] = "X",
+			[KeyboardKey.Y] = "Y", [KeyboardKey.Z] = "Z",
+		}
+		local letter = letters[key] or ""
+		if letter ~= "" then
+			self:CancelWaiting()
+			_CommandCardLogic:HandleHotkey(letter)
+		end
+	end
+
+end

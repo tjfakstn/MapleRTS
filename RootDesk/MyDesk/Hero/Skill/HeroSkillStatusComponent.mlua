@@ -1,0 +1,129 @@
+@Component
+script HeroSkillStatusComponent extends Component
+
+	@Sync
+	property number stunnedUntil = 0
+
+	@ExecSpace("ServerOnly")
+	method void OnBeginPlay()
+		    -- 이 엔티티가 시전자로서 남에게 건 기절들의 진행 상태.
+		    self._T.stuns = {}
+	end
+
+	@ExecSpace("ServerOnly")
+	method void StunTarget(Entity target, number duration, string effectRuid)
+		    if _CombatTeamLogic:IsDead(target) or duration <= 0 then return end
+		    local unit = target:GetComponent("script.UnitHitComponent")
+		    if unit ~= nil and (unit.isDead or unit.hp <= 0) then return end
+		    if target.PlayerComponent ~= nil and target.PlayerComponent:IsDead() then return end
+		    local body = target.KinematicbodyComponent
+		    local receiver = _CombatTeamLogic:GetReceiver(target)
+		    if body == nil or receiver == nil then return end
+		    if body ~= nil and receiver ~= nil then
+		        local rec = receiver._T.stunState
+		        if rec == nil then
+		            rec = { entity = target, speed = body.SpeedFactor, sources = {} }
+		            receiver._T.stunState = rec
+		        end
+		        rec.sources[self.Entity.Id] = math.max(rec.sources[self.Entity.Id] or 0, _UtilLogic.ElapsedSeconds + duration)
+		        self._T.stuns = self._T.stuns or {}
+		        self._T.stuns[target.Id] = rec
+		        body.SpeedFactor = Vector2.zero
+		        if target.MovementComponent ~= nil then target.MovementComponent:Stop() end
+		    end
+		    local status = target:GetComponent("script.HeroSkillStatusComponent")
+		    if status ~= nil then status.stunnedUntil = math.max(status.stunnedUntil, _UtilLogic.ElapsedSeconds + duration) end
+		    self:PlayStun(target, duration, effectRuid)
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean RestoreStun(table rec, boolean cancelling)
+		    -- 여러 시전자의 겹친 기절은 마지막 기절 종료 시 원래 속도를 한 번만 복원한다.
+		    if cancelling then rec.sources[self.Entity.Id] = nil end
+		    local latest = 0
+		    for _, deadline in pairs(rec.sources) do latest = math.max(latest, deadline) end
+		    if latest > _UtilLogic.ElapsedSeconds then return false end
+		    if isvalid(rec.entity) then
+		        local body = rec.entity.KinematicbodyComponent
+		        if body ~= nil and body.SpeedFactor == Vector2.zero then body.SpeedFactor = rec.speed end
+		        local receiver = _CombatTeamLogic:GetReceiver(rec.entity)
+		        if receiver ~= nil and receiver._T.stunState == rec then receiver._T.stunState = nil end
+		        local status = rec.entity:GetComponent("script.HeroSkillStatusComponent")
+		        if status ~= nil then status.stunnedUntil = math.min(status.stunnedUntil, _UtilLogic.ElapsedSeconds) end
+		    end
+		    return true
+	end
+
+	@ExecSpace("Client")
+	method void PlayStun(Entity target, number duration, string effectRuid)
+		    -- 1초 반복 표시는 실제 피격 대상의 머리 위를 따라다닌다.
+		    if not isvalid(target) then return end
+		    local serial = _FogOfWarLogic:PlayEffectAttachedSeen(effectRuid, target,
+		        Vector3(0, 0.9, 0), 0, Vector3.one, true, nil)
+		    self._T.effects = self._T.effects or {}
+		    table.insert(self._T.effects, { serial = serial, remaining = duration, target = target })
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Cleanup()
+		    -- 이 엔티티가 시전자로서 걸어 둔 기절들을 정리한다(사망/맵 이동/종료 공통 경로).
+		    for _, rec in pairs(self._T.stuns or {}) do self:RestoreStun(rec, true) end
+		    self._T.stuns = {}
+	end
+
+	@ExecSpace("Client")
+	method void ClearPresentation()
+		    for _, e in ipairs(self._T.effects or {}) do _EffectService:RemoveEffect(e.serial) end
+		    self._T.effects = {}
+	end
+
+	method void OnUpdate(number delta)
+		if _CombatTeamLogic:IsDead(self.Entity) then
+			if self:IsServer() then self:Cleanup() else self:ClearPresentation() end
+			return
+		end
+		    if self:IsClient() then
+		        for i = #(self._T.effects or {}), 1, -1 do
+		            local e = self._T.effects[i]
+		            e.remaining = e.remaining - delta
+		            if e.target ~= nil then
+		                if _CombatTeamLogic:IsDead(e.target) or e.target.CurrentMap ~= self.Entity.CurrentMap then
+		                    e.remaining = 0
+		                else
+		                    local unit = e.target:GetComponent("script.UnitHitComponent")
+		                    if unit ~= nil and unit.isDead then e.remaining = 0 end
+		                    if e.target.PlayerComponent ~= nil and e.target.PlayerComponent:IsDead() then e.remaining = 0 end
+		                end
+		            end
+		            if e.remaining <= 0 then _EffectService:RemoveEffect(e.serial) table.remove(self._T.effects, i) end
+		        end
+		        return
+		    end
+		    for id, rec in pairs(self._T.stuns or {}) do
+		        if self:RestoreStun(rec, false) then self._T.stuns[id] = nil end
+		    end
+	end
+
+	method void OnMapLeave(Entity map)
+		    -- 이전 맵에서 건 기절은 재진입 후 되살아나지 않는다.
+		    if self:IsServer() then self:Cleanup() else self:ClearPresentation() end
+	end
+
+	method void OnEndPlay()
+		    if self:IsServer() then self:Cleanup() else self:ClearPresentation() end
+	end
+
+	@ExecSpace("ServerOnly")
+	@EventSender("Self")
+	handler HandleDeath(DeadEvent event)
+		    -- 리스폰 이전에도 이 엔티티가 시전자로서 건 기절들을 즉시 해제한다(기존 WildHunterSkillComponent와 동일 정책).
+		    self:Cleanup()
+	end
+
+	@ExecSpace("ServerOnly")
+	@EventSender("Self")
+	handler HandleRevive(ReviveEvent event)
+		    self:Cleanup()
+	end
+
+end

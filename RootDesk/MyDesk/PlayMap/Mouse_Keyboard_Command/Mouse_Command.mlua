@@ -1,0 +1,585 @@
+@Component
+script Mouse_Command extends Component
+
+	property Entity target = nil
+
+	property boolean IsRightMousePressed = false
+
+	property Vector2 targetPos = Vector2(0,0)
+
+	property DragComponent Drag = "9e94ae08-23e0-4218-8142-635a72a8112c"
+
+	property number SelectionMargin = 0.3
+
+	property string CancelButtonRuid = "9c2c02f5c76e4d739c6e8a0c69d15364"
+
+	@DisplayName("입체 이동 표시 면 모델")
+	property string ClickMarkerModelId = "67135926-0416-43a7-8f6a-81b2e650b28c"
+
+	@DisplayName("클릭 표시 반경(월드)")
+	property number ClickMarkerRadius = 0.32
+
+	@HideFromInspector
+	property boolean QuietPick = false
+
+	@ExecSpace("ClientOnly")
+	method void ClearClickMarker()
+		-- 면 엔티티는 재사용하되, 이전 클릭의 도형은 즉시 비운다.
+		self._T.clickMarkerVersion = (self._T.clickMarkerVersion or 0) + 1
+		self._T.clickMarker = nil
+		for _, part in ipairs(self._T.clickMarkerParts or {}) do
+			if isvalid(part) then part.PolygonRendererComponent.Points:Clear() end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		self:ClearClickMarker()
+		for _, part in ipairs(self._T.clickMarkerParts or {}) do
+			if isvalid(part) then part:Destroy() end
+		end
+		self._T.clickMarkerParts = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		local marker = self._T.clickMarker
+		if marker == nil then return end
+		local lp = _UserService.LocalPlayer
+		marker.age = marker.age + delta
+		if marker.age >= 1 or not isvalid(lp) or lp.CurrentMap ~= self.Entity.CurrentMap then
+			self:ClearClickMarker()
+			return
+		end
+		self:DrawClickMarker()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void DrawClickMarker()
+		local marker = self._T.clickMarker
+		if marker == nil then return end
+		-- 2D 월드에서 지면 투영·두께·면별 명암으로 입체적인 탑다운 표시를 그린다.
+		local t = marker.age
+		local p = math.max(0, math.min(1, (t - 0.06) / 0.62))
+		local ease = p * p * (3 - 2 * p)
+		local tip = 0.90 - 0.84 * ease
+		local absorb = math.max(0, math.min(1, (t - 0.38) / 0.30))
+		local arrowSize = 1 - 0.84 * absorb
+		local alpha = 1 - absorb * absorb
+		local radius = math.max(0.05, self.ClickMarkerRadius)
+		local lift = 0.20 * (1 - ease)
+		for shape = 1, 4 do
+			local angle = (shape - 1) * math.pi / 2
+			local dx, dy = math.cos(angle), math.sin(angle)
+			-- 원에 진입하면서 화살촉의 두께와 길이도 함께 줄여 흡수되는 느낌을 준다.
+			local points = {
+				Vector2(tip, 0), Vector2(tip + 0.44 * arrowSize, 0.29 * arrowSize), Vector2(tip + 0.44 * arrowSize, 0.11 * arrowSize),
+				Vector2(tip + 0.23 * arrowSize, 0), Vector2(tip + 0.44 * arrowSize, -0.11 * arrowSize), Vector2(tip + 0.44 * arrowSize, -0.29 * arrowSize)
+			}
+			local height = lift
+			-- 한쪽은 밝은 윗면, 다른 쪽은 중간톤. 화면 좌상단에서 빛이 오는 방향으로 명암을 고정한다.
+			local light = (dx + dy) > 0
+			local bright = Color(0.83, 1, 0.40, alpha)
+			local mid = Color(0.34, 0.70, 0.12, alpha)
+			local colors = { Color(0.02, 0.04, 0.01, alpha * 0.25), Color(0.10, 0.27, 0.04, alpha), light and bright or mid, light and mid or bright }
+			for pass = 1, 4 do
+				local part = self._T.clickMarkerParts[(shape - 1) * 4 + pass]
+				if not isvalid(part) then self:ClearClickMarker() return end
+				local poly = part.PolygonRendererComponent
+				poly.Points:Clear()
+				poly.Color = colors[pass]
+				local face = points
+				if pass >= 3 then
+					face = pass == 3 and {points[1], points[2], points[3], points[4]} or {points[1], points[4], points[5], points[6]}
+				end
+				for _, point in ipairs(face) do
+					local x = dx * point.x - dy * point.y
+					local y = (dy * point.x + dx * point.y) * 0.68
+					if pass == 1 then
+						x = x + 0.06
+						y = y - 0.06
+					else
+						y = y + height
+						if pass == 2 then y = y - 0.08 * arrowSize end
+						if pass >= 3 and (point == points[1] or point == points[4]) then y = y + 0.035 * arrowSize end
+					end
+					poly.Points:Add(Vector2(marker.pos.x + x * radius, marker.pos.y + y * radius))
+				end
+			end
+		end
+		-- 원은 처음부터 보인다. 화살촉이 들어올 때 한 번 팽창하고 잔물결과 함께 사라진다.
+		local ringAlpha = math.min(1, 0.6 + t / 0.10) * (1 - math.max(0, (t - 0.70) / 0.30))
+		local pulse = math.max(0, math.min(1, (t - 0.43) / 0.42))
+		local ringRadius = 0.38 + 0.055 * math.sin(pulse * math.pi)
+		self:DrawClickMarkerRing(17, ringRadius, 0.085, ringAlpha * 0.25, -0.045, true)
+		self:DrawClickMarkerRing(21, ringRadius, 0.045, ringAlpha, 0, false)
+		self:DrawClickMarkerRing(25, 0.40 + 0.30 * pulse, 0.022, math.sin(pulse * math.pi) * 0.35 * ringAlpha, 0, false)
+		
+	end
+
+	@ExecSpace("ClientOnly")
+	method void DrawClickMarkerRing(integer firstPart, number ringRadius, number width, number alpha, number offsetY, boolean shadow)
+		local marker = self._T.clickMarker
+		if marker == nil then return end
+		local radius = math.max(0.05, self.ClickMarkerRadius)
+		-- 네 개의 열린 원호 면으로 빈 중앙을 유지한다(채워진 원판을 겹치지 않는다).
+		for segment = 0, 3 do
+			local part = self._T.clickMarkerParts[firstPart + segment]
+			if not isvalid(part) then self:ClearClickMarker() return end
+			local poly = part.PolygonRendererComponent
+			poly.Points:Clear()
+			if shadow then
+				poly.Color = Color(0.02, 0.05, 0.01, alpha)
+			else
+				poly.Color = segment < 2 and Color(0.76, 1, 0.36, alpha) or Color(0.40, 0.77, 0.15, alpha)
+			end
+			for edge = 1, 2 do
+				local r = ringRadius + (edge == 1 and width / 2 or -width / 2)
+				for step = 0, 12 do
+					local fraction = (edge == 1 and step or 12 - step) / 12
+					local angle = (segment + fraction) * math.pi / 2
+					poly.Points:Add(Vector2(marker.pos.x + math.cos(angle) * r * radius, marker.pos.y + (math.sin(angle) * r * 0.68 + offsetY) * radius))
+				end
+			end
+		end
+	end
+
+	method void SetTarget()
+		if self.target ~= nil then
+			--선택한 Unit들에게 target을 정해줌--
+			--(우리팀 여부 판정은 FindTarget()에서 target을 정하는 시점에 이미 걸러진다 — IsMyEntity 참고)--
+			if self.Drag.SelectedUnits then
+				for _, Unit in pairs(self.Drag.SelectedUnits) do
+					-- 취소/사망으로 제거된 유닛이 선택 목록에 남아 있을 수 있다.
+					if isvalid(Unit) and isvalid(Unit.Entity) then
+						-- 공격 대상은 서버 전투 판정에서 쓰므로 서버에 기록한다.
+						Unit.Entity.Unit_Info:RequestSetTarget(self.target)
+					end
+				end
+			end
+		end
+	end
+
+	method boolean IsMyEntity(Entity entity)
+		-- entity가 유닛(Unit_Info) 또는 건물(Structure_Info)이고, 그 소유자(PlayerID)가
+		-- 로컬 플레이어 자신(같은 UserID)이면 true. 소유자가 없으면(중립/미점유, PlayerID == "")
+		-- 항상 false(=공격 대상으로 선택 가능)로 취급한다.
+		if not isvalid(entity) then return false end
+		
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) or not isvalid(lp.PlayerComponent) then return false end
+		local myUserId = lp.PlayerComponent.UserId
+		local companion = entity:GetComponent("script.UnitHitComponent")
+		if companion ~= nil then return companion.teamKey == "P:" .. myUserId end
+		
+		local info = entity.Unit_Info
+		if info ~= nil then
+			return info.PlayerID ~= "" and info.PlayerID == myUserId
+		end
+		
+		---@type Structure_Info
+		local structInfo = entity:GetComponent("script.Structure_Info")
+		if structInfo ~= nil then
+			return structInfo.PlayerID ~= "" and structInfo.PlayerID == myUserId
+		end
+		
+		return false
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean HasCommandableSelection()
+		-- 명령을 받을 수 있는 내 유닛이 하나라도 선택돼 있는지(지점 표시를 띄울지 판단).
+		if not isvalid(self.Drag) or self.Drag.SelectedUnits == nil then return false end
+		for _, unit in pairs(self.Drag.SelectedUnits) do
+			if isvalid(unit) and isvalid(unit.Entity) and _SelectionLogic:IsMyAliveUnit(unit.Entity) then return true end
+		end
+		return false
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ShowClickMarker(Vector2 worldPos)
+		-- 이동 명령만 표시한다. 그림자·두께·윗면을 별도 다각형으로 그린다.
+		self:ClearClickMarker()
+		if not self:HasCommandableSelection() then return end
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) or lp.CurrentMap ~= self.Entity.CurrentMap then return end
+		local version = self._T.clickMarkerVersion
+		local parts = self._T.clickMarkerParts
+		local reusable = parts ~= nil and #parts == 28
+		for _, part in ipairs(parts or {}) do
+			if not isvalid(part) then reusable = false end
+		end
+		if not reusable then
+			for _, part in ipairs(parts or {}) do
+				if isvalid(part) then part:Destroy() end
+			end
+			self._T.clickMarkerParts = nil
+			parts = {}
+			for i = 1, 28 do
+				local part = _SpawnService:SpawnByModelId(self.ClickMarkerModelId, "ClickMarkerFace" .. tostring(i), Vector3(0, 0, 0), self.Entity.CurrentMap)
+				if isvalid(part) then table.insert(parts, part) end
+				if not isvalid(part) or not isvalid(self) or self._T.clickMarkerVersion ~= version then
+					for _, created in ipairs(parts) do if isvalid(created) then created:Destroy() end end
+					return
+				end
+				part.TransformComponent.WorldPosition = Vector3(0, 0, 0)
+				local poly = part.PolygonRendererComponent
+				poly.SortingLayer = "MapLayer0"
+				poly.OrderInLayer = 40 + (i - 1) % 4
+				if i >= 17 then poly.OrderInLayer = i <= 20 and 39 or (i <= 24 and 44 or 40) end
+			end
+			self._T.clickMarkerParts = parts
+		end
+		if not isvalid(lp) or lp.CurrentMap ~= self.Entity.CurrentMap then return end
+		self._T.clickMarker = { pos = worldPos, age = 0 }
+		self:DrawClickMarker()
+	end
+
+	method void MoveUnits(Vector2 targetPoint)
+		if  not self.Drag.SelectedUnits then
+			return
+		end
+		
+		local targetPos = self.Entity.SetTargetPos:GetCircularPosition(targetPoint, #self.Drag.SelectedUnits)
+		
+		for i, unit in pairs(self.Drag.SelectedUnits) do
+			if not isvalid(unit) or not isvalid(unit.Entity) then
+				continue
+			end
+			-- 건설에 묶인 일꾼(건설 이동 중/건설 중)은 이동 명령을 받지 않는다. 건설 배치가 내리는 이동은
+			-- BuildGhostComponent가 UnitMoveComponent:FindTarget을 직접 호출하므로 이 경로와 무관하다.
+			if _BuildModeLogic:IsWorkerBusy(unit.Entity) then
+				continue
+			end
+			-- 건물 위로 이동 명령을 내렸다면 가장 가까운 건물 바깥 가장자리로 목표를 옮긴다(건물을 뚫지 않게).
+			local dest = targetPos[i]
+			if not unit.IgnoreStructures and not unit:IsFlying() then
+				dest = _StructureObstacleLogic:PushOut(self.Entity.CurrentMap, dest, unit.AvoidRadius, nil)
+			end
+			-- 이동은 서버 권위: 서버가 위치를 갱신해야 다른 플레이어 화면에도 유닛이 움직여 보인다.
+			unit:RequestMove(dest)
+		end
+	end
+
+	method void FindTarget()
+		self.targetPos = _InputService:GetCursorPosition()
+		local mousePos = _DragLogic:ScreenToWorld(self.targetPos)
+		
+		if self.Drag.SelectedUnits == nil then
+			return
+		end
+		
+		-- 커맨드카드 버튼으로 누른 위치 지정형 명령(M 이동 / A 공격 / 영웅 스킬)이 기다리는 중이면 이 우클릭 위치로 실행한다.
+		if _CommandCardLogic.PendingCommand ~= "" then
+			self:ExecutePendingAt(mousePos)
+			return
+		end
+		
+		local selectedTarget = self:PickEntityAt(mousePos)
+		self:HandleRightClickTarget(selectedTarget, mousePos)
+	end
+
+	method void ExecutePendingAt(Vector2 mousePos)
+		-- 대기 중인 위치 지정형 명령을 mousePos(월드 좌표)에서 실행한다. 우클릭(FindTarget)과 좌클릭(DragComponent) 모두 이 경로를 쓴다.
+		local pending = _CommandCardLogic.PendingCommand
+		local arg = _CommandCardLogic.PendingArg
+		_CommandCardLogic:ClearPending()
+		if pending == "Move" then
+			self.target = nil
+			self:MoveUnits(mousePos)
+		elseif pending == "AttackMove" then
+			self:AttackAt(mousePos)
+		elseif pending == "HeroSkill" then
+			_CommandCardLogic:CastHeroSkill(arg, mousePos)
+		elseif pending == "Ability" then
+			_CommandCardLogic:CastAbility(arg, mousePos)
+		end
+	end
+
+	method void AttackAt(Vector2 mousePos)
+		-- A 다음 클릭: 클릭한 곳에 공격 가능한 상대(적 유닛/건물/몬스터)가 있으면 그 대상을 공격,
+		-- 없거나 아군이면 그 지점으로 어택땅(가는 길에 만나는 적과 자동 교전, Unit_Info.RequestAttackMove).
+		local picked = self:PickEntityAt(mousePos)
+		if isvalid(picked) and not self:IsMyEntity(picked) and picked:GetComponent("script.MesoStructure") == nil then
+			self.target = picked
+			self:SetTarget()
+			return
+		end
+		self.target = nil
+		self:AttackMoveUnits(mousePos)
+	end
+
+	method void AttackMoveUnits(Vector2 targetPoint)
+		-- MoveUnits와 같은 원형 배치로, 선택 유닛들에게 어택땅을 명령한다(건설에 묶인 일꾼 제외).
+		if not self.Drag.SelectedUnits then return end
+		local targetPos = self.Entity.SetTargetPos:GetCircularPosition(targetPoint, #self.Drag.SelectedUnits)
+		for i, unit in pairs(self.Drag.SelectedUnits) do
+			if not isvalid(unit) or not isvalid(unit.Entity) then
+				continue
+			end
+			if _BuildModeLogic:IsWorkerBusy(unit.Entity) then
+				continue
+			end
+			local dest = targetPos[i]
+			if not unit.IgnoreStructures and not unit:IsFlying() then
+				dest = _StructureObstacleLogic:PushOut(self.Entity.CurrentMap, dest, unit.AvoidRadius, nil)
+			end
+			unit.Entity.Unit_Info:RequestAttackMove(dest)
+		end
+	end
+
+	method Entity PickEntityAt(Vector2 mousePos)
+		-- mousePos(월드 좌표) 위에 있는 유닛/건물/몬스터 엔티티를 돌려준다(없으면 nil).
+		-- 우클릭(FindTarget)과 좌클릭 단일 선택(DragComponent → SelectionLogic)이 함께 쓴다.
+		local collisionService = nil
+		if self.Entity ~= nil then
+			collisionService = _CollisionService:GetSimulator(self.Entity)
+		end
+		
+		if collisionService == nil then
+			if not self.QuietPick then  end
+			return nil
+		end
+		
+		--우클릭시 Collider와 충돌하는가?--
+		-- "TriggerBox"는 각 유닛 모델의 자식 Attack_(무기 사거리 판정용, script.Weapon)이
+		-- 기본값으로 속해 있던 그룹이라 여기 포함돼 있으면 우클릭 시 그 Attack_ 자식이
+		-- target으로 잘못 선택되는 문제가 있었다. Attack_는 "Weapon" 그룹으로 옮겨서 후보에서
+		-- 제외했다. 내 Unit 루트 엔티티는 "Unit" 그룹(각 Unit .model의 TriggerComponent에
+		-- 명시적으로 설정됨)이므로 정상적으로 선택 대상에 포함된다.
+		-- 예전에는 0.5x0.5 크기의 탐침 박스로 판정해서, 각 모델의 Trigger를 실제 스프라이트
+		-- 크기에 맞게 아무리 정확히 잡아도 그 절반(0.25 unit)만큼 바깥을 클릭해도 선택되는
+		-- 여유가 항상 남아 있었다. 점(point) 판정이 정확하지만 OverlapPoint(table groups, ...)
+		-- 오버로드는 이 엔진 버전에서 항상 nil을 반환해(단일 문자열 그룹만 정상 동작) 여러
+		-- 그룹을 한 번에 조회할 수 없다 — 대신 아주 작은 탐침 박스로 OverlapBox를 사용해 각
+		-- 모델의 TriggerComponent 영역(BoxSize/ColliderOffset) 근처를 클릭했을 때 후보로 잡고,
+		-- 최종 판정은 아래 IsInsideOwnTrigger(SelectionMargin 포함)에서 한다.
+		-- ⚠ 이 1차 탐침(probe)이 SelectionMargin보다 작으면, TriggerComponent가 스프라이트보다
+		-- 작게 잡힌 유닛은 스프라이트 위를 클릭해도 여기서부터 후보에 잡히지 않아 최종 판정의
+		-- 여유(SelectionMargin)가 무의미해진다 — 탐침도 같은 여유만큼 넓게 잡아야 한다.
+		local candidateGroups = {"Monster", "Structure", "Unit"}
+		local probeSize = self.SelectionMargin * 2
+		-- 단일 히트(OverlapBox)만 보면, 클릭한 유닛과 무관한 "다른" 원거리 유닛의 Attack_(사거리 판정용,
+		-- 최대 수백 유닛까지 커질 수 있음) 트리거가 우연히 같은 탐침 지점을 덮고 있을 때 그게 먼저
+		-- 반환되면 실제로 클릭한 유닛은 검사조차 못 받고 "선택 실패 → 땅 클릭(이동)"으로 새버린다.
+		-- OverlapBoxAll로 탐침과 겹치는 모든 후보를 받아, 그중 "정말 이 지점이 자기 본체 박스 안에
+		-- 있는" 후보를 찾을 때까지 순서대로 검증한다.
+		local hitComponents = _CollisionQueryLogic:OverlapBoxAllGroups(collisionService, candidateGroups, mousePos, Vector2(probeSize, probeSize), 0)
+		local selectedTarget = nil
+		local bestDistance = math.huge
+		
+		if not self.QuietPick then  end
+		if hitComponents ~= nil then
+			for i = 1, #hitComponents do
+				local hitComponent = hitComponents[i]
+				if hitComponent ~= nil and hitComponent.Entity ~= nil then
+					local entity = hitComponent.Entity
+					if self:IsWeaponChild(entity) then
+						-- CollisionGroup 매트릭스상 "Weapon" 그룹이 "Unit"/"Monster"/"Structure"와 겹쳐 있어
+						-- Attack_(무기 사거리 판정용) 자식이 먼저 맞는 경우가 있다. Attack_의 판정 범위는
+						-- Unit_Info.AttackRange(원거리 유닛은 수 유닛까지)에 맞춰 본체보다 훨씬 크므로,
+						-- 그대로 부모를 선택하면 사거리 안 아무 곳이나 클릭해도 선택돼버린다. 부모로
+						-- 치환한 뒤에도 아래에서 부모 자신의 Trigger 영역인지 다시 기하학적으로 검증한다.
+						entity = entity.Parent
+					end
+					-- 내 시야 밖(또는 탐지 안 된 은신)이라 VisionLogic이 숨긴 상대 엔티티는 콜라이더가 남아 있어도 후보에서 뺀다
+					-- (숨긴 대상은 우클릭 공격 대상·좌클릭 선택 모두 불가 — 그 자리를 클릭하면 빈 땅 취급으로 이동 명령이 된다).
+					if (_SelectionLogic:IsInspectable(entity) or entity:GetComponent("script.JaguarCompanionComponent") ~= nil) and not _CombatTeamLogic:IsDead(entity) and _VisionLogic:IsShownLocally(entity) and self:IsInsideOwnTrigger(entity, mousePos) then
+						local p = entity.TransformComponent.WorldPosition
+						local distance = (p.x - mousePos.x) ^ 2 + (p.y - mousePos.y) ^ 2
+						if distance < bestDistance or (distance == bestDistance and (selectedTarget == nil or entity.Id < selectedTarget.Id)) then
+							selectedTarget = entity
+							bestDistance = distance
+						end
+					end
+				end
+			end
+		end
+		
+		if not self.QuietPick then  end
+		return selectedTarget
+	end
+
+	method void HandleRightClickTarget(Entity selectedTarget, Vector2 mousePos)
+		-- 우클릭 대상(selectedTarget, 없으면 빈 땅)에 따라 힐/채집 지정 · 이동 · 공격 대상 지정을 처리한다.
+		-- 정보 패널/커맨드카드는 좌클릭 선택(SelectionLogic)만 바꾼다 — 우클릭은 명령 전용(스타1 방식).
+		
+		-- 힐 대상 지정 대기 중이면(힐 버튼을 누른 직후) 이 우클릭은 평소의 이동/공격이 아니라
+		-- "회복 우선 대상 지정"으로 처리하고 끝낸다.
+		if _HealTargetLogic.IsTargeting then
+			self:ResolveHealTarget(selectedTarget)
+			return
+		end
+		
+		-- 메소 채집 대상 지정 대기 중이면(채집 버튼을 누른 직후) 이 우클릭은 "채집할 메소 광맥 지정"으로 처리하고 끝낸다.
+		if _GatherTargetLogic.IsTargeting then
+			self:ResolveGatherTarget(selectedTarget)
+			return
+		end
+		
+		-- 채집 버튼 없이도 선택한 내 일꾼들에게 기존 채집 흐름을 요청한다.
+		-- 광맥을 공격 대상으로 저장하지 않으며, 무선택 자동 일꾼 배정은 하지 않는다.
+		if isvalid(selectedTarget) and selectedTarget:GetComponent("script.MesoStructure") ~= nil then
+			local count = 0
+			for _, unit in pairs(self.Drag.SelectedUnits) do
+				if isvalid(unit) and _SelectionLogic:IsMyAliveUnit(unit.Entity) then
+					local info = unit.Entity.Unit_Info
+					local gather = unit.Entity:GetComponent("script.WorkerGatherComponent")
+					if info.RoleKey == "Worker" and gather ~= nil and not _BuildModeLogic:IsWorkerBusy(unit.Entity) then
+						gather:RequestStartGather(selectedTarget)
+						count += 1
+					end
+				end
+			end
+			return
+		end
+		
+		--우클릭 시 선택된 Entity가 존재하지 않을때: 이동 명령--
+		if selectedTarget == nil then
+			self.target = nil
+			self:SetTarget()
+			self:ShowClickMarker(mousePos)
+			self:MoveUnits(mousePos)
+		
+		--아군(같은 UserID) 유닛/건물: 공격 대상으로는 삼지 않는다(정보 확인은 좌클릭 선택으로).
+		elseif self:IsMyEntity(selectedTarget) then
+			-- 내 미완성 건물(에델슈타인 테란식 건설)을 우클릭: 선택한 일꾼들이 가서 이어 짓는다(2026-10-07).
+			local sinfo = selectedTarget.Structure_Info
+			if sinfo ~= nil and sinfo.NeedsBuilder and sinfo.IsUnderConstruction and not sinfo.IsDestroyed then
+				local count = 0
+				for _, unit in pairs(self.Drag.SelectedUnits) do
+					if isvalid(unit) and _SelectionLogic:IsMyAliveUnit(unit.Entity) then
+						---@type WorkerBuildState
+						local ws = unit.Entity:GetComponent("script.WorkerBuildState")
+						if ws ~= nil then
+							ws:RequestResumeBuild(selectedTarget)
+							count += 1
+						end
+					end
+				end
+				if count > 0 then
+					return
+				end
+			end
+			self.target = nil
+			self:SetTarget()
+		
+		else
+			self.target = selectedTarget
+			self:ClearClickMarker()
+			self:SetTarget()
+		end
+	end
+
+	method void ResolveHealTarget(Entity selectedTarget)
+		-- 힐 대상 지정 대기 모드를 소비하고(성공/취소 여부와 무관하게 1회만 사용), 우클릭한
+		-- 대상이 유효한 아군 유닛이면 그 대상을 힐러의 우선 회복 대상으로 지정한다.
+		local healer = _HealTargetLogic.Healer
+		_HealTargetLogic:EndTargeting()
+		
+		if not isvalid(healer) then return end
+		local healerInfo = healer.Unit_Info
+		if healerInfo == nil then return end
+		
+		if selectedTarget == nil then
+			return
+		end
+		if not self:IsMyEntity(selectedTarget) then
+			return
+		end
+		if selectedTarget.Unit_Info == nil then
+			return
+		end
+		
+		healerInfo:RequestSetPriorityHealTarget(selectedTarget)
+	end
+
+	method void ResolveGatherTarget(Entity selectedTarget)
+		-- 채집 대상 지정 대기 모드를 소비하고(성공/취소 여부와 무관하게 1회만 사용), 우클릭한 대상이
+		-- 메소 광맥(MesoStructure)이면 대기 중이던 일꾼에게 채집을 시작시킨다.
+		local worker = _GatherTargetLogic.Worker
+		_GatherTargetLogic:EndTargeting()
+		
+		if not isvalid(worker) then return end
+		
+		if selectedTarget == nil or selectedTarget:GetComponent("script.MesoStructure") == nil then
+			_UIToast_:ShowMessage("메소 광맥이 아니어서 채집을 취소했습니다")
+			return
+		end
+		
+		---@type WorkerGatherComponent
+		local gather = worker:GetComponent("script.WorkerGatherComponent")
+		if gather == nil then
+			return
+		end
+		gather:RequestStartGather(selectedTarget)
+	end
+
+	method boolean IsInsideOwnTrigger(Entity entity, Vector2 point)
+		-- entity 자신의 TriggerComponent 영역(BoxSize/ColliderOffset, 각 모델의 실제 스프라이트
+		-- 크기에 맞춰짐) 안에 point가 실제로 들어오는지 기하학적으로 확인한다. Attack_(무기
+		-- 사거리 판정용) 히트를 부모로 치환한 뒤에도, 부모의 사거리가 아니라 부모 "본체" 박스
+		-- 안인지 다시 검증해야 "정확히 Entity를 선택했을 때만" 선택되게 할 수 있다.
+		-- SelectionMargin만큼 판정 범위를 넉넉하게 넓혀, 스프라이트 크기에 비해 TriggerComponent가
+		-- 작게 잡혀 있어도 스프라이트 위 클릭이면 선택되도록 한다.
+		if not isvalid(entity) then return false end
+		
+		local trigger = entity.TriggerComponent
+		if trigger == nil then return false end
+		
+		local center = entity.TransformComponent.WorldPosition
+		local offset = trigger.ColliderOffset
+		local cx = center.x + offset.x
+		local cy = center.y + offset.y
+		
+		if trigger.ColliderType == ColliderType.Circle then
+			local dx = point.x - cx
+			local dy = point.y - cy
+			local radius = trigger.CircleRadius + self.SelectionMargin
+			return (dx * dx + dy * dy) <= (radius * radius)
+		end
+		
+		-- Box(기본값) 및 그 외 타입은 사각형 판정으로 처리한다.
+		local halfX = trigger.BoxSize.x / 2 + self.SelectionMargin
+		local halfY = trigger.BoxSize.y / 2 + self.SelectionMargin
+		return math.abs(point.x - cx) <= halfX and math.abs(point.y - cy) <= halfY
+	end
+
+	method boolean IsWeaponChild(Entity entity)
+		-- 유닛 자신의 무기/사거리 판정용 자식(Attack_, TagComponent 태그 "Weapon")인지 확인한다.
+		-- CollisionGroup 설정과 무관하게, 이 태그가 있으면 절대 타겟으로 선택하지 않는다.
+		local tagComp = entity.TagComponent
+		if tagComp == nil then
+			return false
+		end
+		for _, tag in pairs(tagComp.Tags) do
+			if tag == "Weapon" then
+				return true
+			end
+		end
+		return false
+	end
+
+	@ExecSpace("ClientOnly")
+	@EventSender("Service", "InputService")
+	handler HandleKeyDownEvent(KeyDownEvent event)
+		-- UI 클릭·명령 취소·대상 지정도 이전 지점 표시를 즉시 지운다.
+		if event.key == KeyboardKey.Mouse0 or event.key == KeyboardKey.Mouse1 then
+			self:ClearClickMarker()
+		end
+		--우클릭 했을 때 움직임 target 설정을 진행함--
+		if event.key == KeyboardKey.Mouse1 then
+			local lp = _UserService.LocalPlayer
+			if not isvalid(lp) or lp.CurrentMap ~= self.Entity.CurrentMap then return end
+			if not isvalid(self.Drag) or not self.Drag:IsActiveMap() then return end
+			if _InputService:IsPointerOverUI() then return end
+			-- 건물 배치(고스트 프리뷰) 중인 우클릭은 배치 취소용이다(BuildGhostComponent가 직접 처리) —
+			-- 평소의 이동/공격 대상 지정 로직은 건너뛴다.
+			if _BuildModeLogic.IsPlacing then
+				return
+			end
+			self:FindTarget()
+		end
+	end
+
+end

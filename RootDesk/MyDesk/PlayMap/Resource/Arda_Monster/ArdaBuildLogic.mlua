@@ -1,0 +1,101 @@
+@Logic
+script ArdaBuildLogic extends Logic
+
+	property string ArdaStructureKey = "d0888bf3-285d-4a5d-b6ae-aec76ed1b016"
+
+	property string DataSetName = "Arda_Structure_Data_set"
+
+	property number BuildTime = 10
+
+	property number FootprintX = 0.97
+
+	property number FootprintY = 1.65
+
+	property string StructureDisplayName = "Arda 채집 건물"
+
+	@HideFromInspector
+	property table _data = {}
+
+	method table GetData()
+		-- 데이터셋에서 Arda 채집 건물 행을 읽어 { HP, damage, Meso, Cooltime, Ruid }로 돌려준다(읽은 뒤에는 캐시).
+		-- 못 읽으면 nil. 데이터셋은 serveronly가 아니라 서버/클라이언트 어디서든 호출할 수 있다.
+		if next(self._data) ~= nil then return self._data end
+		local temp = _DataService:GetTable(self.DataSetName)
+		if temp == nil then return nil end
+		for idx = 1, temp:GetRowCount() do
+			if self:IsArdaStructureModel(temp:GetCell(idx, "Model")) then
+				self._data = {
+					HP = tonumber(temp:GetCell(idx, "HP")) or 100,
+					damage = tonumber(temp:GetCell(idx, "damage")) or 10,
+					Meso = tonumber(temp:GetCell(idx, "Meso")) or 0,
+					Cooltime = tonumber(temp:GetCell(idx, "Cooltime")) or 1,
+					Ruid = temp:GetCell(idx, "RUID") or "",
+				}
+				return self._data
+			end
+		end
+		return nil
+	end
+
+	method table GetBuildData()
+		-- 본진의 "Arda 채집 건물" 버튼이 배치 시작(BuildModeLogic.StartPlacement)에 넘기는 정보.
+		local d = self:GetData()
+		return {
+			Model = "model://" .. self.ArdaStructureKey,
+			Ruid = (d ~= nil) and d.Ruid or "",
+			SizeX = self.FootprintX,
+			SizeY = self.FootprintY,
+			ScaleX = 1,
+			ScaleY = 1,
+			BuildTime = self.BuildTime,
+		}
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplyStructureData(Entity structure)
+		-- 스폰된 Arda 채집 건물에 데이터셋 스탯을 넣는다: HP, 건설 비용(취소 환불 기준), 채집 피해/간격.
+		local d = self:GetData()
+		if d == nil then
+			return
+		end
+		---@type Structure_Info
+		local info = structure:GetComponent("script.Structure_Info")
+		if info ~= nil then
+			info.Hp = math.floor(d.HP)
+			info.MaxHp = math.floor(d.HP)
+			info.Meso = d.Meso
+			info.BuildingKey = "ArdaHarvester"
+			info.StructureName = self.StructureDisplayName
+		end
+		---@type ArdaHarvester
+		local harvester = structure:GetComponent("script.ArdaHarvester")
+		if harvester ~= nil then
+			harvester.Damage = d.damage
+			harvester.Cooltime = d.Cooltime
+		end
+	end
+
+	method boolean IsArdaStructureModel(string modelId)
+		-- 건설 요청/배치에 쓰이는 모델 ID("model://..." 형태 또는 순수 ID)가 Arda 채집 건물인지 확인한다.
+		if modelId == nil or modelId == "" then return false end
+		return string.find(string.lower(modelId), self.ArdaStructureKey, 1, true) ~= nil
+	end
+
+	method Entity FindSpawnerContaining(Entity map, Vector2 pos)
+		-- pos(월드 좌표)가 스폰 영역 안에 들어있는 Arda_MonsterSpawner 엔티티(없으면 nil).
+		if not isvalid(map) then return nil end
+		local comps = map:GetChildComponentsByTypeName("script.ArdaMonsterSpawner", true)
+		for _, comp in ipairs(comps) do
+			---@type ArdaMonsterSpawner
+			local sp = comp
+			if isvalid(sp.Entity) then
+				local a = sp:GetArea()
+				if math.abs(pos.x - a.cx) <= a.w / 2 and math.abs(pos.y - a.cy) <= a.h / 2 then
+					return sp.Entity
+				end
+			end
+		end
+		return nil
+	end
+
+end

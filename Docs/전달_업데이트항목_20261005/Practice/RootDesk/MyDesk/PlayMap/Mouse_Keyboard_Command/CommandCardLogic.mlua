@@ -1,0 +1,477 @@
+@Logic
+script CommandCardLogic extends Logic
+
+	property integer SlotCount = 10
+
+	property table Actions = {}
+
+	property string Mode = "base"
+
+	property Entity SubSource = nil
+
+	@HideFromInspector
+	property table _structNames = {}
+
+	@HideFromInspector
+	property string _structNamesCamp = ""
+
+	property string PendingCommand = ""
+
+	property string PendingArg = ""
+
+	@ExecSpace("ClientOnly")
+	method string LocalUserId()
+		-- 로컬 플레이어 UserId(없으면 빈 문자열).
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) or not isvalid(lp.PlayerComponent) then return "" end
+		return lp.PlayerComponent.UserId
+	end
+
+	@ExecSpace("ClientOnly")
+	method table MakeAction(string actionId, string hotkey, string label, string ruid, boolean locked)
+		-- 액션 표 항목 하나를 만든다.
+		return {
+			ActionID = actionId,
+			Hotkey = hotkey,
+			Label = label,
+			Ruid = ruid or "",
+			Locked = locked,
+			LockReason = "",
+			UnitModel = "",
+			Building = nil,
+			BuildData = {},
+			Arg = "",
+		}
+	end
+
+	@ExecSpace("ClientOnly")
+	method string PickRuid(string resourceKey, string fallback)
+		-- UIResources에 값이 있으면 그걸, 없으면 fallback(각 액션 컴포넌트에 설정된 아이콘)을 쓴다.
+		local r = _UIResources:GetRuid(resourceKey)
+		if r ~= "" then return r end
+		return fallback or ""
+	end
+
+	@ExecSpace("ClientOnly")
+	method string StructureNameOf(string modelId)
+		-- 건설 목록 칸 이름: 내 진영 Structure_Stat_DataSet의 Name(Model 키). 클라이언트에서 CSV를 한 번만 읽어 둔다.
+		local camp = ""
+		local lp = _UserService.LocalPlayer
+		if isvalid(lp) then
+			---@type PlayerInfo
+			local pinfo = lp:GetComponent("script.PlayerInfo")
+			if pinfo ~= nil then camp = pinfo.SelectedCamp or "" end
+		end
+		if camp == "" then return "" end
+		if self._structNamesCamp ~= camp then
+			self._structNamesCamp = camp
+			self._structNames = {}
+			local ds = "Adv_Structure_Stat_DataSet"
+			if camp == "Cyg" then ds = "Cyg_Structure_Stat_DataSet" elseif camp == "Ede" then ds = "Res_Structure_Stat_DataSet" end
+			local temp = _DataService:GetTable(ds)
+			if temp ~= nil then
+				for idx = 1, temp:GetRowCount() do
+					local model = temp:GetCell(idx, "Model")
+					if model ~= nil and model ~= "" then
+						self._structNames[model] = temp:GetCell(idx, "Name") or ""
+					end
+				end
+			end
+		end
+		return self._structNames[modelId] or ""
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshCard()
+		-- 선행 건물 완공/파괴 등으로 잠금 상태가 바뀌었을 때(Structure_Info.OnSyncProperty), 현재 모드와 위치 지정 대기를
+		-- 유지한 채 카드 내용만 다시 만든다. 건설 목록이 열려 있으면 같은 목록을 다시 연다.
+		if self.Mode == "sub" and isvalid(self.SubSource) and not _BuildModeLogic:IsWorkerBusy(self.SubSource) then
+			self:OpenBuildList(self.SubSource)
+			return
+		end
+		self.Mode = "base"
+		self.Actions = self:BuildForEntity(_SelectionLogic.Focus)
+		self:Push()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Rebuild()
+		-- 현재 Focus 기준으로 기본 카드를 다시 만들어 화면에 반영한다. 진행 중이던 위치 지정 대기는 취소한다.
+		self.Mode = "base"
+		self:ClearPending()
+		self.Actions = self:BuildForEntity(_SelectionLogic.Focus)
+		self:Push()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Push()
+		-- 액션 표를 UnitActionUI(UnitActionSpriteChange)로 보낸다.
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) then return end
+		local evt = UnitActionChangeEvent()
+		evt.ActionList = self.Actions
+		lp:SendEvent(evt)
+	end
+
+	@ExecSpace("ClientOnly")
+	method table BaseActionsOf(Entity e)
+		-- 기존 ActionBase 계열(WorkerAction/HealerAction/StructureAction/RegionBuildAction)이 주는 액션 목록.
+		local comp = e.ActionBase
+		if comp == nil then return {} end
+		return comp:ChangeActionUI() or {}
+	end
+
+	@ExecSpace("ClientOnly")
+	method table BuildForEntity(Entity e)
+		-- 대상 종류(영웅/일꾼/일반 유닛/건물/그 외)에 맞는 10칸 액션 표를 만든다. 내 것이 아니면 빈 표.
+		local slots = {}
+		if not isvalid(e) then return slots end
+		local me = self:LocalUserId()
+		
+		---@type Structure_Info
+		local sinfo = e:GetComponent("script.Structure_Info")
+		if sinfo ~= nil then
+			if sinfo.PlayerID ~= me or sinfo.IsDestroyed then return slots end
+			local keys = _UnitCommandData.ProductionKeys
+			local i = 0
+			for _, a in ipairs(self:BaseActionsOf(e)) do
+				if i >= 9 then break end
+				i += 1
+				local hotkey = keys[i] or ""
+				local label = ""
+				if a.ActionID == "Spawn" then
+					local data = _UnitCommandData:GetUnitData(a.UnitModel)
+					label = data ~= nil and data.Name or "생산"
+				elseif a.ActionID == "OpenBuildList" then
+					hotkey = "B"
+					label = "건설"
+				else
+					label = "건설"
+				end
+				local act = self:MakeAction(a.ActionID, hotkey, label, a.Ruid, a.Locked == true)
+				act.LockReason = a.LockReason or ""
+				act.UnitModel = a.UnitModel or ""
+				act.Building = a.Building
+				act.BuildData = a.BuildData or {}
+				slots[i] = act
+			end
+			return slots
+		end
+		
+		local uinfo = e.Unit_Info
+		if uinfo == nil or uinfo.PlayerID ~= me or uinfo.IsDead then return slots end
+		
+		local isHero = e:GetComponent("script.HeroUnitSkill") ~= nil
+		local data = _UnitCommandData:GetUnitData(uinfo.UnitModelKey)
+		local isWorker = (data ~= nil and data.Worker) or uinfo.RoleKey == "Worker"
+		
+		slots[1] = self:MakeAction("Move", "M", "이동", self:PickRuid("CmdMove", ""), false)
+		slots[2] = self:MakeAction("Stop", "S", "정지", self:PickRuid("CmdStop", ""), false)
+		if not isWorker then
+			slots[3] = self:MakeAction("Attack", "A", "공격", self:PickRuid("CmdAttack", ""), false)
+			slots[4] = self:MakeAction("Patrol", "P", "순찰", self:PickRuid("CmdPatrol", ""), true)
+			slots[5] = self:MakeAction("Hold", "H", "저지", self:PickRuid("CmdHold", ""), true)
+		end
+		
+		if isHero then
+			-- 영웅 스킬 Q~T. 영웅 레벨 시스템이 아직 없어 해금 레벨(1/3/6/10/20) 잠금은 걸지 않는다.
+			local skillKeys = { "Q", "W", "E", "R", "T" }
+			for idx, k in ipairs(skillKeys) do
+				-- 스킬 아이콘(ikon)은 Hero_Skill_Asset_DataSet에서, 없으면 공용 영웅 스킬 아이콘.
+				local skillIcon = ""
+				---@type HeroUnit
+				local heroComp = e:GetComponent("script.HeroUnit")
+				if heroComp ~= nil then skillIcon = _HeroSkillAssetLogic:GetIcon(heroComp.HeroId, k) end
+				local act = self:MakeAction("HeroSkill", k, "스킬 " .. k, (skillIcon ~= "") and skillIcon or self:PickRuid("CmdHeroSkill", ""), false)
+				act.Arg = k
+				act.Building = e
+				slots[5 + idx] = act
+			end
+			return slots
+		end
+		
+		-- 6~9: 일꾼 명령 → 고유 능력 순서로 채운다.
+		local extras = {}
+		local base = {}
+		for _, a in ipairs(self:BaseActionsOf(e)) do
+			base[a.ActionID] = a
+		end
+		if isWorker then
+			local b = base["OpenBuildList"]
+			local act = self:MakeAction("OpenBuildList", "B", "건설", self:PickRuid("CmdBuild", b ~= nil and b.Ruid or ""), b == nil)
+			act.Building = e
+			table.insert(extras, act)
+			local g = base["GatherMeso"]
+			act = self:MakeAction("GatherMeso", "G", "채집", self:PickRuid("CmdGather", g ~= nil and g.Ruid or ""), g == nil)
+			act.Building = e
+			table.insert(extras, act)
+			local returnLabel = (data ~= nil and data.ReturnLabel ~= "") and data.ReturnLabel or "자원 반환"
+			table.insert(extras, self:MakeAction("ReturnCargo", "C", returnLabel, self:PickRuid("CmdReturn", ""), true))
+		end
+		local healShown = false
+		if data ~= nil then
+			for _, ab in ipairs(data.Abilities) do
+				local act = nil
+				if ab.Name == "치유" and base["Heal"] ~= nil then
+					act = self:MakeAction("Heal", ab.Key, ab.Name, self:PickRuid("AbHeal", base["Heal"].Ruid), false)
+					healShown = true
+				elseif ab.Name == "수리" then
+					act = self:MakeAction("Repair", ab.Key, ab.Name, self:PickRuid("CmdRepair", ""), true)
+				else
+					-- 능력별 아이콘 키(UnitCommandData의 Icon → UIResources)를 쓰고, 없으면 공용 기본 아이콘.
+					act = self:MakeAction("Ability", ab.Key, ab.Name, self:PickRuid(ab.Icon or "CmdAbility", self:PickRuid("CmdAbility", "")), true)
+				end
+				act.Building = e
+				table.insert(extras, act)
+			end
+		end
+		if not healShown and base["Heal"] ~= nil then
+			-- 시트에 없는(UnitModelKey가 비어 있는) 힐러도 기존 힐 버튼은 유지한다.
+			local act = self:MakeAction("Heal", "L", "치유", self:PickRuid("AbHeal", base["Heal"].Ruid), false)
+			act.Building = e
+			table.insert(extras, act)
+		end
+		for idx, act in ipairs(extras) do
+			if idx > 4 then break end
+			slots[5 + idx] = act
+		end
+		slots[10] = self:CancelAction(e)
+		return slots
+	end
+
+	@ExecSpace("ClientOnly")
+	method table CancelAction(Entity target)
+		-- 내 소유의 유닛/건물(본진·영웅 제외)이면 "취소"(환불) 액션, 아니면 nil. 실수로 누르지 않게 단축키는 두지 않는다.
+		if not isvalid(target) then return nil end
+		if target:GetComponent("script.HeroUnitSkill") ~= nil then return nil end
+		local uinfo = target.Unit_Info
+		if uinfo ~= nil then
+			if uinfo.IsDead then return nil end
+		else
+			---@type Structure_Info
+			local sinfo = target:GetComponent("script.Structure_Info")
+			if sinfo == nil or sinfo.IsDestroyed or sinfo.BuildingKey == "HQ" then return nil end
+		end
+		local act = self:MakeAction("Cancel", "", "취소", self:PickRuid("CmdCancel", ""), false)
+		act.Building = target
+		return act
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OpenBuildList(Entity source)
+		-- 건설 버튼(B): source(일꾼 또는 영역 건물)의 건설 가능 목록을 하위 카드로 펼친다. 10번 칸은 뒤로(ESC).
+		if not isvalid(source) then return end
+		if _BuildModeLogic:IsWorkerBusy(source) then
+			_UIToast_:ShowMessage("건설 중인 일꾼은 새 건물을 지을 수 없습니다")
+			return
+		end
+		local buildList = nil
+		-- 영역 전개처럼 목록 건물로 "변환"되는 건물(RegionBuildAction.ConvertInPlace)이면 칸이 배치 대신 변환(ConvertBuilding)을 실행한다.
+		local itemActionId = "PlaceBuilding"
+		---@type WorkerAction
+		local worker = source:GetComponent("script.WorkerAction")
+		if worker ~= nil then
+			buildList = worker:GetBuildList()
+		else
+			---@type RegionBuildAction
+			local region = source:GetComponent("script.RegionBuildAction")
+			if region ~= nil then
+				buildList = region:GetBuildList()
+				if region.ConvertInPlace then itemActionId = "ConvertBuilding" end
+			end
+		end
+		if buildList == nil then return end
+		
+		local keys = _UnitCommandData.ProductionKeys
+		local slots = {}
+		for i, item in ipairs(buildList) do
+			if i > 9 then
+				log_warning("[CommandCard] 건설 목록이 9개를 넘어 " .. tostring(#buildList - 9) .. "개는 표시하지 못함")
+				break
+			end
+			local act = self:MakeAction(itemActionId, keys[i] or "", self:StructureNameOf(item.Model), item.Ruid, item.Locked == true)
+			act.LockReason = item.LockReason or ""
+			act.UnitModel = item.Model
+			act.Building = source
+			act.BuildData = item
+			slots[i] = act
+		end
+		slots[10] = self:MakeAction("Back", "ESC", "뒤로", self:PickRuid("CmdBack", ""), false)
+		self.Mode = "sub"
+		self.SubSource = source
+		self.Actions = slots
+		log("[CommandCard] 건설 목록 " .. tostring(#buildList) .. "개 표시")
+		self:Push()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ExecuteSlot(integer index, boolean fromHotkey)
+		-- index번 칸의 액션을 실행한다(버튼 클릭은 fromHotkey=false, 단축키는 true).
+		self:Execute(self.Actions[index], fromHotkey)
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean HandleHotkey(string keyName)
+		-- 단축키 글자(keyName)가 현재 카드의 어떤 칸에 붙어 있으면 그 칸을 실행하고 true.
+		if keyName == "" or _BuildModeLogic.IsPlacing then return false end
+		for i = 1, self.SlotCount do
+			local a = self.Actions[i]
+			if a ~= nil and a.Hotkey == keyName then
+				log("[CommandCard] 단축키 " .. keyName .. " → " .. tostring(a.ActionID))
+				self:Execute(a, true)
+				return true
+			end
+		end
+		return false
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Escape()
+		-- ESC: 위치 지정 대기 → 힐/채집 대상 지정 대기 → 하위 카드 순으로 한 단계씩 취소한다.
+		if self.PendingCommand ~= "" then
+			self:ClearPending()
+			_UIToast_:ShowMessage("명령을 취소했습니다")
+			return
+		end
+		if _HealTargetLogic.IsTargeting then
+			_HealTargetLogic:EndTargeting()
+			_UIToast_:ShowMessage("명령을 취소했습니다")
+			return
+		end
+		if _GatherTargetLogic.IsTargeting then
+			_GatherTargetLogic:EndTargeting()
+			_UIToast_:ShowMessage("명령을 취소했습니다")
+			return
+		end
+		if self.Mode == "sub" then
+			self:Rebuild()
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ClearPending()
+		-- 위치 지정 대기를 끝낸다.
+		self.PendingCommand = ""
+		self.PendingArg = ""
+	end
+
+	@ExecSpace("ClientOnly")
+	method void BeginPending(string command, string arg, string message)
+		-- 다음 우클릭 위치로 실행할 명령을 기다린다(Mouse_Command.FindTarget이 소비).
+		self.PendingCommand = command
+		self.PendingArg = arg
+		_UIToast_:ShowMessage(message)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Execute(table a, boolean fromHotkey)
+		-- 액션 하나를 실행한다. 잠긴 칸(게임 로직이 아직 없는 명령)은 안내 토스트만 띄운다.
+		if a == nil then return end
+		if a.Locked then
+			if a.LockReason ~= nil and a.LockReason ~= "" then
+				_UIToast_:ShowMessage(a.LockReason .. " 필요")
+				return
+			end
+			local key = (a.Hotkey ~= "" and (" (" .. a.Hotkey .. ")") or "")
+			_UIToast_:ShowMessage(a.Label .. key .. " — 아직 준비 중인 기능입니다")
+			return
+		end
+		local id = a.ActionID
+		if id == "Move" then
+			self:BeginPending("Move", "", "이동할 위치를 우클릭하세요 (ESC 취소)")
+		elseif id == "Stop" then
+			self:StopSelected()
+		elseif id == "Attack" then
+			self:AttackSelected()
+		elseif id == "HeroSkill" then
+			if fromHotkey then
+				-- 단축키는 기존처럼 즉시 커서 위치를 조준점으로 시전한다.
+				self:CastHeroSkill(a.Arg, _UILogic:ScreenToWorldPosition(_InputService:GetCursorPosition()))
+			else
+				-- 버튼은 커서가 버튼 위에 있으므로 다음 우클릭 위치를 조준점으로 쓴다.
+				self:BeginPending("HeroSkill", a.Arg, "스킬 " .. a.Arg .. " — 조준할 위치를 우클릭하세요 (ESC 취소)")
+			end
+		elseif id == "OpenBuildList" then
+			self:OpenBuildList(a.Building)
+		elseif id == "Back" then
+			self:Rebuild()
+		elseif id == "Spawn" then
+			log("[CommandCard] 생산 요청: " .. tostring(a.UnitModel))
+			_UserService.LocalPlayer.SpawnUnit:RequestSpawnUnit(a.UnitModel, a.Building)
+		elseif id == "PlaceBuilding" then
+			log("[CommandCard] 건물 배치 시작")
+			_BuildModeLogic:StartPlacement(a.Building, a.BuildData)
+		elseif id == "ConvertBuilding" then
+			-- a.Building은 변환될 건물(영역 전개), a.UnitModel은 고른 변환 대상 건물. 서버가 검증·결제 후 변환한다.
+			if not isvalid(a.Building) or a.UnitModel == "" then return end
+			log("[CommandCard] 건물 변환 요청: " .. tostring(a.UnitModel))
+			_UserService.LocalPlayer.SpawnUnit:RequestConvertStructure(a.Building, a.UnitModel)
+			-- 대상이 곧 바뀌므로 카드를 비운다.
+			self.Actions = {}
+			self:Push()
+		elseif id == "Heal" then
+			if not isvalid(a.Building) then return end
+			_HealTargetLogic:BeginTargeting(a.Building)
+			_UIToast_:ShowMessage("치유할 아군을 우클릭하세요")
+		elseif id == "GatherMeso" then
+			if not isvalid(a.Building) then return end
+			if _BuildModeLogic:IsWorkerBusy(a.Building) then
+				_UIToast_:ShowMessage("건설 중인 일꾼은 메소를 채집할 수 없습니다")
+				return
+			end
+			_GatherTargetLogic:BeginTargeting(a.Building)
+			_UIToast_:ShowMessage("채집할 메소 광맥을 우클릭하세요")
+		elseif id == "Cancel" then
+			if not isvalid(a.Building) then return end
+			log("[CommandCard] 취소 요청: " .. tostring(a.Building.Name))
+			_UserService.LocalPlayer.SpawnUnit:RequestCancelEntity(a.Building)
+			-- 대상이 곧 사라지므로 카드를 비운다.
+			self.Actions = {}
+			self:Push()
+		else
+			log_warning("[CommandCard] 처리하지 않는 액션: " .. tostring(id))
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void StopSelected()
+		-- 선택된 유닛 전체 정지(건설에 묶인 일꾼 제외). 기존 Keyboard_Command.Stop과 동일.
+		local drag = _SelectionLogic.Drag
+		if not isvalid(drag) then return end
+		for _, unit in pairs(drag.SelectedUnits) do
+			if isvalid(unit) and not _BuildModeLogic:IsWorkerBusy(unit.Entity) then
+				unit:RequestStop()
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void AttackSelected()
+		-- 선택된 유닛 전체 공격 명령(건설에 묶인 일꾼 제외). 기존 Keyboard_Command.Attack과 동일.
+		local drag = _SelectionLogic.Drag
+		if not isvalid(drag) then return end
+		for _, unit in pairs(drag.SelectedUnits) do
+			if isvalid(unit) and not _BuildModeLogic:IsWorkerBusy(unit.Entity) then
+				unit.Entity.Unit_Info:RequestAttack()
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void CastHeroSkill(string skillKey, Vector2 aimWorldPos)
+		-- 선택된 영웅 유닛 전원에게 aimWorldPos 조준으로 스킬 시전을 요청한다. 기존 Keyboard_Command.CastHeroSkill과 동일.
+		local drag = _SelectionLogic.Drag
+		if not isvalid(drag) then return end
+		for _, unit in pairs(drag.SelectedUnits) do
+			if isvalid(unit) then
+				---@type HeroUnitSkill
+				local heroSkill = unit.Entity:GetComponent("script.HeroUnitSkill")
+				if heroSkill ~= nil then
+					log("[CommandCard] 영웅 스킬 " .. skillKey .. " 조준=(" .. string.format("%.2f, %.2f", aimWorldPos.x, aimWorldPos.y) .. ")")
+					heroSkill:RequestCast(skillKey, aimWorldPos)
+				end
+			end
+		end
+	end
+
+end

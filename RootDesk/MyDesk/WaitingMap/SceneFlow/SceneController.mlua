@@ -1,0 +1,73 @@
+@Logic
+script SceneController extends Logic
+
+	property Entity gameHudGroup = "07de5031-ccb0-404d-b0e8-43959fcefbcc"
+
+	property Entity dragGroup = "9e94ae08-23e0-4218-8142-635a72a8112c"
+
+	property Entity lobbyGroup = "90c9622e-cee0-49a3-939f-12e383189145"
+
+	@DisplayName("로비(방 목록) UI 그룹")
+	property Entity roomLobbyGroup = "1eb62873-5503-46b2-a95b-0f624c8edd1a"
+
+	@DisplayName("로비 맵 이름(정적 맵)")
+	property string LobbyMapName = "lobby"
+
+	@HideFromInspector
+	property boolean InRoomLobby = false
+
+	property string GameMapName = "map02"
+
+	property string currentMapName = ""
+
+	@HideFromInspector
+	property integer SceneVersion = 0
+
+	@HideFromInspector
+	property boolean InGame = false
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- 로컬 플레이어가 있는 맵을 감시해 게임 HUD / 로비 UI를 전환한다.
+		local player = _UserService.LocalPlayer
+		if not isvalid(player) then
+			return
+		end
+		
+		local map = player.CurrentMap
+		if not isvalid(map) then
+			return
+		end
+		
+		if map.Name == self.currentMapName then
+			return
+		end
+		self.currentMapName = map.Name
+		
+		self.InRoomLobby = (map.Name == self.LobbyMapName)
+		self:ApplySceneState(map.Name == self.GameMapName)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ApplySceneState(boolean inGame)
+		-- inGame이면 게임 HUD와 드래그 선택을 켜고 로비를 끈다. 아니면 반대.
+		-- 맵 전환마다 SceneVersion을 1 올린다 — FactionTheme / MinimapController가 OnUpdate·Tick에서 이 값을 비교해
+		-- 재경기(로비 → 게임 맵 재진입) 때 테마·지도 이미지를 다시 세팅한다(클라 전용 훅, 이벤트 없이 폴링).
+		self.InGame = inGame
+		self.SceneVersion += 1
+		if isvalid(self.gameHudGroup) then
+			self.gameHudGroup.Enable = inGame
+		end
+		if isvalid(self.dragGroup) then
+			self.dragGroup.Enable = inGame
+		end
+		-- 화면 3단계: 로비 맵 → 방 목록 UI / 대기실(map01) → 진영 선택 UI / 게임 맵 → HUD.
+		if isvalid(self.lobbyGroup) then
+			self.lobbyGroup.Enable = (not inGame) and (not self.InRoomLobby)
+		end
+		if isvalid(self.roomLobbyGroup) then
+			self.roomLobbyGroup.Enable = self.InRoomLobby
+		end
+	end
+
+end

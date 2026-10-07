@@ -1,0 +1,261 @@
+@Component
+script NightWalkerSkillComponent extends Component
+
+	@ExecSpace("ServerOnly")
+	method number ResolveCooldown(string skillKey, table skill, number baseCooldown)
+		    -- 도미니언 중 강화 대상 스킬(Q/W/E)은 설계용 무쿨 테스트보다 우선해서 짧은 쿨다운을 갖는다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local state = self:GetNightWalkerDominionState()
+		    if state ~= nil and self:IsNightWalkerDominionEnhancedSkill(core:GetSelectedHeroIndex(), skillKey, skill) then
+		        return state.reducedCooldown or 1
+		    end
+		    return baseCooldown
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TryApplyDominionExtraHit(string skillKey, table skill, table hitComponents)
+		    -- 강화 대상 스킬이 맞았고 도미니언이 살아 있을 때만 추가타를 넣는다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if self:IsNightWalkerDominionEnhancedSkill(core:GetSelectedHeroIndex(), skillKey, skill) and self:GetNightWalkerDominionState() ~= nil then
+		        self:ApplyNightWalkerDominionExtraHit(skillKey, skill, hitComponents)
+		    end
+	end
+
+	method Vector2 GetNightWalkerIdleBatAnchor(integer slotIndex, Vector2 casterPos)
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local batConfig = core:GetNightWalkerBatConfig()
+		    local baseOffset = batConfig.idleOffsets[slotIndex] or Vector2(0, 0)
+		    return Vector2(casterPos.x + baseOffset.x, casterPos.y + baseOffset.y)
+	end
+
+	method boolean IsNightWalkerShadowBatEligible(integer selectedIndex, string skillKey, table skill)
+		    if selectedIndex ~= 8 or skill == nil then return false end
+		    if skill.projectile ~= true then return false end
+		    -- 쉐도우 배트는 표창 투사체(Q/W/E)에만 붙는다.
+		    return skillKey == "Q" or skillKey == "W" or skillKey == "E"
+	end
+
+	method void EnsureNightWalkerBatState()
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local config = core:GetNightWalkerBatConfig()
+		    if self._T.nightWalkerBats ~= nil and #self._T.nightWalkerBats == (config.totalBats or 0) then return end
+		
+		    self._T.nightWalkerBats = {}
+		    for slotIndex = 1, config.totalBats do
+		        self._T.nightWalkerBats[slotIndex] = {
+		            busyUntil = 0,
+		        }
+		    end
+	end
+
+	method integer AcquireNightWalkerBatSlot()
+		    self:EnsureNightWalkerBatState()
+		    if self._T.nightWalkerBats == nil or #self._T.nightWalkerBats <= 0 then return 0 end
+		    local now = _UtilLogic.ElapsedSeconds or 0
+		    for slotIndex, slotState in ipairs(self._T.nightWalkerBats) do
+		        if now >= (slotState.busyUntil or 0) then
+		            return slotIndex
+		        end
+		    end
+		    return 0
+	end
+
+	@ExecSpace("ServerOnly")
+	method table CollectNightWalkerBounceCandidates()
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local candidates = {}
+		    local usedIds = {}
+		
+		    for _, candidate in ipairs(_CombatTeamLogic:GetCombatCandidates(self.Entity.CurrentMap)) do
+		        if isvalid(candidate) and usedIds[candidate.Id] ~= true then
+		            usedIds[candidate.Id] = true
+		            table.insert(candidates, candidate)
+		        end
+		    end
+		
+		    -- 테스트 허수아비는 Unit 태그 탐색에서 빠질 수 있어서 명시적으로 섞어 준다.
+		    if core._T.trainingDummies ~= nil then
+		        for _, candidate in ipairs(core._T.trainingDummies) do
+		            if isvalid(candidate) and usedIds[candidate.Id] ~= true then
+		                usedIds[candidate.Id] = true
+		                table.insert(candidates, candidate)
+		            end
+		        end
+		    end
+		
+		    return candidates
+	end
+
+	@ExecSpace("ServerOnly")
+	method table BuildNightWalkerShadowBatTargets(Entity firstTarget, integer maxBounces, number bounceRadius)
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local targets = {}
+		    if not isvalid(firstTarget) then return targets end
+		
+		    table.insert(targets, firstTarget)
+		    local usedIds = {}
+		    usedIds[firstTarget.Id] = true
+		
+		    local currentTarget = firstTarget
+		    for bounceIndex = 1, maxBounces do
+		        if not isvalid(currentTarget) then break end
+		
+		        local currentPos = core:GetEntityWorldPos2(currentTarget)
+		        local nextTarget = nil
+		        local nextDistance = nil
+		        local candidates = self:CollectNightWalkerBounceCandidates()
+		        for _, candidate in ipairs(candidates) do
+		            if isvalid(candidate) and candidate ~= self.Entity and candidate.TransformComponent ~= nil then
+		                if candidate.CurrentMap == self.Entity.CurrentMap and (not core:IsSameOwner(self.Entity, candidate)) and usedIds[candidate.Id] ~= true then
+		                    local candidatePos = core:GetEntityWorldPos2(candidate)
+		                    local distance = (candidatePos - currentPos):Magnitude()
+		                    if distance <= bounceRadius then
+		                        if nextDistance == nil or distance < nextDistance then
+		                            nextTarget = candidate
+		                            nextDistance = distance
+		                        end
+		                    end
+		                end
+		            end
+		        end
+		
+		        if nextTarget == nil then break end
+		        table.insert(targets, nextTarget)
+		        usedIds[nextTarget.Id] = true
+		        currentTarget = nextTarget
+		    end
+		
+		    return targets
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TryTriggerNightWalkerShadowBat(string skillKey, table sourceSkill, table hitComponents)
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local selectedIndex = core:GetSelectedHeroIndex()
+		    if not self:IsNightWalkerShadowBatEligible(selectedIndex, skillKey, sourceSkill) then return end
+		    if hitComponents == nil or #hitComponents <= 0 then return end
+		
+		    local config = core:GetNightWalkerBatConfig()
+		    if (config.totalBats or 0) <= 0 then return end
+		    if math.random() > config.procChance then return end
+		
+		    local slotIndex = self:AcquireNightWalkerBatSlot()
+		    if slotIndex <= 0 then
+		        return
+		    end
+		
+		    local firstTarget = nil
+		    for _, hitComp in ipairs(hitComponents) do
+		        if hitComp ~= nil and isvalid(hitComp.Entity) then
+		            firstTarget = hitComp.Entity
+		            break
+		        end
+		    end
+		    if firstTarget == nil then return end
+		
+		    local targets = self:BuildNightWalkerShadowBatTargets(firstTarget, config.maxBounces, config.bounceRadius)
+		    if #targets <= 0 then return end
+		
+		    local casterPos3 = self.Entity.TransformComponent.WorldPosition
+		    local casterPos2 = Vector2(casterPos3.x, casterPos3.y)
+		    local idleAnchor = self:GetNightWalkerIdleBatAnchor(slotIndex, casterPos2)
+		    local points = { idleAnchor }
+		    for _, target in ipairs(targets) do
+		        table.insert(points, core:GetEntityWorldPos2(target))
+		    end
+		    table.insert(points, idleAnchor)
+		    core:EmitNightWalkerBatFlightSync(slotIndex, points)
+		
+		    local batDamage = math.max(1, math.floor((sourceSkill.damage or 1) * (config.damageMultiplier or 0.55)))
+		    local totalTravelTime = 0
+		    for pointIndex = 2, #points do
+		        local prevPoint = points[pointIndex - 1]
+		        local nextPoint = points[pointIndex]
+		        totalTravelTime = totalTravelTime + ((nextPoint - prevPoint):Magnitude() / (config.projectileSpeed or 16.5))
+		    end
+		
+		    self:EnsureNightWalkerBatState()
+		    self._T.nightWalkerBats[slotIndex].busyUntil = (_UtilLogic.ElapsedSeconds or 0) + totalTravelTime + 0.12
+		
+		    local elapsed = 0
+		    for targetIndex, target in ipairs(targets) do
+		        local fromPoint = points[targetIndex]
+		        local targetPoint = points[targetIndex + 1]
+		        elapsed = elapsed + ((targetPoint - fromPoint):Magnitude() / (config.projectileSpeed or 16.5))
+		
+		        _TimerService:SetTimerOnce(function()
+		            if not isvalid(self.Entity) or not isvalid(target) or target.TransformComponent == nil then return end
+		
+		            core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		            local attackInfo = "BAT:" .. tostring(slotIndex) .. ":" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(batDamage)
+		            local hitShape = CircleShape(core:GetEntityWorldPos2(target), config.hitRadius or 0.48)
+		            core:BeginAttackTargetFilter(attackInfo, 1)
+		            core:PerformAttack(hitShape, attackInfo)
+		            core:EndAttackTargetFilter(attackInfo)
+		        end, elapsed)
+		    end
+	end
+
+	method table GetNightWalkerDominionState()
+		    local state = self._T.nightWalkerDominion
+		    if state == nil then return nil end
+		    if _UtilLogic.ElapsedSeconds >= (state.expiresAt or 0) then
+		        self._T.nightWalkerDominion = nil
+		        return nil
+		    end
+		    return state
+	end
+
+	method boolean IsNightWalkerDominionEnhancedSkill(integer selectedIndex, string skillKey, table skill)
+		    if selectedIndex ~= 8 or skill == nil then return false end
+		    if skill.dominionEnhanced == true then return true end
+		    return skillKey == "Q" or skillKey == "W" or skillKey == "E"
+	end
+
+	method number GetNightWalkerDominionVisualScaleMultiplier(integer selectedIndex, string skillKey, table skill)
+		    local state = self:GetNightWalkerDominionState()
+		    if state == nil then return 1 end
+		    if not self:IsNightWalkerDominionEnhancedSkill(selectedIndex, skillKey, skill) then return 1 end
+		    return state.rangeMultiplier or 1.5
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ActivateNightWalkerDominion(table skill)
+		    self._T.nightWalkerDominion = {
+		        expiresAt = _UtilLogic.ElapsedSeconds + (skill.dominionDuration or 15),
+		        rangeMultiplier = skill.dominionRangeMultiplier or 1.5,
+		        damageMultiplier = skill.dominionDamageMultiplier or 1.5,
+		        reducedCooldown = skill.dominionReducedCooldown or 1,
+		        extraHitMultiplier = skill.dominionExtraHitMultiplier or 0.5,
+		        extraHitRadius = skill.dominionExtraHitRadius or 0.72,
+		    }
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplyNightWalkerDominionExtraHit(string skillKey, table sourceSkill, table hitComponents)
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local state = self:GetNightWalkerDominionState()
+		    if state == nil or hitComponents == nil or #hitComponents <= 0 then return end
+		    if not self:IsNightWalkerDominionEnhancedSkill(core:GetSelectedHeroIndex(), skillKey, sourceSkill) then return end
+		
+		    local extraDamage = math.max(1, math.floor((sourceSkill.damage or 0) * (state.extraHitMultiplier or 0.5)))
+		    local extraRadius = state.extraHitRadius or 0.72
+		
+		    for _, hitComp in ipairs(hitComponents) do
+		        local defender = hitComp.Entity
+		        if isvalid(defender) and defender.TransformComponent ~= nil then
+		            local pos3 = defender.TransformComponent.WorldPosition
+		            local blastPos = Vector2(pos3.x, pos3.y)
+		            local blastShape = CircleShape(blastPos, extraRadius)
+		            core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		            local attackInfo = "R:" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(extraDamage)
+		            core:BeginAttackTargetFilter(attackInfo, 1)
+		            core:PerformAttack(blastShape, attackInfo)
+		            core:EndAttackTargetFilter(attackInfo)
+		        end
+		    end
+		
+		    core:EmitDominionBatchSync("R", hitComponents, #hitComponents)
+	end
+
+end

@@ -1,0 +1,40 @@
+@Logic
+script ProjectileLogic extends Logic
+
+	property string ProjectileModelId = "UnitProjectile"
+
+	@HideFromInspector
+	property integer _projCount = 0
+
+	@ExecSpace("Server")
+	method void Fire(string projRUID, string impactRUID, Vector3 from, Entity target, number speed, number scale, number projScale)
+		-- from: 발사 시작 위치(월드). target: 호밍 대상. projRUID: 투사체 외형. impactRUID: 명중 이펙트.
+		-- scale: 명중 이펙트 배율. projScale: 날아가는 투사체 "본체"(Visual 자식) 자체의 크기 배율.
+		if target == nil or not isvalid(target) then return end
+		
+		local map = target.CurrentMap
+		if map == nil then return end
+		
+		self._projCount = self._projCount + 1
+		local name = "proj_" .. tostring(self._projCount)
+		
+		local proj = _SpawnService:SpawnByModelId(self.ProjectileModelId, name, from, map)
+		if proj == nil then
+			return
+		end
+		
+		local pc = proj:GetComponent("script.ProjectileComponent")
+		if pc == nil then
+			return
+		end
+		---@type ProjectileComponent
+		local p = pc
+		p.Speed = speed
+		p.EffectScale = scale
+		p.ImpactRUID = impactRUID
+		p:SetSprite(projRUID)
+		p:SetScale(projScale)
+		p:Fire(target)
+	end
+
+end

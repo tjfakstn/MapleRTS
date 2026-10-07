@@ -1,0 +1,68 @@
+@Component
+script ArdaHarvester extends Component
+
+	@DisplayName("1회 피해량(데이터셋 damage)")
+	property number Damage = 15
+
+	@DisplayName("피해를 주는 간격(초, 데이터셋 Cooltime)")
+	property number Cooltime = 1.5
+
+	@HideFromInspector
+	property number _elapsed = 0
+
+	@HideFromInspector
+	property Entity _target = nil
+
+	@ExecSpace("ServerOnly")
+	method void OnUpdate(number delta)
+		-- Damage/Cooltime이 건설 시점에 바뀔 수 있어 타이머 대신 매 프레임 경과 시간을 센다.
+		-- 파괴된 건물은 더 이상 채집하지 않는다(엔티티 제거 전까지 매 프레임 Tick 준비를 하지 않도록 여기서 바로 빠져나간다).
+		---@type Structure_Info
+		local sinfo = self.Entity:GetComponent("script.Structure_Info")
+		if sinfo ~= nil and sinfo.IsDestroyed then return end
+		
+		self._elapsed = self._elapsed + delta
+		if self._elapsed < self.Cooltime then return end
+		self._elapsed = 0
+		self:Tick()
+	end
+
+	method boolean IsAlive(Entity monster)
+		---@type Unit_Info
+		local info = monster:GetComponent("script.Unit_Info")
+		return info ~= nil and not info.IsDead
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Tick()
+		---@type Structure_Info
+		local sinfo = self.Entity:GetComponent("script.Structure_Info")
+		if sinfo == nil or sinfo.IsDestroyed or sinfo.IsUnderConstruction or sinfo.PlayerID == "" then return end
+		
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return end
+		local wp = self.Entity.TransformComponent.WorldPosition
+		local pos = Vector2(wp.x, wp.y)
+		
+		-- 이 건물이 서 있는 스폰 영역의 Arda 몬스터를 공격한다.
+		local spawnerEntity = _ArdaBuildLogic:FindSpawnerContaining(map, pos)
+		if not isvalid(spawnerEntity) then return end
+		---@type ArdaMonsterSpawner
+		local spawner = spawnerEntity:GetComponent("script.ArdaMonsterSpawner")
+		if spawner == nil then return end
+		
+		-- 몬스터가 배회하므로 매번 "가장 가까운 것"으로 바꾸면 피해가 분산된다 — 잡을 때까지 같은 대상을 유지한다.
+		local target = self._target
+		if not isvalid(target) or not self:IsAlive(target) then
+			target = spawner:GetNearestMonster(pos)
+			self._target = target
+		end
+		if not isvalid(target) then return end
+		---@type ArdaMonster
+		local am = target:GetComponent("script.ArdaMonster")
+		if am == nil then return end
+		
+		am:HarvestDamage(self.Damage, sinfo.PlayerID)
+	end
+
+end

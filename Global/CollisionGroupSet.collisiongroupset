@@ -1,0 +1,135 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "collisiongroupset://unique",
+  "ContentType": "x-mod/collisiongroupset",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "Groups": [
+        {
+          "Id": "73017cc2ca884dfcb9fb98db7cc44848",
+          "Name": "Default"
+        },
+        {
+          "Id": "MOD@TriggerBox",
+          "Name": "TriggerBox"
+        },
+        {
+          "Id": "MOD@HitBox",
+          "Name": "HitBox"
+        },
+        {
+          "Id": "MOD@Interaction",
+          "Name": "Interaction"
+        },
+        {
+          "Id": "MOD@Portal",
+          "Name": "Portal"
+        },
+        {
+          "Id": "MOD@Climbable",
+          "Name": "Climbable"
+        },
+        {
+          "Id": "0639c22a20d34ec88be45b43fee3e333",
+          "Name": "Player"
+        },
+        {
+          "Id": "8992acd1e8cd45838db6f10a7b41df09",
+          "Name": "Monster"
+        },
+        {
+          "Id": "a4c26e6271bd4ac9a15a0c415fd62191",
+          "Name": "Structure"
+        },
+        {
+          "Id": "1694315358284bcb87ddf2a7bb22e604",
+          "Name": "Unit"
+        },
+        {
+          "Id": "cb90c06a35bf4478ae585918903e0970",
+          "Name": "Weapon"
+        }
+      ],
+      "Matrix": {
+        "73017cc2ca884dfcb9fb98db7cc44848": [
+          "73017cc2ca884dfcb9fb98db7cc44848",
+          "0639c22a20d34ec88be45b43fee3e333",
+          "8992acd1e8cd45838db6f10a7b41df09",
+          "a4c26e6271bd4ac9a15a0c415fd62191",
+          "1694315358284bcb87ddf2a7bb22e604",
+          "cb90c06a35bf4478ae585918903e0970"
+        ],
+        "MOD@TriggerBox": [
+          "73017cc2ca884dfcb9fb98db7cc44848",
+          "MOD@TriggerBox",
+          "8992acd1e8cd45838db6f10a7b41df09",
+          "a4c26e6271bd4ac9a15a0c415fd62191"
+        ],
+        "MOD@HitBox": [
+          "73017cc2ca884dfcb9fb98db7cc44848",
+          "MOD@HitBox",
+          "a4c26e6271bd4ac9a15a0c415fd62191"
+        ],
+        "MOD@Interaction": [
+          "73017cc2ca884dfcb9fb98db7cc44848",
+          "MOD@Interaction"
+        ],
+        "MOD@Portal": [
+          "73017cc2ca884dfcb9fb98db7cc44848",
+          "MOD@Portal"
+        ],
+        "MOD@Climbable": [
+          "73017cc2ca884dfcb9fb98db7cc44848",
+          "MOD@Climbable"
+        ],
+        "0639c22a20d34ec88be45b43fee3e333": [
+          "73017cc2ca884dfcb9fb98db7cc44848",
+          "1694315358284bcb87ddf2a7bb22e604",
+          "cb90c06a35bf4478ae585918903e0970"
+        ],
+        "8992acd1e8cd45838db6f10a7b41df09": [
+          "73017cc2ca884dfcb9fb98db7cc44848",
+          "MOD@TriggerBox",
+          "8992acd1e8cd45838db6f10a7b41df09",
+          "a4c26e6271bd4ac9a15a0c415fd62191",
+          "1694315358284bcb87ddf2a7bb22e604",
+          "cb90c06a35bf4478ae585918903e0970"
+        ],
+        "a4c26e6271bd4ac9a15a0c415fd62191": [
+          "73017cc2ca884dfcb9fb98db7cc44848",
+          "MOD@TriggerBox",
+          "MOD@HitBox",
+          "8992acd1e8cd45838db6f10a7b41df09",
+          "a4c26e6271bd4ac9a15a0c415fd62191",
+          "1694315358284bcb87ddf2a7bb22e604",
+          "cb90c06a35bf4478ae585918903e0970"
+        ],
+        "1694315358284bcb87ddf2a7bb22e604": [
+          "73017cc2ca884dfcb9fb98db7cc44848",
+          "0639c22a20d34ec88be45b43fee3e333",
+          "8992acd1e8cd45838db6f10a7b41df09",
+          "a4c26e6271bd4ac9a15a0c415fd62191",
+          "1694315358284bcb87ddf2a7bb22e604",
+          "cb90c06a35bf4478ae585918903e0970"
+        ],
+        "cb90c06a35bf4478ae585918903e0970": [
+          "73017cc2ca884dfcb9fb98db7cc44848",
+          "0639c22a20d34ec88be45b43fee3e333",
+          "8992acd1e8cd45838db6f10a7b41df09",
+          "a4c26e6271bd4ac9a15a0c415fd62191",
+          "1694315358284bcb87ddf2a7bb22e604",
+          "cb90c06a35bf4478ae585918903e0970"
+        ]
+      }
+    }
+  }
+}

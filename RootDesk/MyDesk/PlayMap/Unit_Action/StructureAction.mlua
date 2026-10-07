@@ -1,0 +1,160 @@
+@Component
+script StructureAction extends ActionBase
+
+	@DisplayName("생산 유닛 1 - Model")
+	property string UnitModel1 = ""
+
+	@DisplayName("생산 유닛 1 - 아이콘 RUID")
+	property string UnitRuid1 = ""
+
+	@DisplayName("생산 유닛 1 - 선행 건물 이름(없으면 빈 칸)")
+	property string UnitCondition1 = ""
+
+	@DisplayName("생산 유닛 2 - Model")
+	property string UnitModel2 = ""
+
+	@DisplayName("생산 유닛 2 - 아이콘 RUID")
+	property string UnitRuid2 = ""
+
+	@DisplayName("생산 유닛 2 - 선행 건물 이름(없으면 빈 칸)")
+	property string UnitCondition2 = ""
+
+	@DisplayName("생산 유닛 3 - Model")
+	property string UnitModel3 = ""
+
+	@DisplayName("생산 유닛 3 - 아이콘 RUID")
+	property string UnitRuid3 = ""
+
+	@DisplayName("생산 유닛 3 - 선행 건물 이름(없으면 빈 칸)")
+	property string UnitCondition3 = ""
+
+	@DisplayName("생산 유닛 4 - Model")
+	property string UnitModel4 = ""
+
+	@DisplayName("생산 유닛 4 - 아이콘 RUID")
+	property string UnitRuid4 = ""
+
+	@DisplayName("생산 유닛 4 - 선행 건물 이름(없으면 빈 칸)")
+	property string UnitCondition4 = ""
+
+	@DisplayName("생산 유닛 5 - Model")
+	property string UnitModel5 = ""
+
+	@DisplayName("생산 유닛 5 - 아이콘 RUID")
+	property string UnitRuid5 = ""
+
+	@DisplayName("생산 유닛 5 - 선행 건물 이름(없으면 빈 칸)")
+	property string UnitCondition5 = ""
+
+	@DisplayName("생산 유닛 6 - Model")
+	property string UnitModel6 = ""
+
+	@DisplayName("생산 유닛 6 - 아이콘 RUID")
+	property string UnitRuid6 = ""
+
+	@DisplayName("생산 유닛 6 - 선행 건물 이름(없으면 빈 칸)")
+	property string UnitCondition6 = ""
+
+	@DisplayName("생산 유닛 7 - Model")
+	property string UnitModel7 = ""
+
+	@DisplayName("생산 유닛 7 - 아이콘 RUID")
+	property string UnitRuid7 = ""
+
+	@DisplayName("생산 유닛 7 - 선행 건물 이름(없으면 빈 칸)")
+	property string UnitCondition7 = ""
+
+	@DisplayName("생산 유닛 8 - Model")
+	property string UnitModel8 = ""
+
+	@DisplayName("생산 유닛 8 - 아이콘 RUID")
+	property string UnitRuid8 = ""
+
+	@DisplayName("생산 유닛 8 - 선행 건물 이름(없으면 빈 칸)")
+	property string UnitCondition8 = ""
+
+	method table ChangeActionUI()
+		-- 이 건물 자신에게 할당된 슬롯(UnitModel1..8 / UnitRuid1..8)만으로 버튼 목록을 만든다.
+		-- 건물마다 다른 슬롯 값을 넣으면 건물마다 다른 유닛을 생산하게 된다. UnitCondition이 있는
+		-- 슬롯은 그 이름의 건물을 이 건물 소유자가 아직 안 지었으면 숨기지 않고 잠금(Locked + LockReason)으로
+		-- 노출한다 — 플레이어가 "무엇을 지으면 무엇이 열리는지" 카드에서 볼 수 있게(스타크래프트 방식).
+		local slots = {
+			{ self.UnitModel1, self.UnitRuid1, self.UnitCondition1 },
+			{ self.UnitModel2, self.UnitRuid2, self.UnitCondition2 },
+			{ self.UnitModel3, self.UnitRuid3, self.UnitCondition3 },
+			{ self.UnitModel4, self.UnitRuid4, self.UnitCondition4 },
+			{ self.UnitModel5, self.UnitRuid5, self.UnitCondition5 },
+			{ self.UnitModel6, self.UnitRuid6, self.UnitCondition6 },
+			{ self.UnitModel7, self.UnitRuid7, self.UnitCondition7 },
+			{ self.UnitModel8, self.UnitRuid8, self.UnitCondition8 },
+		}
+		
+		local map = self.Entity.CurrentMap
+		---@type Structure_Info
+		local myInfo = self.Entity:GetComponent("script.Structure_Info")
+		local playerId = (myInfo ~= nil) and myInfo.PlayerID or ""
+		
+		-- 건설 중인 건물은 기능(유닛 생산)을 쓸 수 없다. 건설이 끝나야 생산 버튼이 뜬다.
+		if myInfo ~= nil and myInfo.IsUnderConstruction then
+			return {}
+		end
+		
+		local actionList = {}
+		for _, slot in ipairs(slots) do
+			local modelId = slot[1]
+			if modelId ~= "" then
+				local unlocked = _BuildRequirementLogic:HasAliveStructure(map, playerId, slot[3])
+				local lockReason = ""
+				if not unlocked then lockReason = _BuildRequirementLogic:GetRequirementText(slot[3]) end
+				if _ArdaBuildLogic:IsArdaStructureModel(modelId) then
+					-- 슬롯에 Arda 채집 건물이 들어 있으면 "유닛 생산"이 아니라 "건물 배치" 버튼이 된다: 누르면 고스트로
+					-- 스포너 영역 안에 위치를 정하고, 가장 가까운 내 일꾼이 지으러 간다(UIButtonAction PlaceBuilding).
+					local buildData = _ArdaBuildLogic:GetBuildData()
+					if slot[2] ~= "" then buildData.Ruid = slot[2] end
+					-- 툴팁(2026-10-07): 예전엔 이름이 "건설"뿐이고 비용 줄도 비어 있었다(비용이 진영 건물 표가 아니라 에르다 표에 있음).
+					local ardaData = _ArdaBuildLogic:GetData()
+					table.insert(actionList, {
+						ActionID = "PlaceBuilding",
+						UnitModel = modelId,
+						Ruid = buildData.Ruid,
+						Building = self.Entity,
+						BuildData = buildData,
+						Locked = not unlocked,
+						LockReason = lockReason,
+						TipTitle = "에르다 채집 건물",
+						TipInfo = "에르다 몬스터 구역 안에 건설 · 구역의 에르다 몬스터를 자동 공격해 에르다를 모음",
+						CostMeso = (ardaData ~= nil) and ardaData.Meso or 0,
+						CostErda = 0,
+						CostTime = buildData.BuildTime,
+					})
+				else
+					table.insert(actionList, {
+						ActionID = "Spawn",
+						UnitModel = modelId,
+						Ruid = slot[2],
+						-- 스폰 요청 시 "어느 건물에서" 생산할지 알아야 하므로 건물 자신을 함께 담아 보낸다.
+						Building = self.Entity,
+						Locked = not unlocked,
+						LockReason = lockReason,
+					})
+				end
+			end
+		end
+		return actionList
+	end
+
+	method any GetConditionForModel(string modelId)
+		-- 서버 재검증용: 이 건물의 생산 슬롯 중 modelId의 선행 건물 조건 문자열. 슬롯에 없는 모델이면 nil.
+		local slots = {
+			{ self.UnitModel1, self.UnitCondition1 }, { self.UnitModel2, self.UnitCondition2 },
+			{ self.UnitModel3, self.UnitCondition3 }, { self.UnitModel4, self.UnitCondition4 },
+			{ self.UnitModel5, self.UnitCondition5 }, { self.UnitModel6, self.UnitCondition6 },
+			{ self.UnitModel7, self.UnitCondition7 }, { self.UnitModel8, self.UnitCondition8 },
+		}
+		for _, slot in ipairs(slots) do
+			if slot[1] ~= "" and slot[1] == modelId then return slot[2] or "" end
+		end
+		return nil
+	end
+
+end

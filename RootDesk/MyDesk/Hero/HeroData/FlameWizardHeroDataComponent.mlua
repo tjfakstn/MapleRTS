@@ -1,0 +1,232 @@
+@Component
+script FlameWizardHeroDataComponent extends Component
+
+	method table BuildKit()
+		    return {
+		    
+		                name = "플레임위자드",
+		    
+		                -- 플레임 바이트는 시전 이펙트가 먼저 나오고, 전방 고정 박스 범위에 들어온 적에게 개별 타격 이펙트를 붙인다.
+		                        Q = {
+		                 name = "플레임 바이트",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "few",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 4.8,
+		                 width = 2.0,
+		                 telegraphShape = "front",
+		                 telegraphLength = 4.8,
+		                 telegraphWidth = 2.0,
+		                 hitShape = "front",
+		                 hitLength = 4.8,
+		                 hitWidth = 2.0,
+		                 visualVsHitDelta = 0,
+		                 damage = 180,
+		                 cooldown = 1,
+		                 castWindup = 0.16,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 5,
+		                 maxImpactFxCount = 5,
+		                 effectForwardOffset = 0.56,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectBaseLength = 2.553,
+		                 effectBaseWidth = 1.064,
+		                 effectScaleMultiplier = 0.94,
+		                 impactScaleMultiplier = 0.9
+		            },
+		    
+		                -- 플레임 볼텍스도 투사체 없이 전방 고정 범위를 태우는 형태로 먼저 맞춘다.
+		                        W = {
+		                 name = "플레임 볼텍스",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "few",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 5.2,
+		                 width = 2.4,
+		                 telegraphShape = "front",
+		                 telegraphLength = 5.2,
+		                 telegraphWidth = 2.4,
+		                 hitShape = "front",
+		                 hitLength = 5.2,
+		                 hitWidth = 2.4,
+		                 visualVsHitDelta = 0,
+		                 damage = 190,
+		                 cooldown = 9,
+		                 castWindup = 0.2,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 6,
+		                 maxImpactFxCount = 6,
+		                 effectForwardOffset = 0.68,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectBaseLength = 2.708,
+		                 effectBaseWidth = 1.25,
+		                 effectScaleMultiplier = 0.96,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                -- 플레임 템페스타는 자기 주변이 아니라 전방 넓은 범위를 휩쓰는 광역기로 우선 배치한다.
+		                        E = {
+		                 name = "플레임 템페스타",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "many",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 6.0,
+		                 width = 3.4,
+		                 telegraphShape = "front",
+		                 telegraphLength = 6.0,
+		                 telegraphWidth = 3.4,
+		                 hitShape = "front",
+		                 hitLength = 6.0,
+		                 hitWidth = 3.4,
+		                 visualVsHitDelta = 0,
+		                 damage = 290,
+		                 cooldown = 13,
+		                 castWindup = 0.24,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 8,
+		                 maxImpactFxCount = 8,
+		                 effectForwardOffset = 0.8,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectBaseLength = 3.0,
+		                 effectBaseWidth = 1.7,
+		                 effectScaleMultiplier = 1.0,
+		                 impactScaleMultiplier = 0.94
+		            },
+		    
+		                -- 카타클리즘은 화염 기둥이 완전히 떨어진 뒤 바닥 폭발 구간에서 다단 히트가 들어가도록 맞춘다.
+		                        R = {
+		                 name = "카타클리즘",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "many",
+		                 projectileCount = 0,
+		                 hitCount = 5,
+		                 burstCount = 0,
+		                 tickCount = 5,
+		                 shape = "front",
+		                 length = 18.8,
+		                 width = 14.0,
+		                 telegraphShape = "front",
+		                 telegraphLength = 18.8,
+		                 telegraphWidth = 14.0,
+		                 hitShape = "front",
+		                 hitLength = 18.8,
+		                 hitWidth = 14.0,
+		                 visualVsHitDelta = 0,
+		                 damage = 430,
+		                 cooldown = 100,
+		                 castWindup = 2.75,
+		                 tickInterval = 0.16,
+		                 moveLockDuration = 2.85,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 15,
+		                 maxImpactFxCount = 12,
+		                 effectForwardOffset = 0.9,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectBaseLength = 7.966,
+		                 effectBaseWidth = 5.932,
+		                 effectScaleMultiplier = 1.18,
+		                 impactScaleMultiplier = 1.0
+		            },
+		    
+		                -- 인피니티 플레임 서클: 캐릭터에서 일정 거리 앞쪽에 설치되는 장판형으로 단순화.
+		                        T = {
+		                 name = "인피니티 플레임 서클",
+		                 skillClass = "install_zone",
+		                 targetIntent = "many",
+		                 projectileCount = 0,
+		                 hitCount = 30,
+		                 burstCount = 0,
+		                 tickCount = 30,
+		                 shape = "self",
+		                 length = 4.4,
+		                 telegraphShape = "self",
+		                 telegraphRadius = 4.4,
+		                 hitShape = "self",
+		                 hitRadius = 4.4,
+		                 fixedPlacementDistance = 7.2,
+		                 visualVsHitDelta = 0,
+		                 damage = 230,
+		                 cooldown = 120,
+		                 tickInterval = 0.1667,
+		                 castWindup = 0.18,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 10,
+		                 maxImpactFxCount = 10,
+		                 effectForwardOffset = 0,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectBaseLength = 2.157,
+		                 effectScaleMultiplier = 1.02,
+		                 impactScaleMultiplier = 0.9,
+		                 pull = true,
+		                 pullSpeed = 5.2,
+		                 pullDuration = 0.14
+		            },
+		    
+		    
+		        }
+	end
+
+	method table BuildVfx()
+		    return {
+		    
+		                Q = {
+		                 effect = "efd10038b0154e6c80cb87e634b31d3a",
+		                 impact = "7f535dbabcea4a6fa8d4ddd7543b04e4",
+		                 multiImpactEffect = "7f535dbabcea4a6fa8d4ddd7543b04e4",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                W = {
+		                 effect = "e745e0ae4fcf43caba935227ca792e94",
+		                 impact = "ee44daedc0b94cecaf7a1383099bd8e6",
+		                 multiImpactEffect = "ee44daedc0b94cecaf7a1383099bd8e6",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                E = {
+		                 effect = "2a1611d4ed69422a97077992d1506f73",
+		                 impact = "c27691a98d2d4a5c8620312667110cd7",
+		                 multiImpactEffect = "c27691a98d2d4a5c8620312667110cd7",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                R = {
+		                 effect = "3dbeadd63ea248f5bb2f6a839a840346",
+		                 impact = "2834dc69c00f47ad830b0a07bab53ff0",
+		                 multiImpactEffect = "2834dc69c00f47ad830b0a07bab53ff0",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                T = {
+		                 effect = "efc2d6331b7e41d58bd118081862dc2c",
+		                 tickEffect = "2003ec10bced4099aa72ed1d7fa98ea1",
+		                 tickEffectDelay = 0.1,
+		                 visualTickCount = 8,
+		                 visualTickInterval = 0.72,
+		                 impact = "daff16e6c15744648fc3ad900e4b7f4c",
+		                 multiImpactEffect = "daff16e6c15744648fc3ad900e4b7f4c",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		    
+		        }
+	end
+
+end

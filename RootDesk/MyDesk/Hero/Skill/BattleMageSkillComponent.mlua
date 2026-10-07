@@ -1,0 +1,141 @@
+@Component
+script BattleMageSkillComponent extends Component
+
+	@ExecSpace("ServerOnly")
+	method void UnlockDeath(integer tier, string sourceSkillKey)
+		    -- 현재 프로젝트에는 스킬 레벨 UI가 없으므로 E/R을 처음 사용한 시점에 해당 데스 강화 단계를 해금한다.
+		    -- 이후 배틀메이지를 유지하는 동안에는 낮은 단계로 다시 내려가지 않는다.
+		    local requestedTier = math.max(1, math.floor(tonumber(tier) or 1))
+		    local currentTier = self._T.deathTier or 1
+		    if requestedTier <= currentTier then return end
+		    self._T.deathTier = requestedTier
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ProcessKills(table hitComponents)
+		    -- UnitHitComponent가 실제로 사망 처리한 적만 센다. 허수아비는 HP/사망이 없으므로 카운트하지 않는다.
+		    -- 엔티티 ID를 기록해 같은 시체를 여러 다단히트가 다시 세는 것을 막는다.
+		    if hitComponents == nil then return end
+		    if self._T.killedIds == nil then self._T.killedIds = {} end
+		    if self._T.deathKills == nil then self._T.deathKills = 0 end
+		
+		    for _, hitComp in ipairs(hitComponents) do
+		        local target = hitComp.Entity
+		        if isvalid(target) then
+		            local unitHit = target:GetComponent("script.UnitHitComponent")
+		            local targetId = tostring(target.Id)
+		            if _CombatTeamLogic:IsDead(target) and self._T.killedIds[targetId] ~= true then
+		                self._T.killedIds[targetId] = true
+		                self._T.deathKills = self._T.deathKills + 1
+		
+		                if self._T.deathKills >= 8 then
+		                    self._T.deathKills = self._T.deathKills - 8
+		                    local pos3 = target.TransformComponent.WorldPosition
+		                    self:TriggerDeathStrike(Vector2(pos3.x, pos3.y))
+		                end
+		            end
+		        end
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TriggerDeathStrike(Vector2 strikePosition)
+		    -- 8번째 처치가 난 자리에 데스가 내려쳐 주변 적까지 실제로 공격한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local tier = math.max(1, math.floor(tonumber(self._T.deathTier or 1) or 1))
+		    local damage = tier == 1 and 260 or (tier == 2 and 340 or 430)
+		    if self.Entity:GetComponent("script.HeroUnitSkill") ~= nil then
+		        damage = tier == 1 and 80 or (tier == 2 and 110 or 150)
+		    end
+		    local radius = tier == 1 and 1.45 or (tier == 2 and 1.7 or 2.0)
+		    core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		    local attackInfo = "DEATH:" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(damage)
+		    core:BeginAttackTargetFilter(attackInfo, 10)
+		    local deathHits = core:PerformAttack(CircleShape(strikePosition, radius), attackInfo)
+		    core:EndAttackTargetFilter(attackInfo)
+		    core.lastBattleMageDeathStrike = tostring(tier) .. ":" .. tostring(strikePosition.x) .. ":" .. tostring(strikePosition.y) .. ":" .. tostring(_UtilLogic.ElapsedSeconds)
+		
+		    -- 자동타로 추가 처치가 발생해도 다음 8킬을 향한 게이지에는 정상 반영한다.
+		    self:ProcessKills(deathHits)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void HandleDeathStrikeSync(string value)
+		    ---@type HeroSkillComponent
+		    local skillComp = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local tierStr, xStr, yStr = string.match(tostring(value), "^(%d+):(-?[%d%.]+):(-?[%d%.]+):")
+		    if tierStr == nil then
+		        return
+		    end
+		    local deathVfx = skillComp:BuildHeroVfx(13).DEATH
+		    if deathVfx == nil then return end
+		    local tier = tonumber(tierStr) or 1
+		    local ruid = deathVfx.baseStrike
+		    if tier == 2 then
+		        ruid = deathVfx.finishEnhanceStrike
+		    elseif tier >= 3 then
+		        ruid = deathVfx.genesisEnhanceStrike
+		    end
+		    if ruid == nil then return end
+		    local mirrored = self.Entity.TransformComponent.Scale.x < 0
+		    local scaleMultiplier = tier == 1 and 0.84 or (tier == 2 and 0.92 or 1.02)
+		    local scale = mirrored and Vector3(-scaleMultiplier, scaleMultiplier, 1) or Vector3(scaleMultiplier, scaleMultiplier, 1)
+		    local strikePos = Vector3(tonumber(xStr) or 0, tonumber(yStr) or 0, 0)
+		    _FogOfWarLogic:PlayEffectSeen(ruid, self.Entity, strikePos, 0, scale, false, nil)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ClearDeathCompanion()
+		    local state = self._T.deathCompanion
+		    if state == nil then return end
+		    if state.serial ~= nil and state.serial ~= 0 then
+		        _EffectService:RemoveEffect(state.serial)
+		    end
+		    self._T.deathCompanion = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateDeathCompanion()
+		    ---@type HeroSkillComponent
+		    local skillComp = self.Entity:GetComponent("script.HeroSkillComponent")
+		    -- 데스는 캐릭터의 반대쪽 위에 부착한다. SyncFlip이 로컬 X 오프셋을 함께 뒤집으므로
+		    -- 왼쪽을 보면 오른쪽 위, 오른쪽을 보면 왼쪽 위에서 항상 따라다닌다.
+		    if _CombatTeamLogic:IsDead(self.Entity) or skillComp:GetSelectedHeroIndex() ~= 13 then
+		        self:ClearDeathCompanion()
+		        return
+		    end
+		
+		    local state = self._T.deathCompanion
+		    if state ~= nil and state.serial ~= nil and state.serial ~= 0 then return end
+		
+		    local deathVfx = skillComp:BuildHeroVfx(13).DEATH
+		    if deathVfx == nil or deathVfx.appear == nil then
+		        return
+		    end
+		    local serial = _FogOfWarLogic:PlayEffectAttachedSeen(
+		        deathVfx.appear,
+		        self.Entity,
+		        Vector3(0.58, 0.54, 0),
+		        0,
+		        Vector3(0.82, 0.82, 1),
+		        true,
+		        { SyncFlip = true })
+		    if serial == nil or serial == 0 then
+		        return
+		    end
+		    self._T.deathCompanion = { serial = serial }
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		    -- 기존 HeroSkillEffectComponent.OnUpdate와 동일하게 로컬 플레이어 자신만 갱신한다.
+		    if self.Entity ~= _UserService.LocalPlayer and self.Entity:GetComponent("script.HeroUnit") == nil then return end
+		    self:UpdateDeathCompanion()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		    self:ClearDeathCompanion()
+	end
+
+end

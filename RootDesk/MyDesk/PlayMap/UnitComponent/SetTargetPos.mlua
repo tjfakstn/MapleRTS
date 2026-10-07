@@ -1,0 +1,36 @@
+@Component
+script SetTargetPos extends Component
+
+	property number Unit_Radius = 0.8
+
+	method SyncTable<Vector2> GetCircularPosition(Vector2 centerPos, integer unitCount)
+		local Position = {}
+		local currentCount = 0
+		local ring = 0
+		
+		table.insert(Position, centerPos)
+		currentCount = 1
+		
+		while currentCount < unitCount do
+			ring = ring + 1
+			
+			local ringRadius = ring * self.Unit_Radius
+			local ringCapacity = math.floor((2 * math.pi * ringRadius) / self.Unit_Radius)
+			
+			local unitsInRing = math.min(ringCapacity, unitCount - currentCount)
+			
+			for i = 1, unitsInRing do
+				local angle = (i - 1) * (2 * math.pi / unitsInRing)
+				local offsetX = math.cos(angle) * ringRadius
+				local offsetY = math.sin(angle) * ringRadius
+				
+				local finalPos = centerPos + Vector2(offsetX, offsetY)
+				table.insert(Position, finalPos)
+				currentCount = currentCount + 1
+			end
+		end
+		
+		return Position
+	end
+
+end

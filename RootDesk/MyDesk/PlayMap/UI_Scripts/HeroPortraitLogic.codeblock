@@ -1,0 +1,33 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "codeblock://64a3a29a-6dbc-4e19-a702-b3a5090a0dca",
+  "ContentType": "x-mod/codeblock",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "CoreVersion": {
+        "Major": 0,
+        "Minor": 2
+      },
+      "ScriptVersion": {
+        "Major": 1,
+        "Minor": 1
+      },
+      "Description": "",
+      "Id": "64a3a29a-6dbc-4e19-a702-b3a5090a0dca",
+      "Language": 1,
+      "Name": "HeroPortraitLogic",
+      "Type": 5,
+      "Source": 0,
+      "Target": null
+    }
+  }
+}

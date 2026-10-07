@@ -1,0 +1,1421 @@
+@Component
+script HeroSkillEffectComponent extends Component
+
+	@ExecSpace("ClientOnly")
+	method void ClearFollowingCastEffects()
+		    -- 시전자에 붙어 있는 연출만 제거한다. 이미 날아간 화살은 독립 수명을 유지한다.
+		    for _, rec in pairs(self._T.bowChannelEffects or {}) do _EffectService:RemoveEffect(rec.serial) end
+		    self._T.bowChannelEffects = {}
+		    for _, serial in pairs(self._T.followingCastEffects or {}) do
+		        _EffectService:RemoveEffect(serial)
+		    end
+		    self._T.followingCastEffects = {}
+	end
+
+	@ExecSpace("ClientOnly")
+	method void StartBowChannelEffect(string ruid, Vector3 position, Vector3 scale, string slot, string castId)
+		    -- 원본 유지 애니메이션 하나를 반복한다. 매 화살마다 첫 프레임으로 재시작하지 않는다.
+		    if self._T.bowChannelEffects == nil then self._T.bowChannelEffects = {} end
+		    local rec = self._T.bowChannelEffects[slot]
+		    if rec ~= nil and rec.castId == castId then return end
+		    if rec ~= nil then _EffectService:RemoveEffect(rec.serial) end
+		    local transform = self.Entity.TransformComponent
+		    local origin = transform.WorldPosition
+		    local parentScale = transform.Scale
+		    local sx = math.abs(parentScale.x) > 0.001 and parentScale.x or 1
+		    local sy = math.abs(parentScale.y) > 0.001 and parentScale.y or 1
+		    local offset = Vector3((position.x - origin.x) / sx, (position.y - origin.y) / sy, 0)
+		    local serial = _FogOfWarLogic:PlayEffectAttachedSeen(ruid, self.Entity, offset, 0,
+		        Vector3(math.abs(scale.x / sx), math.abs(scale.y / sy), 1), true, { SyncFlip = true })
+		    self._T.bowChannelEffects[slot] = { serial = serial, castId = castId }
+	end
+
+	@ExecSpace("ClientOnly")
+	method void EndBowChannelEffect(string slot, string castId)
+		    -- 이전 시전의 종료 콜백이 새 시전의 유지 이펙트를 지우지 않게 한다.
+		    local rec = (self._T.bowChannelEffects or {})[slot]
+		    if rec == nil or rec.castId ~= castId then return end
+		    _EffectService:RemoveEffect(rec.serial)
+		    self._T.bowChannelEffects[slot] = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ClearDarkCycleEffects()
+		    -- 중단된 시전의 예약 콜백과 이미 재생 중인 창 연출을 함께 정리한다.
+		    self._T.darkCycleVisualCast = nil
+		    for _, serial in ipairs(self._T.darkCycleEffects or {}) do _EffectService:RemoveEffect(serial) end
+		    self._T.darkCycleEffects = {}
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnMapLeave(Entity map)
+		    -- 같은 맵으로 돌아와도 이전 시전의 콜백을 재사용하지 않는다.
+		    self._T.castMapEpoch = (self._T.castMapEpoch or 0) + 1
+		    self:ClearFollowingCastEffects()
+		    self:ClearDarkCycleEffects()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayFollowingCastEffect(string ruid, Vector3 position, Vector3 scale, string slot)
+		    if self._T.followingCastEffects == nil then self._T.followingCastEffects = {} end
+		    local previous = self._T.followingCastEffects[slot]
+		    if previous ~= nil then _EffectService:RemoveEffect(previous) end
+		    local origin = self.Entity.TransformComponent.WorldPosition
+		    local parentScale = self.Entity.TransformComponent.Scale
+		    local sx = math.abs(parentScale.x) > 0.001 and parentScale.x or 1
+		    local sy = math.abs(parentScale.y) > 0.001 and parentScale.y or 1
+		    local offset = Vector3((position.x - origin.x) / sx, (position.y - origin.y) / sy, 0)
+		    self._T.followingCastEffects[slot] = _FogOfWarLogic:PlayEffectAttachedSeen(ruid, self.Entity, offset, 0,
+		        Vector3(math.abs(scale.x), math.abs(scale.y), 1), false, { SyncFlip = true })
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		    -- 컴포넌트가 소유한 유지/마무리 이펙트를 해제한다.
+		    self:ClearDarkCycleEffects()
+		    self:ClearFollowingCastEffects()
+		    -- 입력 이벤트 해제는 HeroSkillInputComponent가 담당한다. 여기에는 기존 연출 정리만 남긴다.
+		    self:ClearNightWalkerIdleBatVisuals()
+		    self:StopSustainedAttachedEffect()
+		    -- 배틀메이지 데스 동반체/윈드브레이커 회오리 연출은 각자의 전용 컴포넌트가 자기 OnEndPlay에서 정리한다.
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		if _CombatTeamLogic:IsDead(self.Entity) then
+			self:ClearFollowingCastEffects()
+			self:ClearDarkCycleEffects()
+			self:StopSustainedAttachedEffect()
+			self:ClearNightWalkerIdleBatVisuals()
+			return
+		end
+		    ---@type HeroSkillComponent
+		    local skillComp = self.Entity:GetComponent("script.HeroSkillComponent")
+		    -- 서버가 HeroSkillComponent를 나중에 붙이는 경우(복제 순서) nil일 수 있다. 다음 프레임에 다시 본다.
+		    if skillComp == nil then return end
+		    local selectedHero = skillComp:GetSelectedHeroIndex()
+		    if _CombatTeamLogic:IsDead(self.Entity) or self._T.followingMap ~= self.Entity.CurrentMap
+		        or self._T.followingHero ~= selectedHero then
+		        self:ClearFollowingCastEffects()
+		        self:ClearDarkCycleEffects()
+		    end
+		    self._T.followingMap = self.Entity.CurrentMap
+		    self._T.followingHero = selectedHero
+		    if self.Entity ~= _UserService.LocalPlayer and self.Entity:GetComponent("script.HeroUnit") == nil then return end
+		
+		    self:UpdateSustainedAttachedEffect()
+		    -- 배틀메이지 데스 동반체/윈드브레이커 회오리 연출은 각자의 전용 컴포넌트가 자기 OnUpdate에서 갱신한다.
+		
+		    local currentIndex = skillComp:GetSelectedHeroIndex()
+		    if currentIndex ~= 8 then
+		        self:ClearNightWalkerIdleBatVisuals()
+		        return
+		    end
+		
+		    self:UpdateNightWalkerIdleBatVisuals(delta)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayChargeMotionEffect(string skillKey)
+		    ---@type HeroSkillComponent
+		    local skillComp = self.Entity:GetComponent("script.HeroSkillComponent")
+		    -- 차징 스킬을 누르고 있는 동안 보여줄 시전 모션. 최대 차징 시간을 넘겨도 이펙트가 먼저 꺼지지
+		    -- 않도록 넉넉한 지속시간을 주고, 키를 떼는 순간 StopSustainedAttachedEffect로 직접 지운다.
+		    local skillVfx = skillComp:BuildHeroVfx(skillComp:GetSelectedHeroIndex())
+		    local vfx = skillVfx ~= nil and skillVfx[skillKey] or nil
+		    if vfx == nil then
+		        return
+		    end
+		
+		    local ruid = vfx.chargeEffect or vfx.effect
+		    if ruid == nil then
+		        return
+		    end
+		
+		    self:PlayLoopingAttachedEffect(
+		        ruid,
+		        tonumber(vfx.chargeMaxDuration or 6) or 6,
+		        tonumber(vfx.chargeLocalOffsetY or 0.35) or 0.35,
+		        tonumber(vfx.chargeScaleMultiplier or 1) or 1)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlaySecondaryCastEffect(table skillVfx, Vector3 originPos, Vector2 dir, number angleForEffect, Vector3 baseScale)
+		    -- 일부 스킬은 주 시전 이펙트와 별개로 발밑/후방 보조 이펙트를 같이 써야 한다.
+		    if skillVfx == nil or skillVfx.castSecondaryEffect == nil then return end
+		
+		    local offset = tonumber(skillVfx.castSecondaryForwardOffset or 0) or 0
+		    local scaleMultiplier = tonumber(skillVfx.castSecondaryScaleMultiplier or 1) or 1
+		    local effectPos = Vector3(originPos.x + dir.x * offset, originPos.y + dir.y * offset, originPos.z)
+		    local effectScale = Vector3(baseScale.x * scaleMultiplier, baseScale.y * scaleMultiplier, baseScale.z)
+		    local delay = tonumber(skillVfx.castSecondaryDelay or 0) or 0
+		
+		    _TimerService:SetTimerOnce(function()
+		        if not isvalid(self.Entity) then return end
+		        _FogOfWarLogic:PlayEffectSeen(skillVfx.castSecondaryEffect, self.Entity, effectPos, angleForEffect, effectScale, false, nil)
+		    end, delay)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlaySecondaryTickEffect(table skillVfx, Vector3 effectPos, number angleForEffect, Vector3 baseScale)
+		    if skillVfx == nil or skillVfx.tickSecondaryEffect == nil then return end
+		
+		    local scaleMultiplier = tonumber(skillVfx.tickSecondaryScaleMultiplier or 1) or 1
+		    local effectScale = Vector3(baseScale.x * scaleMultiplier, baseScale.y * scaleMultiplier, baseScale.z)
+		    _FogOfWarLogic:PlayEffectSeen(skillVfx.tickSecondaryEffect, self.Entity, effectPos, angleForEffect, effectScale, false, nil)
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean PlayWorldAnchoredSpriteEffect(table skillVfx, Vector3 effectPos, Vector3 effectScale)
+		    if skillVfx == nil or skillVfx.effect == nil then return false end
+		    if not isvalid(self.Entity) or not isvalid(self.Entity.CurrentMap) then return false end
+		
+		    local spawned = _SpawnService:SpawnByModelId(
+		        "projectile",
+		        "WorldFx_" .. tostring(math.floor((_UtilLogic.ElapsedSeconds or 0) * 1000)),
+		        effectPos,
+		        self.Entity.CurrentMap
+		    )
+		    if spawned == nil then
+		        return false
+		    end
+		
+		    if spawned.SpriteRendererComponent ~= nil then
+		        spawned.SpriteRendererComponent.SpriteRUID = skillVfx.effect
+		        spawned.SpriteRendererComponent.FlipX = effectScale.x < 0
+		    end
+		    if spawned.TransformComponent ~= nil then
+		        local scaleX = math.abs(effectScale.x)
+		        spawned.TransformComponent.Scale = Vector3(scaleX, effectScale.y, effectScale.z)
+		    end
+		
+		    local lifeTime = tonumber(skillVfx.worldEffectLifetime or 0.72) or 0.72
+		    _TimerService:SetTimerOnce(function()
+		        if isvalid(spawned) then
+		            spawned:Destroy()
+		        end
+		    end, lifeTime)
+		    return true
+	end
+
+	@ExecSpace("ClientOnly")
+	method string GetProjectileVisualRuid(table skillVfx)
+		    -- 투사체 스킬은 "날아가는 비주얼"을 effect0 / ball에만 맡긴다.
+		    -- effect는 어디까지나 시전 순간의 캐스트 이펙트다.
+		    if skillVfx == nil then return nil end
+		    return skillVfx.effect0 or skillVfx.ball
+	end
+
+	@ExecSpace("ClientOnly")
+	method void StopSustainedAttachedEffect()
+		    -- 유지 중인 부착 이펙트를 지운다. serial이 없으면 조용히 넘어간다.
+		    local state = self._T.sustainedEffect
+		    if state == nil then return end
+		    if state.serial ~= nil and state.serial ~= 0 then
+		        _EffectService:RemoveEffect(state.serial)
+		    else
+		    end
+		    self._T.sustainedEffect = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayLoopingAttachedEffect(string ruid, number duration, number localOffsetY, number scale)
+		    -- 이펙트를 캐릭터에 붙여서 루프로 유지한다. duration이 지나면 UpdateSustainedAttachedEffect가 지운다.
+		    -- SyncFlip을 켜면 캐릭터가 좌우로 돌 때 이펙트도 같이 뒤집혀 방향이 자동으로 맞는다.
+		    if ruid == nil or ruid == "" then
+		        return
+		    end
+		
+		    self:StopSustainedAttachedEffect()
+		
+		    local serial = _FogOfWarLogic:PlayEffectAttachedSeen(
+		        ruid,
+		        self.Entity,
+		        Vector3(0, localOffsetY or 0, 0),
+		        0,
+		        Vector3(scale or 1, scale or 1, 1),
+		        true,
+		        { SyncFlip = true })
+		
+		    if serial == nil or serial == 0 then
+		        return
+		    end
+		
+		    self._T.sustainedEffect = {
+		        serial = serial,
+		        expiresAt = (_UtilLogic.ElapsedSeconds or 0) + (duration or 5),
+		    }
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlaySustainedAttachedEffect(table skillVfx, number scaleMultiplier)
+		    -- 채널링 시전 이펙트를 매 틱 새로 띄우면, 시전자가 움직일 때 이전 이펙트가 그 자리에 남아
+		    -- 잔상이 되고 재생 사이에 끊김이 생긴다. 그래서 여기서는 PlayEffectAttached + isLoop=true로
+		    -- 캐릭터에 붙여서 한 번만 띄우고, 지속시간이 끝나면 RemoveEffect로 지운다.
+		    -- SyncFlip 옵션을 켜면 캐릭터가 좌우로 돌 때 이펙트도 같이 뒤집혀서 방향이 자동으로 맞는다.
+		    if skillVfx == nil or skillVfx.sustainedEffect == nil then return end
+		
+		    self:PlayLoopingAttachedEffect(
+		        skillVfx.sustainedEffect,
+		        tonumber(skillVfx.sustainedDuration or 5) or 5,
+		        tonumber(skillVfx.sustainedLocalOffsetY or 0) or 0,
+		        (tonumber(skillVfx.sustainedScaleMultiplier or 1) or 1) * (scaleMultiplier or 1))
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateSustainedAttachedEffect()
+		    local state = self._T.sustainedEffect
+		    if state == nil then return end
+		    if (_UtilLogic.ElapsedSeconds or 0) < (state.expiresAt or 0) then return end
+		    self:StopSustainedAttachedEffect()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ClearNightWalkerIdleBatVisuals()
+		    if self._T.clientNightWalkerIdleBats == nil then return end
+		    for _, slotState in ipairs(self._T.clientNightWalkerIdleBats) do
+		        if slotState ~= nil and isvalid(slotState.entity) then
+		            slotState.entity:Destroy()
+		        end
+		    end
+		    self._T.clientNightWalkerIdleBats = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method Vector3 GetNightWalkerIdleBatWorldPosition(integer slotIndex, number now)
+		    ---@type HeroSkillComponent
+		    local skillComp = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local batConfig = skillComp:GetNightWalkerBatConfig()
+		    local pos3 = self.Entity.TransformComponent.WorldPosition
+		    local baseOffset = batConfig.idleOffsets[slotIndex] or Vector2(0, 0)
+		    local wave = now * 2.6 + slotIndex * 1.15
+		    local bobX = math.cos(wave) * 0.06
+		    local bobY = math.sin(wave) * 0.09
+		    return Vector3(pos3.x + baseOffset.x + bobX, pos3.y + baseOffset.y + bobY, 0)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateNightWalkerIdleBatVisuals(number delta)
+		    ---@type HeroSkillComponent
+		    local skillComp = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local batVfx = skillComp:BuildHeroVfx(8).BAT
+		    if batVfx == nil then
+		        self:ClearNightWalkerIdleBatVisuals()
+		        return
+		    end
+		
+		    local batConfig = skillComp:GetNightWalkerBatConfig()
+		    local totalBats = batConfig.totalBats or 0
+		    if totalBats <= 0 then
+		        self:ClearNightWalkerIdleBatVisuals()
+		        return
+		    end
+		
+		    if self._T.clientNightWalkerIdleBats == nil or #self._T.clientNightWalkerIdleBats ~= totalBats then
+		        self:ClearNightWalkerIdleBatVisuals()
+		        self._T.clientNightWalkerIdleBats = {}
+		        for slotIndex = 1, totalBats do
+		            self._T.clientNightWalkerIdleBats[slotIndex] = {
+		                entity = nil,
+		                busyUntil = 0,
+		            }
+		        end
+		    end
+		
+		    local now = _UtilLogic.ElapsedSeconds or 0
+		    local idleRuid = batVfx.idleEffect or batVfx.effect0 or batVfx.ball
+		    if idleRuid == nil then return end
+		
+		    local idleScaleMultiplier = tonumber(batVfx.idleScaleMultiplier or 1) or 1
+		    local mirrored = self.Entity.TransformComponent.Scale.x < 0
+		    local idleScale = mirrored and Vector3(-idleScaleMultiplier, idleScaleMultiplier, 1) or Vector3(idleScaleMultiplier, idleScaleMultiplier, 1)
+		
+		    for slotIndex, slotState in ipairs(self._T.clientNightWalkerIdleBats) do
+		        local shouldHide = now < (slotState.busyUntil or 0)
+		        if shouldHide then
+		            if isvalid(slotState.entity) then
+		                slotState.entity:Destroy()
+		                slotState.entity = nil
+		            end
+		        else
+		            if (not isvalid(slotState.entity)) then
+		                local spawnPos = self:GetNightWalkerIdleBatWorldPosition(slotIndex, now)
+		                slotState.entity = _SpawnService:SpawnByModelId("projectile", "NightWalkerIdleBat_" .. tostring(slotIndex), spawnPos, self.Entity.CurrentMap)
+		                if isvalid(slotState.entity) and slotState.entity.SpriteRendererComponent ~= nil then
+		                    slotState.entity.SpriteRendererComponent.SpriteRUID = idleRuid
+		                    slotState.entity.SpriteRendererComponent.FlipX = mirrored
+		                end
+		            end
+		
+		            if isvalid(slotState.entity) and slotState.entity.TransformComponent ~= nil then
+		                slotState.entity.TransformComponent.WorldPosition = self:GetNightWalkerIdleBatWorldPosition(slotIndex, now)
+		                slotState.entity.TransformComponent.Scale = idleScale
+		            end
+		            if isvalid(slotState.entity) and slotState.entity.SpriteRendererComponent ~= nil then
+		                slotState.entity.SpriteRendererComponent.FlipX = mirrored
+		            end
+		        end
+		    end
+	end
+
+	@ExecSpace("ClientOnly")
+	method string GetProjectileVisualRuidForShot(table skillVfx, integer shotNumber, integer totalShots)
+		    if skillVfx == nil then return nil end
+		
+		    local finalShotIndex = tonumber(skillVfx.finalShotIndex or totalShots) or totalShots
+		    if shotNumber == finalShotIndex then
+		        return skillVfx.finalProjectileRuid or skillVfx.finalBall or self:GetProjectileVisualRuid(skillVfx)
+		    end
+		
+		    return self:GetProjectileVisualRuid(skillVfx)
+	end
+
+	@ExecSpace("ClientOnly")
+	method string GetImpactPrimaryRuidForShot(table skillVfx, integer shotNumber, integer totalShots)
+		    if skillVfx == nil then return nil end
+		
+		    local finalShotIndex = tonumber(skillVfx.finalShotIndex or totalShots) or totalShots
+		    if shotNumber == finalShotIndex and skillVfx.finalImpactEffect ~= nil then
+		        return skillVfx.finalImpactEffect
+		    end
+		
+		    -- ⚠ effect2는 피격 이펙트가 아니라 "시전자 쪽" 이펙트다. 두 가지 용도로만 쓰인다.
+		    --   (1) 시전 후속타: effect2Delay / effect2ForwardOffset 으로 시전자 앞에서 재생
+		    --   (2) 채널링 종료 모션: endEffectDelay 로 재생
+		    -- 예전에는 이 체인이 multiImpactEffect -> effect2 -> impact 순이라, multiImpactEffect가 없는
+		    -- 스킬(보우마스터 R/T, 캡틴 R)은 impact가 멀쩡히 있는데도 effect2가 이겨서
+		    -- "맞은 적한테 시전/종료 모션(활)이 뜨는" 버그가 났다. effect2는 여기서 완전히 뺀다.
+		    return skillVfx.multiImpactEffect or skillVfx.impact
+	end
+
+	@ExecSpace("ClientOnly")
+	method string GetImpactSecondaryRuidForShot(table skillVfx, integer shotNumber, integer totalShots)
+		    if skillVfx == nil then return nil end
+		
+		    local finalShotIndex = tonumber(skillVfx.finalShotIndex or totalShots) or totalShots
+		    if shotNumber == finalShotIndex and skillVfx.finalImpactSecondaryEffect ~= nil then
+		        return skillVfx.finalImpactSecondaryEffect
+		    end
+		
+		    return skillVfx.multiImpactSecondaryEffect
+	end
+
+	@ExecSpace("ClientOnly")
+	method table PopActiveProjectileVisual(string skillKey)
+		    local projectileEntity = nil
+		    local shotNumber = 1
+		
+		    if self._T.activeProjectileVisuals ~= nil then
+		        local activeProjectiles = self._T.activeProjectileVisuals[skillKey]
+		        if activeProjectiles ~= nil and #activeProjectiles > 0 then
+		            projectileEntity = table.remove(activeProjectiles, 1)
+		        end
+		    end
+		
+		    if self._T.activeProjectileShotNumbers ~= nil then
+		        local activeShotNumbers = self._T.activeProjectileShotNumbers[skillKey]
+		        if activeShotNumbers ~= nil and #activeShotNumbers > 0 then
+		            shotNumber = table.remove(activeShotNumbers, 1)
+		        end
+		    end
+		
+		    return {
+		        entity = projectileEntity,
+		        shotNumber = shotNumber,
+		    }
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayNightWalkerBatFlight(table points, table batVfx)
+		    if points == nil or #points < 3 or batVfx == nil then return end
+		
+		    local flyRuid = batVfx.effect0 or batVfx.ball
+		    if flyRuid == nil then return end
+		
+		    local spawned = _SpawnService:SpawnByModelId("projectile", "NightWalkerBat", Vector3(points[1].x, points[1].y, 0), self.Entity.CurrentMap)
+		    if spawned == nil then return end
+		
+		    local batScaleMultiplier = tonumber(batVfx.scaleMultiplier or 1) or 1
+		    local impactScaleMultiplier = tonumber(batVfx.impactScaleMultiplier or 1) or 1
+		    local projectileSpeed = tonumber(batVfx.projectileSpeed or 16.5) or 16.5
+		    local resolveSegmentMirrored = function(fromPos, toPos, fallbackMirrored)
+		        local travelDir = toPos - fromPos
+		        -- 배트는 "다음에 도달할 엔티티/복귀 지점"을 보면서 날아가야 한다.
+		        -- 거의 수직 이동인 구간에서는 직전 방향을 유지해 스프라이트가 덜 털리게 만든다.
+		        if math.abs(travelDir.x) <= 0.03 then
+		            return fallbackMirrored
+		        end
+		        return travelDir.x >= 0
+		    end
+		    local initialMirrored = resolveSegmentMirrored(points[1], points[2], self.Entity.TransformComponent.Scale.x < 0)
+		    if spawned.TransformComponent ~= nil then
+		        -- 비행 박쥐는 좌우 방향을 FlipX만으로 제어한다.
+		        -- scale 부호까지 같이 뒤집으면 왕복 구간에서 시각적으로 같은 방향처럼 보일 수 있다.
+		        spawned.TransformComponent.Scale = Vector3(batScaleMultiplier, batScaleMultiplier, 1)
+		    end
+		    if spawned.SpriteRendererComponent ~= nil then
+		        spawned.SpriteRendererComponent.SpriteRUID = flyRuid
+		        spawned.SpriteRendererComponent.FlipX = initialMirrored
+		    end
+		
+		    local moveToPoint = nil
+		    moveToPoint = function(pointIndex)
+		        if not isvalid(spawned) then return end
+		        if pointIndex > #points then
+		            spawned:Destroy()
+		            return
+		        end
+		
+		        local currentPos3 = spawned.TransformComponent.WorldPosition
+		        local currentPos = Vector2(currentPos3.x, currentPos3.y)
+		        local destination = points[pointIndex]
+		        local currentFlip = false
+		        if spawned.SpriteRendererComponent ~= nil then
+		            currentFlip = spawned.SpriteRendererComponent.FlipX
+		        end
+		        local segmentMirrored = resolveSegmentMirrored(currentPos, destination, currentFlip)
+		        if spawned.SpriteRendererComponent ~= nil then
+		            spawned.SpriteRendererComponent.FlipX = segmentMirrored
+		        end
+		        local segmentImpactScale = segmentMirrored
+		            and Vector3(-impactScaleMultiplier, impactScaleMultiplier, 1)
+		            or Vector3(impactScaleMultiplier, impactScaleMultiplier, 1)
+		        local duration = math.max(0.03, (destination - currentPos):Magnitude() / projectileSpeed)
+		        local tweener = _TweenLogic:MoveTo(spawned, destination, duration, EaseType.Linear)
+		        if tweener == nil then
+		            spawned.TransformComponent.WorldPosition = Vector3(destination.x, destination.y, 0)
+		            if pointIndex < #points and batVfx.impact ~= nil then
+		                _FogOfWarLogic:PlayEffectSeen(batVfx.impact, self.Entity, Vector3(destination.x, destination.y, 0), 0, segmentImpactScale, false, nil)
+		            end
+		            moveToPoint(pointIndex + 1)
+		            return
+		        end
+		
+		        tweener:SetOnEndCallback(function()
+		            if not isvalid(spawned) then return end
+		            if pointIndex < #points and batVfx.impact ~= nil then
+		                _FogOfWarLogic:PlayEffectSeen(batVfx.impact, self.Entity, Vector3(destination.x, destination.y, 0), 0, segmentImpactScale, false, nil)
+		            end
+		            moveToPoint(pointIndex + 1)
+		        end)
+		    end
+		
+		    moveToPoint(2)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayRangeTelegraph(table skillDef, table skillVfx, Vector3 casterPos, number angleRad, boolean mirrored)
+		    ---@type HeroSkillComponent
+		    local skillComp = self.Entity:GetComponent("script.HeroSkillComponent")
+		    -- 판정과 동일한 rangeScale/형상 데이터를 써서, 장판·유지기·넓은 일격의 대략적인 영향 범위를 잠깐 보여 준다.
+		    -- 현재 월드에는 범용 선 렌더러/외곽선 모델이 없으므로, 검증된 스킬 animationclip을 낮은 스케일의
+		    -- 짧은 지면 텔레그래프로 재생한다. 정식 outline 스프라이트가 확보되면 telegraph RUID만 교체하면 된다.
+		    if skillDef == nil or skillDef.telegraph ~= true or skillVfx.telegraph == nil then return end
+		    local telegraphShape = skillDef.telegraphShape or skillDef.shape
+		    local telegraphLength = skillDef.telegraphLength or skillDef.telegraphRadius or skillDef.length
+		    local telegraphWidth = skillDef.telegraphWidth or skillDef.telegraphRadius or skillDef.width or telegraphLength
+		    local rangeScaleMultiplier = 1
+		    if skillComp:IsThrowBlastingEnhancedSkill(skillComp:GetSelectedHeroIndex(), "", skillDef) and skillComp:GetThrowBlastingState() ~= nil then
+		        rangeScaleMultiplier = rangeScaleMultiplier * (skillComp:GetThrowBlastingState().rangeMultiplier or 1.2)
+		    end
+		    if skillComp:IsNightWalkerDominionEnhancedSkill(skillComp:GetSelectedHeroIndex(), "", skillDef) and skillComp:GetNightWalkerDominionState() ~= nil then
+		        rangeScaleMultiplier = rangeScaleMultiplier * (skillComp:GetNightWalkerDominionState().rangeMultiplier or 1.5)
+		    end
+		    -- 안내선도 실제 판정과 같은 값을 쓴다(따로 계산하면 또 어긋난다).
+		    local resolvedTelegraphHitbox = skillComp:ResolveHitboxDimensions(skillDef)
+		    local scaledLength = resolvedTelegraphHitbox.length * skillComp.rangeScale * rangeScaleMultiplier
+		    local scaledWidth = resolvedTelegraphHitbox.width * skillComp.rangeScale * rangeScaleMultiplier
+		    local dir = Vector2(math.cos(angleRad), math.sin(angleRad))
+		    local telegraphPos = casterPos
+		    local skillClass = tostring(skillDef.skillClass or "")
+		    if telegraphShape == "front" and skillClass ~= "ground_aoe" and skillClass ~= "install_zone" then
+		        telegraphPos = Vector3(casterPos.x + dir.x * scaledLength * 0.5, casterPos.y + dir.y * scaledLength * 0.5, 0)
+		    end
+		    local scaleX = math.max(0.55, scaledLength * 0.55)
+		    local scaleY = math.max(0.55, scaledWidth * 0.55)
+		    if mirrored then scaleX = -scaleX end
+		    _FogOfWarLogic:PlayEffectSeen(skillVfx.telegraph, self.Entity, telegraphPos, 0, Vector3(scaleX, scaleY, 1), false, nil)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void HandleSkillSync(string name, any value)
+		    ---@type HeroSkillComponent
+		    local skillComp = self.Entity:GetComponent("script.HeroSkillComponent")
+		    -- heroIndex / heroId는 선택 상태 동기화용. lastCast가 바뀌면 현재 선택 영웅의 VFX/SFX를 재생한다.
+		    if name == "heroIndex" or name == "heroId" then
+		        skillComp:RefreshHeroNameText()
+		        local battleMage = self.Entity:GetComponent("script.BattleMageSkillComponent")
+		        if battleMage ~= nil then battleMage:UpdateDeathCompanion() end
+		        return
+		    end
+		
+		    if name == "lastGaleTravel" then
+		        -- 파싱과 연출 재생은 윈드브레이커 전용 컴포넌트가 소유한다. 여기서는 동기화 수신만 담당한다.
+		        local windBreaker = self.Entity:GetComponent("script.WindBreakerSkillComponent")
+		        if windBreaker ~= nil then windBreaker:HandleGaleTravelSync(value) end
+		        return
+		    end
+		
+		    if name == "lastBattleMageDeathStrike" then
+		        -- 파싱과 연출 재생은 배틀메이지 전용 컴포넌트가 소유한다. 여기서는 동기화 수신만 담당한다.
+		        local battleMage = self.Entity:GetComponent("script.BattleMageSkillComponent")
+		        if battleMage ~= nil then battleMage:HandleDeathStrikeSync(value) end
+		        return
+		    end
+		
+		    if name == "lastImpactBatch" then
+		        local tokens = skillComp:GetImpactBatchTokens(tostring(value))
+		        local impactSkillKey = tokens[1]
+		        local synchronizedShot = 1
+		        if impactSkillKey ~= nil and string.find(impactSkillKey, "@") ~= nil then
+		            local parts = {}
+		            for part in string.gmatch(impactSkillKey, "[^@]+") do table.insert(parts, part) end
+		            impactSkillKey = parts[1]
+		            synchronizedShot = tonumber(parts[2]) or 1
+		        end
+		        if impactSkillKey == nil or #tokens < 3 then
+		            return
+		        end
+		
+		        local currentIndex = skillComp:GetSelectedHeroIndex()
+		        local heroKit = skillComp:BuildHeroKit(currentIndex)
+		        local skillDef = heroKit[impactSkillKey]
+		        local skillVfx = skillComp:BuildHeroVfx(currentIndex)[impactSkillKey]
+		        if skillDef == nil or skillVfx == nil then
+		            return
+		        end
+		
+		        local mirrored = self.Entity.TransformComponent.Scale.x < 0
+		        local effectScaleMultiplier = (skillVfx.throwBlastScaleMultiplier or skillDef.effectScaleMultiplier or 1) * skillComp:GetEnhancedVisualScaleMultiplier(currentIndex, impactSkillKey, skillDef)
+		        local effectScale = mirrored and Vector3(-effectScaleMultiplier, effectScaleMultiplier, 1) or Vector3(effectScaleMultiplier, effectScaleMultiplier, 1)
+		        local impactScaleMultiplier = skillVfx.impactScaleMultiplier or skillDef.impactScaleMultiplier or effectScaleMultiplier
+		        local impactScale = mirrored and Vector3(-impactScaleMultiplier, impactScaleMultiplier, 1) or Vector3(impactScaleMultiplier, impactScaleMultiplier, 1)
+		        local totalShots = skillComp:ResolveRepeatCount(skillDef)
+		
+		        for idx = 3, #tokens do
+		            local impactXStr, impactYStr = string.match(tokens[idx], "^(-?[%d%.]+),(-?[%d%.]+)$")
+		            local impactPos = Vector3(tonumber(impactXStr) or 0, tonumber(impactYStr) or 0, 0)
+		            local popped = { entity = nil, shotNumber = synchronizedShot }
+		            if skillDef.projectile ~= true then popped = self:PopActiveProjectileVisual(impactSkillKey) end
+		            -- 근접 다단기도 서버가 보낸 타격 순서를 사용한다. 피격 이펙트 크기는 판정 크기에 영향을 주지 않는다.
+		            popped.shotNumber = synchronizedShot
+		            local finishing = synchronizedShot == totalShots and
+		                ((skillDef.finalShotDamage or 0) > (skillDef.damage or 0) or (skillDef.finalShotDamageMultiplier or 1) > 1)
+		            local weight = finishing and 1.15 or 1
+		            local primaryRuid = self:GetImpactPrimaryRuidForShot(skillVfx, popped.shotNumber, totalShots)
+		            local secondaryRuid = self:GetImpactSecondaryRuidForShot(skillVfx, popped.shotNumber, totalShots)
+		            if isvalid(popped.entity) then
+		                popped.entity:Destroy()
+		            end
+		            if primaryRuid ~= nil then
+		                _FogOfWarLogic:PlayEffectSeen(primaryRuid, self.Entity, impactPos, 0, effectScale * weight, false, nil)
+		            end
+		            if secondaryRuid ~= nil then
+		                _FogOfWarLogic:PlayEffectSeen(secondaryRuid, self.Entity, impactPos, 0, impactScale * weight, false, nil)
+		            end
+		        end
+		        if skillVfx.impactSound ~= nil and not _HeroSkillAssetLogic:Owns(currentIndex, impactSkillKey, "hit") then
+		            _SoundService:PlaySound(skillVfx.impactSound, _GameSettingsLogic.HeroMult)
+		        end
+		        return
+		    end
+		
+		    if name == "lastNightWalkerBatFlight" then
+		        local tokens = skillComp:GetImpactBatchTokens(tostring(value))
+		        if #tokens < 4 then
+		            return
+		        end
+		
+		        local currentIndex = skillComp:GetSelectedHeroIndex()
+		        if currentIndex ~= 8 then return end
+		        local batVfx = skillComp:BuildHeroVfx(currentIndex).BAT
+		        if batVfx == nil then return end
+		
+		        local slotIndex = tonumber(tokens[1]) or 0
+		
+		        local points = {}
+		        for idx = 3, #tokens do
+		            local xStr, yStr = string.match(tokens[idx], "^(-?[%d%.]+),(-?[%d%.]+)$")
+		            if xStr ~= nil and yStr ~= nil then
+		                table.insert(points, Vector2(tonumber(xStr) or 0, tonumber(yStr) or 0))
+		            end
+		        end
+		        if #points >= 3 then
+		            local totalTravelTime = 0
+		            local projectileSpeed = tonumber(batVfx.projectileSpeed or 16.5) or 16.5
+		            for pointIndex = 2, #points do
+		                totalTravelTime = totalTravelTime + ((points[pointIndex] - points[pointIndex - 1]):Magnitude() / projectileSpeed)
+		            end
+		            if self._T.clientNightWalkerIdleBats ~= nil and slotIndex > 0 and self._T.clientNightWalkerIdleBats[slotIndex] ~= nil then
+		                local slotState = self._T.clientNightWalkerIdleBats[slotIndex]
+		                slotState.busyUntil = (_UtilLogic.ElapsedSeconds or 0) + totalTravelTime + 0.12
+		                if isvalid(slotState.entity) then
+		                    slotState.entity:Destroy()
+		                    slotState.entity = nil
+		                end
+		            end
+		            self:PlayNightWalkerBatFlight(points, batVfx)
+		        end
+		        return
+		    end
+		
+		    if name == "lastFriendlyImpactBatch" then
+		        local tokens = skillComp:GetImpactBatchTokens(tostring(value))
+		        local impactSkillKey = tokens[1]
+		        if impactSkillKey == nil or #tokens < 3 then
+		            return
+		        end
+		
+		        local currentIndex = skillComp:GetSelectedHeroIndex()
+		        local heroKit = skillComp:BuildHeroKit(currentIndex)
+		        local skillDef = heroKit[impactSkillKey]
+		        local skillVfx = skillComp:BuildHeroVfx(currentIndex)[impactSkillKey]
+		        if skillDef == nil or skillVfx == nil then
+		            return
+		        end
+		
+		        local mirrored = self.Entity.TransformComponent.Scale.x < 0
+		        local effectScaleMultiplier = (skillDef.effectScaleMultiplier or 1) * skillComp:GetEnhancedVisualScaleMultiplier(currentIndex, impactSkillKey, skillDef)
+		        local effectScale = mirrored and Vector3(-effectScaleMultiplier, effectScaleMultiplier, 1) or Vector3(effectScaleMultiplier, effectScaleMultiplier, 1)
+		        local friendlyRuid = skillVfx.friendlyImpactEffect or skillVfx.supportImpactEffect
+		        if friendlyRuid == nil then
+		            return
+		        end
+		
+		        for idx = 3, #tokens do
+		            local impactXStr, impactYStr = string.match(tokens[idx], "^(-?[%d%.]+),(-?[%d%.]+)$")
+		            local impactPos = Vector3(tonumber(impactXStr) or 0, tonumber(impactYStr) or 0, 0)
+		            _FogOfWarLogic:PlayEffectSeen(friendlyRuid, self.Entity, impactPos, 0, effectScale, false, nil)
+		        end
+		        return
+		    end
+		
+		    if name == "lastMarkedBatch" then
+		        local tokens = skillComp:GetImpactBatchTokens(tostring(value))
+		        local markSkillKey = tokens[1]
+		        if markSkillKey == nil or #tokens < 4 then
+		            return
+		        end
+		
+		        local currentIndex = skillComp:GetSelectedHeroIndex()
+		        local heroKit = skillComp:BuildHeroKit(currentIndex)
+		        local skillDef = heroKit[markSkillKey]
+		        local skillVfx = skillComp:BuildHeroVfx(currentIndex)[markSkillKey]
+		        if skillDef == nil or skillVfx == nil or skillVfx.markEffect == nil then
+		            return
+		        end
+		
+		        local mirrored = self.Entity.TransformComponent.Scale.x < 0
+		        local markScaleMultiplier = skillVfx.markScaleMultiplier or skillDef.effectScaleMultiplier or 1
+		        local markScale = mirrored and Vector3(-markScaleMultiplier, markScaleMultiplier, 1) or Vector3(markScaleMultiplier, markScaleMultiplier, 1)
+		        local totalDuration = tonumber(tokens[2]) or 0
+		        local repeatInterval = skillVfx.markEffectInterval or 0.75
+		        local markVerticalOffset = skillVfx.markVerticalOffset or 0
+		
+		        for idx = 4, #tokens do
+		            local impactXStr, impactYStr = string.match(tokens[idx], "^(-?[%d%.]+),(-?[%d%.]+)$")
+		            local markPos = Vector3(tonumber(impactXStr) or 0, (tonumber(impactYStr) or 0) + markVerticalOffset, 0)
+		            local elapsed = 0
+		
+		            local playMarkEffect = function()
+		                if not isvalid(self.Entity) then return end
+		                _FogOfWarLogic:PlayEffectSeen(skillVfx.markEffect, self.Entity, markPos, 0, markScale, false, nil)
+		            end
+		
+		            playMarkEffect()
+		            if totalDuration > repeatInterval then
+		                local timerId = nil
+		                local repeatMark = function()
+		                    elapsed = elapsed + repeatInterval
+		                    if elapsed >= totalDuration then
+		                        if timerId ~= nil then
+		                            _TimerService:ClearTimer(timerId)
+		                        end
+		                        return
+		                    end
+		                    playMarkEffect()
+		                end
+		                timerId = _TimerService:SetTimerRepeat(repeatMark, repeatInterval)
+		            end
+		        end
+		        return
+		    end
+		
+		    if name == "lastThrowBlastBatch" then
+		        local tokens = skillComp:GetImpactBatchTokens(tostring(value))
+		        local blastSkillKey = tokens[1]
+		        if blastSkillKey == nil or #tokens < 3 then
+		            return
+		        end
+		
+		        local currentIndex = skillComp:GetSelectedHeroIndex()
+		        local heroKit = skillComp:BuildHeroKit(currentIndex)
+		        local skillDef = heroKit[blastSkillKey]
+		        local skillVfx = skillComp:BuildHeroVfx(currentIndex)[blastSkillKey]
+		        if skillDef == nil or skillVfx == nil then
+		            return
+		        end
+		
+		        local mirrored = self.Entity.TransformComponent.Scale.x < 0
+		        local effectScaleMultiplier = (skillDef.effectScaleMultiplier or 1) * skillComp:GetEnhancedVisualScaleMultiplier(currentIndex, blastSkillKey, skillDef)
+		        local effectScale = mirrored and Vector3(-effectScaleMultiplier, effectScaleMultiplier, 1) or Vector3(effectScaleMultiplier, effectScaleMultiplier, 1)
+		        local followupDelay = skillVfx.throwBlastFollowupDelay or 0.08
+		        local explosionDelay = skillVfx.throwBlastExplosionDelay or 0.16
+		
+		        for idx = 3, #tokens do
+		            local impactXStr, impactYStr = string.match(tokens[idx], "^(-?[%d%.]+),(-?[%d%.]+)$")
+		            local blastPos = Vector3(tonumber(impactXStr) or 0, tonumber(impactYStr) or 0, 0)
+		
+		            if skillVfx.throwBlastEffect ~= nil then
+		                _FogOfWarLogic:PlayEffectSeen(skillVfx.throwBlastEffect, self.Entity, blastPos, 0, effectScale, false, nil)
+		            end
+		            if skillVfx.throwBlastFollowupEffect ~= nil then
+		                _TimerService:SetTimerOnce(function()
+		                    if not isvalid(self.Entity) then return end
+		                    _FogOfWarLogic:PlayEffectSeen(skillVfx.throwBlastFollowupEffect, self.Entity, blastPos, 0, effectScale, false, nil)
+		                end, followupDelay)
+		            end
+		            if skillVfx.throwBlastExplosionEffect ~= nil then
+		                _TimerService:SetTimerOnce(function()
+		                    if not isvalid(self.Entity) then return end
+		                    _FogOfWarLogic:PlayEffectSeen(skillVfx.throwBlastExplosionEffect, self.Entity, blastPos, 0, effectScale, false, nil)
+		                end, explosionDelay)
+		            end
+		        end
+		        return
+		    end
+		
+		    if name == "lastDominionBatch" then
+		        local tokens = skillComp:GetImpactBatchTokens(tostring(value))
+		        local dominionSkillKey = tokens[1]
+		        if dominionSkillKey == nil or #tokens < 3 then
+		            return
+		        end
+		
+		        local currentIndex = skillComp:GetSelectedHeroIndex()
+		        local skillVfx = skillComp:BuildHeroVfx(currentIndex)[dominionSkillKey]
+		        if skillVfx == nil or skillVfx.multiImpactEffect == nil then
+		            return
+		        end
+		
+		        local mirrored = self.Entity.TransformComponent.Scale.x < 0
+		        local effectScaleMultiplier = skillVfx.impactScaleMultiplier or 1
+		        local effectScale = mirrored and Vector3(-effectScaleMultiplier, effectScaleMultiplier, 1) or Vector3(effectScaleMultiplier, effectScaleMultiplier, 1)
+		
+		        for idx = 3, #tokens do
+		            local impactXStr, impactYStr = string.match(tokens[idx], "^(-?[%d%.]+),(-?[%d%.]+)$")
+		            local impactPos = Vector3(tonumber(impactXStr) or 0, tonumber(impactYStr) or 0, 0)
+		            _FogOfWarLogic:PlayEffectSeen(skillVfx.multiImpactEffect, self.Entity, impactPos, 0, effectScale, false, nil)
+		        end
+		        return
+		    end
+		
+		    if name == "lastImpact" then
+		        local impactSkillKey, impactXStr, impactYStr = string.match(value, "^(%a+):(-?[%d%.]+):(-?[%d%.]+):")
+		        if impactSkillKey == nil then
+		            return
+		        end
+		
+		        local currentIndex = skillComp:GetSelectedHeroIndex()
+		        local heroKit = skillComp:BuildHeroKit(currentIndex)
+		        local skillDef = heroKit[impactSkillKey]
+		        local skillVfx = skillComp:BuildHeroVfx(currentIndex)[impactSkillKey]
+		        if skillDef == nil or skillVfx == nil then
+		            return
+		        end
+		
+		        local totalShots = skillComp:ResolveRepeatCount(skillDef)
+		        local impactX = tonumber(impactXStr)
+		        local impactY = tonumber(impactYStr)
+		        local mirrored = self.Entity.TransformComponent.Scale.x < 0
+		        local effectScaleMultiplier = (skillDef.effectScaleMultiplier or 1) * skillComp:GetEnhancedVisualScaleMultiplier(currentIndex, impactSkillKey, skillDef)
+		        local effectScale = mirrored and Vector3(-effectScaleMultiplier, effectScaleMultiplier, 1) or Vector3(effectScaleMultiplier, effectScaleMultiplier, 1)
+		        local impactScaleMultiplier = skillVfx.impactScaleMultiplier or skillDef.impactScaleMultiplier or effectScaleMultiplier
+		        local impactScale = mirrored and Vector3(-impactScaleMultiplier, impactScaleMultiplier, 1) or Vector3(impactScaleMultiplier, impactScaleMultiplier, 1)
+		        local impactPos = Vector3(impactX or 0, impactY or 0, 0)
+		        if skillVfx.impactUseCasterAnchor == true then
+		            local pos3 = self.Entity.TransformComponent.WorldPosition
+		            local forwardSign = mirrored and 1 or -1
+		            local forwardOffset = skillVfx.effect2ForwardOffset or skillDef.effect2ForwardOffset or 0
+		            impactPos = Vector3(pos3.x + forwardSign * forwardOffset, pos3.y, 0)
+		        end
+		
+		        local popped = self:PopActiveProjectileVisual(impactSkillKey)
+		        local impactRuid = self:GetImpactPrimaryRuidForShot(skillVfx, popped.shotNumber, totalShots)
+		        if isvalid(popped.entity) then
+		            popped.entity:Destroy()
+		        end
+		
+		        if impactRuid ~= nil then
+		            _FogOfWarLogic:PlayEffectSeen(impactRuid, self.Entity, impactPos, 0, impactScale, false, nil)
+		        end
+		        if skillVfx.impactSound ~= nil and not _HeroSkillAssetLogic:Owns(currentIndex, impactSkillKey, "hit") then
+		            _SoundService:PlaySound(skillVfx.impactSound, _GameSettingsLogic.HeroMult)
+		        end
+		        if skillVfx.shake then
+		            local camera = _CameraService:GetCurrentCameraComponent()
+		            if camera ~= nil then
+		                camera:ShakeCamera(0.3, 0.4)
+		            end
+		        end
+		        return
+		    end
+		
+		    if name ~= "lastCast" then return end
+		    local castTokens = {}
+		    for token in string.gmatch(value, "[^:]+") do
+		        table.insert(castTokens, token)
+		    end
+		    local skillKey = castTokens[1]
+		    local angleStr = castTokens[2]
+		    local aimXStr = castTokens[3]
+		    local aimYStr = castTokens[4]
+		    local originXStr = nil
+		    local originYStr = nil
+		    if #castTokens >= 7 then
+		        originXStr = castTokens[5]
+		        originYStr = castTokens[6]
+		    end
+		    if skillKey == nil then
+		        return
+		    end
+		
+		    local currentIndex = skillComp:GetSelectedHeroIndex()
+		    local vfx = skillComp:BuildHeroVfx(currentIndex)
+		    local skillVfx = vfx[skillKey]
+		    if skillVfx == nil then
+		        -- 이 히어로/스킬 조합은 아직 리소스가 없음 -- 판정/모션은 이미 CastGeneric에서 실행됨.
+		        return
+		    end
+		
+		    local heroKit = skillComp:BuildHeroKit(currentIndex)
+		    local skillDef = heroKit[skillKey]
+		    if skillDef == nil then
+		        return
+		    end
+		
+		    local castMap = self.Entity.CurrentMap
+		    local castEpoch = self._T.castMapEpoch or 0
+		    if currentIndex == 1 and skillKey == "T" then
+		        self:ClearDarkCycleEffects()
+		        self._T.darkCycleVisualCast = value
+		    end
+		    local castIsValid = function()
+		        if (self._T.castMapEpoch or 0) ~= castEpoch then return false end
+		        if currentIndex == 1 and skillKey == "T" and self._T.darkCycleVisualCast ~= value then return false end
+		        return isvalid(self.Entity) and self.Entity.CurrentMap == castMap and not _CombatTeamLogic:IsDead(self.Entity)
+		            and skillComp:GetSelectedHeroIndex() == currentIndex
+		    end
+		    local followCastVisual = (skillDef.followCasterDuringChannel == true or skillVfx.followCasterDuringChannel == true) and skillVfx.effectUseWorldAnchor ~= true and skillVfx.effectUseSpawnedWorldVisual ~= true
+		    local angleRad = tonumber(angleStr) or 0
+		    local aimX = tonumber(aimXStr)
+		    local aimY = tonumber(aimYStr)
+		    local dirX = math.cos(angleRad)
+		    -- 아바타/이펙트 기본 그림이 왼쪽 기준이라, 오른쪽 조준일 때 좌우 대칭(scale)으로 미러링.
+		    -- 회전값은 위아래 개념이 없는 이 게임 특성상 사용하지 않음 (회전은 비대칭 이펙트를 망가뜨림).
+		    local mirrored = dirX >= 0
+		    local angleForEffect = 0
+		    if skillDef.allowEffectRotation == true then
+		        angleForEffect = angleRad
+		    end
+		
+		    local pos3 = self.Entity.TransformComponent.WorldPosition
+		    local pos = Vector3(pos3.x, pos3.y, 0)
+		    local castOriginPos = pos
+		    local aimPos = Vector3(pos3.x, pos3.y, 0)
+		    if aimX ~= nil and aimY ~= nil then
+		        aimPos = Vector3(aimX, aimY, 0)
+		    end
+		    if originXStr ~= nil and originYStr ~= nil then
+		        castOriginPos = Vector3(tonumber(originXStr) or pos.x, tonumber(originYStr) or pos.y, 0)
+		        pos = castOriginPos
+		    end
+		    local enhancedVisualScale = skillComp:GetEnhancedVisualScaleMultiplier(currentIndex, skillKey, skillDef)
+		    -- 시전 이미지 크기만 조정한다. SkillData 및 서버 hitbox 계산에는 전달하지 않는다.
+		    local effectScaleMultiplier = (skillDef.effectScaleMultiplier or 1) * enhancedVisualScale * (skillVfx.castVisualScaleMultiplier or 1)
+		    local effectScale = mirrored and Vector3(-effectScaleMultiplier, effectScaleMultiplier, 1) or Vector3(effectScaleMultiplier, effectScaleMultiplier, 1)
+		    local dir = Vector2(math.cos(angleRad), math.sin(angleRad))
+		    -- 플레이어 아바타의 상태 전환 권한은 클라이언트에 있다. 다크나이트만 이 경로를
+		    -- 사용해 무기 종류에 맞는 기본 attack(창 찌르기/휘두르기)을 VFX 선행으로 보장한다.
+		    if skillDef.clientAttackMotion == true and self.Entity:GetComponent("script.HeroUnitSkill") == nil then
+		        local avatarState = self.Entity.StateComponent
+		        if avatarState ~= nil then
+		            avatarState:ChangeState("ATTACK")
+		        else
+		            local visual = self.Entity:GetComponent("script.HeroUnitVisual")
+		            if visual ~= nil then
+		                visual:PlayCastPose(math.max(skillDef.castMotionDuration or 0, skillDef.castWindup or 0.45), self.Entity.TransformComponent.Scale.x < 0)
+		            else
+		            end
+		        end
+		    end
+		    if self.Entity == _UserService.LocalPlayer and not (currentIndex == 1 and skillKey == "T") and (skillDef.moveLockDuration or 0) > 0 then
+		        skillComp:LockLocalMovement(skillDef.moveLockDuration or 0)
+		    end
+		    local telegraphPos = pos
+		    local skillClass = tostring(skillDef.skillClass or "")
+		    if skillDef.anchorAtCaster == true then
+		        telegraphPos = pos
+		    elseif skillClass == "ground_aoe" or skillClass == "install_zone" then
+		        telegraphPos = aimPos
+		    end
+		    self:PlayRangeTelegraph(skillDef, skillVfx, telegraphPos, angleRad, mirrored)
+		    if skillDef ~= nil and skillDef.projectile then
+		        -- 화살/표창/에너지볼트처럼 날아가는 스킬: 이펙트를 여러 번 나눠 재생하는 방식(잔상처럼 겹치거나
+		        -- 뚝뚝 끊겨 보임)이 아니라, 실제로 캐스터→조준 방향으로 이동하는 투사체 엔티티 하나를 스폰해서
+		        -- _TweenLogic:MoveTo로 부드럽게 움직이게 함 -- 진짜 "하나가 쭉 날아가는" 모양이 되도록.
+		        -- 스킬별 castWindup만큼 기다렸다가 발사해, 텔레그래프/공격 모션 뒤에 투사체가 나가게 한다.
+		        -- effect0 / ball만 실제로 "날아가는 것"이다.
+		        -- effect를 여기 대입해 버리면 시전 이펙트가 투사체처럼 또 보여서 연출과 판정이 섞여 보인다.
+		        -- 투사체가 날아가는 거리도 서버 판정과 같은 값에서 뽑는다. 예전에는 클라이언트만
+		        -- skillDef.length를 그대로 써서, 판정 범위와 눈에 보이는 비행 거리가 어긋났다.
+		        local scaledLength = skillComp:ResolveHitboxDimensions(skillDef).length * skillComp.rangeScale * enhancedVisualScale
+		        local projectileSpeed = skillDef.projectileSpeed or skillComp.projectileSpeed
+		        local travelTime = scaledLength / projectileSpeed
+		        local aimDirVec = Vector2(math.cos(angleRad), math.sin(angleRad))
+		        local projectileStartOffset = skillVfx.effectForwardOffset or skillDef.projectileStartForwardOffset or skillDef.effectForwardOffset or 0
+		        local projectileVerticalOffset = skillVfx.projectileVerticalOffset or skillDef.projectileVerticalOffset or 0
+		        local projectileStartPos = Vector3(pos.x + aimDirVec.x * projectileStartOffset, pos.y + aimDirVec.y * projectileStartOffset + projectileVerticalOffset, pos.z)
+		        local destPos = Vector2(pos.x + aimDirVec.x * scaledLength, pos.y + aimDirVec.y * scaledLength + projectileVerticalOffset)
+		        local channelFollowOrigin = skillDef.followCasterDuringChannel == true or skillVfx.followCasterDuringChannel == true
+		        local channelFollowAim = skillDef.followCasterAimDuringChannel == true or skillVfx.followCasterAimDuringChannel == true
+		
+		        local playCastEffectOnInput = skillVfx.playCastEffectOnInput == true
+		        local castEffectForwardOffset = skillVfx.effectForwardOffset or skillDef.effectForwardOffset or 0
+		        local castEffectVerticalOffset = skillVfx.effectVerticalOffset or skillDef.effectVerticalOffset or 0
+		        local repeatTotal = skillComp:ResolveRepeatCount(skillDef)
+		        local effectParent = self.Entity
+		        if skillVfx.effectUseWorldAnchor == true and isvalid(self.Entity.CurrentMap) then
+		            effectParent = self.Entity.CurrentMap
+		        end
+		        if skillVfx.sustainedEffect ~= nil then
+		            -- 천공의 노래처럼 "시전 모션이 채널링 내내 끊기지 않고 유지되어야 하는" 스킬.
+		            self:PlaySustainedAttachedEffect(skillVfx, effectScaleMultiplier)
+		        elseif playCastEffectOnInput and skillVfx.effect ~= nil then
+		            local castEffectPos = Vector3(pos.x + aimDirVec.x * castEffectForwardOffset, pos.y + aimDirVec.y * castEffectForwardOffset + castEffectVerticalOffset, pos.z)
+		            if followCastVisual then self:PlayFollowingCastEffect(skillVfx.effect, castEffectPos, effectScale, skillKey .. ":cast") else _FogOfWarLogic:PlayEffectSeen(skillVfx.effect, effectParent, castEffectPos, angleForEffect, effectScale, false, { PlayRate = (currentIndex == 14 and skillKey == "R") and 1.1 or 1 }) end
+		            self:PlaySecondaryCastEffect(skillVfx, pos, aimDirVec, angleForEffect, effectScale)
+		        end
+		
+		        local projectileShotIndex = 0
+		        local fireOne = function()
+		            if not castIsValid() then return end
+		            local shotNumber = projectileShotIndex + 1
+		            local shotDir = aimDirVec
+		            local shotMirrored = mirrored
+		            local shotBasePos = pos
+		            if channelFollowOrigin or channelFollowAim then
+		                local livePos3 = self.Entity.TransformComponent.WorldPosition
+		                shotBasePos = Vector3(livePos3.x, livePos3.y, livePos3.z)
+		                if channelFollowAim then
+		                    local liveDir = skillComp:GetCurrentFacingDirection(aimDirVec)
+		                    shotDir = liveDir
+		                    shotMirrored = liveDir.x >= 0
+		                end
+		            end
+		            local shotProjectileStartPos = Vector3(shotBasePos.x + shotDir.x * projectileStartOffset, shotBasePos.y + shotDir.y * projectileStartOffset + projectileVerticalOffset, shotBasePos.z)
+		            -- 시작 offset은 손/무기 위치에만 적용하고, 도착 시간은 기존 서버 사거리 기준을 유지한다.
+		            local shotDestPos = Vector2(shotBasePos.x + shotDir.x * scaledLength, shotBasePos.y + shotDir.y * scaledLength + projectileVerticalOffset)
+		            local shotEffectScale = shotMirrored and Vector3(-effectScaleMultiplier, effectScaleMultiplier, 1) or Vector3(effectScaleMultiplier, effectScaleMultiplier, 1)
+		            local lateralOffset = skillComp:GetProjectileLateralOffset(skillDef, projectileShotIndex)
+		            local shotFlyRuid = self:GetProjectileVisualRuidForShot(skillVfx, shotNumber, repeatTotal)
+		            if math.abs(lateralOffset) > 0.0001 then
+		                local sideDir = Vector2(-shotDir.y, shotDir.x)
+		                shotProjectileStartPos = Vector3(shotProjectileStartPos.x + sideDir.x * lateralOffset, shotProjectileStartPos.y + sideDir.y * lateralOffset, shotProjectileStartPos.z)
+		                shotDestPos = Vector2(shotDestPos.x + sideDir.x * lateralOffset, shotDestPos.y + sideDir.y * lateralOffset)
+		            end
+		
+		            -- 캐릭터 위치에서 스킬 자체의 이펙트(던지는/쏘는 동작 이펙트)도 투사체와 같이 재생 --
+		            -- 투사체만 날아가고 캐스트 이펙트가 안 보이면 "그냥 물체만 이동하는" 느낌이라 어색함.
+		            local playCastEffectEveryShot = skillVfx.playCastEffectEveryShot == true
+		            if skillVfx.effect ~= nil and (not playCastEffectOnInput) and (projectileShotIndex == 0 or playCastEffectEveryShot) then
+		                if followCastVisual then self:PlayFollowingCastEffect(skillVfx.effect, shotProjectileStartPos, shotEffectScale, skillKey .. ":cast") else _FogOfWarLogic:PlayEffectSeen(skillVfx.effect, effectParent, shotProjectileStartPos, angleForEffect, shotEffectScale, false, nil) end
+		            end
+		
+		            local spawned = nil
+		            if shotFlyRuid ~= nil then
+		                spawned = _SpawnService:SpawnByModelId("projectile", "Fly_" .. skillKey, shotProjectileStartPos, self.Entity.CurrentMap)
+		                if spawned == nil then
+		                else
+		                    local projectileScale = (skillDef.projectileScaleMultiplier or 1) * enhancedVisualScale
+		                    if spawned.TransformComponent ~= nil and projectileScale ~= 1 then
+		                        spawned.TransformComponent.Scale = Vector3(projectileScale, projectileScale, 1)
+		                    end
+		                    local renderer = spawned.SpriteRendererComponent
+		                    if renderer ~= nil then
+		                        renderer.SpriteRUID = shotFlyRuid
+		                        renderer.FlipX = shotMirrored
+		                    end
+		                end
+		            else
+		            end
+		            if skillVfx.sound ~= nil and not _HeroSkillAssetLogic:Owns(currentIndex, skillKey, "use") then
+		                _SoundService:PlaySound(skillVfx.sound, _GameSettingsLogic.HeroMult)
+		            end
+		
+		            local onProjectileArrive = function()
+		                if self._T.activeProjectileVisuals ~= nil then
+		                    local activeProjectiles = self._T.activeProjectileVisuals[skillKey]
+		                    if activeProjectiles ~= nil then
+		                        for idx, projectileEntity in ipairs(activeProjectiles) do
+		                            if projectileEntity == spawned then
+		                                table.remove(activeProjectiles, idx)
+		                                if self._T.activeProjectileShotNumbers ~= nil and self._T.activeProjectileShotNumbers[skillKey] ~= nil then
+		                                    table.remove(self._T.activeProjectileShotNumbers[skillKey], idx)
+		                                end
+		                                break
+		                            end
+		                        end
+		                    end
+		                end
+		                if isvalid(spawned) then spawned:Destroy() end
+		            end
+		
+		            if spawned ~= nil then
+		                if self._T.activeProjectileVisuals == nil then
+		                    self._T.activeProjectileVisuals = {}
+		                end
+		                if self._T.activeProjectileVisuals[skillKey] == nil then
+		                    self._T.activeProjectileVisuals[skillKey] = {}
+		                end
+		                if self._T.activeProjectileShotNumbers == nil then
+		                    self._T.activeProjectileShotNumbers = {}
+		                end
+		                if self._T.activeProjectileShotNumbers[skillKey] == nil then
+		                    self._T.activeProjectileShotNumbers[skillKey] = {}
+		                end
+		                table.insert(self._T.activeProjectileVisuals[skillKey], spawned)
+		                table.insert(self._T.activeProjectileShotNumbers[skillKey], shotNumber)
+		
+		                local tweener = _TweenLogic:MoveTo(spawned, shotDestPos, travelTime, EaseType.Linear)
+		                tweener:SetOnEndCallback(onProjectileArrive)
+		            else
+		                _TimerService:SetTimerOnce(onProjectileArrive, travelTime)
+		            end
+		            projectileShotIndex = projectileShotIndex + 1
+		        end
+		
+		        -- burstCount는 고정 발수 연사, tickCount는 채널링 투사체의 반복이다.
+		        -- 단, simultaneousVolley가 켜진 스킬은 반복 타이머 대신 같은 시점에 여러 발을 한꺼번에 생성한다.
+		        local repeatInterval = skillDef.shotInterval or skillDef.tickInterval or 1
+		        local windup = skillComp:ResolveCastMotionDelay(skillDef) -- 서버 판정 시점과 동일하게 맞춘다
+		        local projectileFireDelay = skillDef.projectileFireDelay or 0
+		        if skillComp:UseSimultaneousProjectileVolley(skillDef) then
+		            local volleyCount = skillComp:ResolveSimultaneousVolleyCount(skillDef)
+		            _TimerService:SetTimerOnce(function()
+		                for volleyIndex = 1, volleyCount do
+		                    fireOne()
+		                end
+		            end, windup + projectileFireDelay)
+		        elseif repeatTotal <= 1 then
+		            _TimerService:SetTimerOnce(fireOne, windup + projectileFireDelay)
+		        else
+		            _TimerService:SetTimerOnce(fireOne, windup + projectileFireDelay)
+		            local repeatsLeft = repeatTotal - 1
+		            local timerId = nil
+		            local doRepeat = function()
+		                _TimerService:SetTimerOnce(fireOne, windup + projectileFireDelay)
+		                repeatsLeft = repeatsLeft - 1
+		                if repeatsLeft <= 0 and timerId ~= nil then
+		                    _TimerService:ClearTimer(timerId)
+		                end
+		            end
+		            timerId = _TimerService:SetTimerRepeat(doRepeat, repeatInterval, skillDef.repeatStartDelay or repeatInterval)
+		        end
+		
+		        local bowChannelEnded = false
+		        local bowChannelSlot = skillKey .. ":tick:" .. value
+		        if skillVfx.tickEffect ~= nil then
+		            local visualTicks = skillVfx.visualTickCount or skillDef.tickCount or 1
+		            local visualInterval = skillVfx.visualTickInterval or skillDef.tickInterval or 0.25
+		            local tickOffset = skillVfx.tickEffectForwardOffset or castEffectForwardOffset
+		            local playedTicks = 0
+		            local playTickEffect = function()
+		                if currentIndex == 3 and bowChannelEnded then return end
+		                if not castIsValid() then return end
+		                local tickPos = Vector3(pos.x + aimDirVec.x * tickOffset, pos.y + aimDirVec.y * tickOffset, pos.z)
+		                local tickScale = effectScale
+		                if channelFollowOrigin or channelFollowAim then
+		                    local livePos3 = self.Entity.TransformComponent.WorldPosition
+		                    local liveDir = aimDirVec
+		                    local liveMirrored = mirrored
+		                    if channelFollowAim then
+		                        liveDir = skillComp:GetCurrentFacingDirection(aimDirVec)
+		                        liveMirrored = liveDir.x >= 0
+		                    end
+		                    tickPos = Vector3(livePos3.x + liveDir.x * tickOffset, livePos3.y + liveDir.y * tickOffset, livePos3.z)
+		                    tickScale = liveMirrored and Vector3(-effectScaleMultiplier, effectScaleMultiplier, 1) or Vector3(effectScaleMultiplier, effectScaleMultiplier, 1)
+		                end
+		                if currentIndex == 3 and (skillKey == "R" or skillKey == "T") then
+		                    self:StartBowChannelEffect(skillVfx.tickEffect, tickPos, tickScale, bowChannelSlot, value)
+		                elseif followCastVisual then self:PlayFollowingCastEffect(skillVfx.tickEffect, tickPos, tickScale, skillKey .. ":tick") else _FogOfWarLogic:PlayEffectSeen(skillVfx.tickEffect, self.Entity, tickPos, angleForEffect, tickScale, false, nil) end
+		                if playedTicks == 0 and skillVfx.loopSound ~= nil and not _HeroSkillAssetLogic:Owns(currentIndex, skillKey, "loop") then
+		                    _SoundService:PlaySound(skillVfx.loopSound, _GameSettingsLogic.HeroMult)
+		                end
+		                playedTicks = playedTicks + 1
+		            end
+		            _TimerService:SetTimerOnce(playTickEffect, skillVfx.tickEffectDelay or 0)
+		            if visualTicks > 1 then
+		                local ticksLeft = visualTicks - 1
+		                local visualTimerId = nil
+		                local repeatTickEffect = function()
+		                    playTickEffect()
+		                    ticksLeft = ticksLeft - 1
+		                    if ticksLeft <= 0 and visualTimerId ~= nil then
+		                        _TimerService:ClearTimer(visualTimerId)
+		                    end
+		                end
+		                visualTimerId = _TimerService:SetTimerRepeat(repeatTickEffect, visualInterval, visualInterval + (skillVfx.tickEffectDelay or 0))
+		            end
+		        end
+		        if skillVfx.tickSecondaryEffect ~= nil then
+		            local visualTicks = skillVfx.tickSecondaryVisualTickCount or skillDef.tickCount or 1
+		            local visualInterval = skillVfx.tickSecondaryVisualTickInterval or skillDef.tickInterval or 0.25
+		            local tickOffset = skillVfx.tickSecondaryEffectForwardOffset or castEffectForwardOffset
+		            local playTickSecondaryEffect = function()
+		                if not castIsValid() then return end
+		                local tickPos = Vector3(pos.x + aimDirVec.x * tickOffset, pos.y + aimDirVec.y * tickOffset, pos.z)
+		                local tickScale = effectScale
+		                if channelFollowOrigin or channelFollowAim then
+		                    local livePos3 = self.Entity.TransformComponent.WorldPosition
+		                    local liveDir = aimDirVec
+		                    local liveMirrored = mirrored
+		                    if channelFollowAim then
+		                        liveDir = skillComp:GetCurrentFacingDirection(aimDirVec)
+		                        liveMirrored = liveDir.x >= 0
+		                    end
+		                    tickPos = Vector3(livePos3.x + liveDir.x * tickOffset, livePos3.y + liveDir.y * tickOffset, livePos3.z)
+		                    tickScale = liveMirrored and Vector3(-effectScaleMultiplier, effectScaleMultiplier, 1) or Vector3(effectScaleMultiplier, effectScaleMultiplier, 1)
+		                end
+		                if followCastVisual then self:PlayFollowingCastEffect(skillVfx.tickSecondaryEffect, tickPos, tickScale, skillKey .. ":secondary") else self:PlaySecondaryTickEffect(skillVfx, tickPos, angleForEffect, tickScale) end
+		            end
+		            _TimerService:SetTimerOnce(playTickSecondaryEffect, skillVfx.tickSecondaryEffectDelay or 0)
+		            if visualTicks > 1 then
+		                local ticksLeft = visualTicks - 1
+		                local visualTimerId = nil
+		                local repeatTickSecondaryEffect = function()
+		                    playTickSecondaryEffect()
+		                    ticksLeft = ticksLeft - 1
+		                    if ticksLeft <= 0 and visualTimerId ~= nil then
+		                        _TimerService:ClearTimer(visualTimerId)
+		                    end
+		                end
+		                visualTimerId = _TimerService:SetTimerRepeat(repeatTickSecondaryEffect, visualInterval, visualInterval + (skillVfx.tickSecondaryEffectDelay or 0))
+		            end
+		        end
+		        if skillVfx.endEffectDelay ~= nil and skillVfx.effect2 ~= nil then
+		            _TimerService:SetTimerOnce(function()
+		                if currentIndex == 3 then
+		                    bowChannelEnded = true
+		                    self:EndBowChannelEffect(bowChannelSlot, value)
+		                end
+		                if not castIsValid() then return end
+		                local endPos = pos
+		                local endScale = effectScale
+		                if channelFollowOrigin or channelFollowAim then
+		                    local livePos3 = self.Entity.TransformComponent.WorldPosition
+		                    local liveDir = aimDirVec
+		                    local liveMirrored = mirrored
+		                    if channelFollowAim then
+		                        liveDir = skillComp:GetCurrentFacingDirection(aimDirVec)
+		                        liveMirrored = liveDir.x >= 0
+		                    end
+		                    endPos = Vector3(livePos3.x, livePos3.y, livePos3.z)
+		                    endScale = liveMirrored and Vector3(-effectScaleMultiplier, effectScaleMultiplier, 1) or Vector3(effectScaleMultiplier, effectScaleMultiplier, 1)
+		                end
+		                if followCastVisual then self:PlayFollowingCastEffect(skillVfx.effect2, endPos, endScale, skillKey .. ":end") else _FogOfWarLogic:PlayEffectSeen(skillVfx.effect2, self.Entity, endPos, angleForEffect, endScale, false, nil) end
+		            end, currentIndex == 3 and math.max(skillVfx.endEffectDelay,
+		                windup + projectileFireDelay + math.max(0, repeatTotal - 1) * repeatInterval + 0.02) or skillVfx.endEffectDelay)
+		        end
+		        return
+		    end
+		
+		    local windup = skillComp:ResolveCastMotionDelay(skillDef) -- 서버 판정 시점과 동일하게 맞춘다
+		    local playCastEffectOnInput = skillVfx.playCastEffectOnInput == true
+		    local effectForwardOffset = skillVfx.effectForwardOffset or skillDef.effectForwardOffset or 0
+		    local effectVerticalOffset = skillVfx.effectVerticalOffset or skillDef.effectVerticalOffset or 0
+		    local effectAnchorPos = pos
+		    if skillDef.anchorAtCaster == true then
+		        effectAnchorPos = pos
+		    elseif skillClass == "ground_aoe" or skillClass == "install_zone" then
+		        local anchor2 = skillComp:GetSkillAnchorPosition(skillDef, Vector2(pos.x, pos.y), Vector2(aimPos.x, aimPos.y), dir)
+		        effectAnchorPos = Vector3(anchor2.x, anchor2.y, pos.z)
+		    end
+		    local effectPos = Vector3(effectAnchorPos.x + dir.x * effectForwardOffset, effectAnchorPos.y + dir.y * effectForwardOffset + effectVerticalOffset, effectAnchorPos.z)
+		    local resolvedEffectScale = effectScale
+		    local aimDistance = math.sqrt(math.pow(aimPos.x - castOriginPos.x, 2) + math.pow(aimPos.y - castOriginPos.y, 2))
+		    if skillVfx.effectUseAimWorldPos == true then
+		        effectPos = aimPos
+		    elseif skillVfx.effectUsePathMidpoint == true then
+		        effectPos = Vector3((castOriginPos.x + aimPos.x) * 0.5, (castOriginPos.y + aimPos.y) * 0.5, effectAnchorPos.z)
+		    end
+		    if skillVfx.effectScaleFromAimDistance == true then
+		        local baseLength = math.max(0.001, (skillDef.length or 1) * skillComp.rangeScale)
+		        local pathRatio = math.max(0.05, math.min(1.0, aimDistance / baseLength))
+		        local pathScaleMultiplier = tonumber(skillVfx.effectDistanceScaleMultiplier or skillDef.effectDistanceScaleMultiplier or 1) or 1
+		        local scaleSign = resolvedEffectScale.x < 0 and -1 or 1
+		        resolvedEffectScale = Vector3(math.abs(resolvedEffectScale.x) * pathRatio * pathScaleMultiplier * scaleSign, resolvedEffectScale.y, resolvedEffectScale.z)
+		    end
+		    local skipMainEffect = false
+		    if skillVfx.effectSkipIfAimDistanceBelow ~= nil and aimDistance <= (skillVfx.effectSkipIfAimDistanceBelow or 0) then
+		        skipMainEffect = true
+		    end
+		    local effectParent = self.Entity
+		    if skillVfx.effectUseWorldAnchor == true and isvalid(self.Entity.CurrentMap) then
+		        effectParent = self.Entity.CurrentMap
+		    end
+		    if playCastEffectOnInput and skillVfx.effect ~= nil and not skipMainEffect then
+		        if skillVfx.effectUseSpawnedWorldVisual == true then
+		            self:PlayWorldAnchoredSpriteEffect(skillVfx, effectPos, resolvedEffectScale)
+		        else
+		            _FogOfWarLogic:PlayEffectSeen(skillVfx.effect, effectParent, effectPos, angleForEffect, resolvedEffectScale, false, { PlayRate = (currentIndex == 14 and skillKey == "R") and 1.1 or 1 })
+		        end
+		        self:PlaySecondaryCastEffect(skillVfx, pos, dir, angleForEffect, resolvedEffectScale)
+		    end
+		
+		    _TimerService:SetTimerOnce(function()
+		        if not castIsValid() then return end
+		        if (not playCastEffectOnInput) and skillVfx.effect ~= nil and not skipMainEffect then
+		            if skillVfx.effectUseSpawnedWorldVisual == true then
+		                self:PlayWorldAnchoredSpriteEffect(skillVfx, effectPos, resolvedEffectScale)
+		            else
+		                _FogOfWarLogic:PlayEffectSeen(skillVfx.effect, effectParent, effectPos, angleForEffect, resolvedEffectScale, false, { PlayRate = (currentIndex == 14 and skillKey == "R") and 1.1 or 1 })
+		            end
+		            self:PlaySecondaryCastEffect(skillVfx, pos, dir, angleForEffect, resolvedEffectScale)
+		        end
+		        if skillVfx.sound ~= nil and not _HeroSkillAssetLogic:Owns(currentIndex, skillKey, "use") then
+		            _SoundService:PlaySound(skillVfx.sound, _GameSettingsLogic.HeroMult)
+		        end
+		
+		        if skillVfx.effect2 ~= nil and skillVfx.skipDefaultEffect2 ~= true then
+		            local effect2Pos = effectPos
+		            if currentIndex == 1 and skillKey == "T" and skillVfx.effect2ForwardOffset ~= nil then
+		                effect2Pos = Vector3(effectAnchorPos.x + dir.x * skillVfx.effect2ForwardOffset, effectAnchorPos.y + dir.y * skillVfx.effect2ForwardOffset + effectVerticalOffset, effectAnchorPos.z)
+		            end
+		            if skillVfx.effect2UseAimWorldPos == true then
+		                effect2Pos = aimPos
+		            elseif skillVfx.effect2UseAimAnchor == true then
+		                effect2Pos = Vector3(pos.x + dir.x * skillDef.length * skillComp.rangeScale, pos.y + dir.y * skillDef.length * skillComp.rangeScale, pos.z)
+		            elseif skillVfx.effect2UseHitAnchor == true then
+		                local impactHitbox = skillComp:ResolveImpactHitboxDimensions(skillDef)
+		                local impactLength = impactHitbox.length * skillComp.rangeScale
+		                effect2Pos = Vector3(pos.x + dir.x * impactLength, pos.y + dir.y * impactLength, pos.z)
+		            end
+		            _TimerService:SetTimerOnce(function()
+		                if not castIsValid() then return end
+		                local serial = _FogOfWarLogic:PlayEffectSeen(skillVfx.effect2, self.Entity, effect2Pos, angleForEffect, effectScale, false, nil)
+		                if currentIndex == 1 and skillKey == "T" then
+		                    table.insert(self._T.darkCycleEffects, serial)
+		                end
+		            end, skillVfx.effect2Delay or 0)
+		        end
+		
+		        -- 키다운/연타기의 유지 이펙트는 첫 타격과 같은 시점부터 정확히 정해진 횟수만
+		        -- 재생한다. 서버 tickCount와 독립된 visualTickCount를 사용해 한 입력이 두 번
+		        -- 발사되는 현상 없이, 긴 원본 애니메이션을 과도하게 겹치지 않게 한다.
+		        if skillVfx.tickEffect ~= nil then
+		            local visualTicks = skillVfx.visualTickCount or skillDef.tickCount or 1
+		            local visualInterval = skillVfx.visualTickInterval or skillDef.tickInterval or 0.25
+		            local tickOffset = skillVfx.tickEffectForwardOffset or effectForwardOffset
+		            local playedTicks = 0
+		            local playTickEffect = function()
+		                if not castIsValid() then return end
+		                local tickPos = Vector3(effectAnchorPos.x + dir.x * tickOffset, effectAnchorPos.y + dir.y * tickOffset, effectAnchorPos.z)
+		                local tickScale = effectScale
+		                if skillDef.followCasterDuringChannel == true or skillVfx.followCasterDuringChannel == true then
+		                    local livePos3 = self.Entity.TransformComponent.WorldPosition
+		                    local liveMirrored = self.Entity.TransformComponent.Scale.x < 0
+		                    local liveDirX = liveMirrored and 1 or -1
+		                    tickPos = Vector3(livePos3.x + liveDirX * tickOffset, livePos3.y, livePos3.z)
+		                    tickScale = liveMirrored and Vector3(-effectScaleMultiplier, effectScaleMultiplier, 1) or Vector3(effectScaleMultiplier, effectScaleMultiplier, 1)
+		                end
+		                if followCastVisual then self:PlayFollowingCastEffect(skillVfx.tickEffect, tickPos, tickScale, skillKey .. ":tick") else
+		                    local serial = _FogOfWarLogic:PlayEffectSeen(skillVfx.tickEffect, self.Entity, tickPos, angleForEffect, tickScale, false, nil)
+		                    if currentIndex == 1 and skillKey == "T" then table.insert(self._T.darkCycleEffects, serial) end
+		                end
+		                if playedTicks == 0 and skillVfx.loopSound ~= nil and not _HeroSkillAssetLogic:Owns(currentIndex, skillKey, "loop") then
+		                    _SoundService:PlaySound(skillVfx.loopSound, _GameSettingsLogic.HeroMult)
+		                end
+		                playedTicks = playedTicks + 1
+		            end
+		            _TimerService:SetTimerOnce(playTickEffect, skillVfx.tickEffectDelay or 0)
+		            if visualTicks > 1 then
+		                local ticksLeft = visualTicks - 1
+		                local visualTimerId = nil
+		                local repeatTickEffect = function()
+		                    playTickEffect()
+		                    ticksLeft = ticksLeft - 1
+		                    if ticksLeft <= 0 and visualTimerId ~= nil then
+		                        _TimerService:ClearTimer(visualTimerId)
+		                    end
+		                end
+		                visualTimerId = _TimerService:SetTimerRepeat(repeatTickEffect, visualInterval, visualInterval + (skillVfx.tickEffectDelay or 0))
+		            end
+		        end
+		        if skillVfx.tickSecondaryEffect ~= nil then
+		            local visualTicks = skillVfx.tickSecondaryVisualTickCount or skillDef.tickCount or 1
+		            local visualInterval = skillVfx.tickSecondaryVisualTickInterval or skillDef.tickInterval or 0.25
+		            local tickOffset = skillVfx.tickSecondaryEffectForwardOffset or effectForwardOffset
+		            local playTickSecondaryEffect = function()
+		                if not castIsValid() then return end
+		                local tickPos = Vector3(effectAnchorPos.x + dir.x * tickOffset, effectAnchorPos.y + dir.y * tickOffset, effectAnchorPos.z)
+		                local tickScale = effectScale
+		                if skillDef.followCasterDuringChannel == true or skillVfx.followCasterDuringChannel == true then
+		                    local livePos3 = self.Entity.TransformComponent.WorldPosition
+		                    local liveMirrored = self.Entity.TransformComponent.Scale.x < 0
+		                    local liveDirX = liveMirrored and 1 or -1
+		                    tickPos = Vector3(livePos3.x + liveDirX * tickOffset, livePos3.y, livePos3.z)
+		                    tickScale = liveMirrored and Vector3(-effectScaleMultiplier, effectScaleMultiplier, 1) or Vector3(effectScaleMultiplier, effectScaleMultiplier, 1)
+		                end
+		                if followCastVisual then self:PlayFollowingCastEffect(skillVfx.tickSecondaryEffect, tickPos, tickScale, skillKey .. ":secondary") else self:PlaySecondaryTickEffect(skillVfx, tickPos, angleForEffect, tickScale) end
+		            end
+		            _TimerService:SetTimerOnce(playTickSecondaryEffect, skillVfx.tickSecondaryEffectDelay or 0)
+		            if visualTicks > 1 then
+		                local ticksLeft = visualTicks - 1
+		                local visualTimerId = nil
+		                local repeatTickSecondaryEffect = function()
+		                    playTickSecondaryEffect()
+		                    ticksLeft = ticksLeft - 1
+		                    if ticksLeft <= 0 and visualTimerId ~= nil then
+		                        _TimerService:ClearTimer(visualTimerId)
+		                    end
+		                end
+		                visualTimerId = _TimerService:SetTimerRepeat(repeatTickSecondaryEffect, visualInterval, visualInterval + (skillVfx.tickSecondaryEffectDelay or 0))
+		            end
+		        end
+		        if skillVfx.persistentTelegraphDuration ~= nil and skillVfx.telegraph ~= nil then
+		            local repeatInterval = skillVfx.persistentTelegraphInterval or 1
+		            local totalDuration = skillVfx.persistentTelegraphDuration
+		            local elapsed = 0
+		            local telegraphAnchorPos = effectPos
+		            local playPersistentTelegraph = function()
+		                if not castIsValid() then return end
+		                self:PlayRangeTelegraph(skillDef, skillVfx, telegraphAnchorPos, angleRad, mirrored)
+		            end
+		
+		            _TimerService:SetTimerOnce(playPersistentTelegraph, skillVfx.persistentTelegraphDelay or 0)
+		            if totalDuration > repeatInterval then
+		                local telegraphTimerId = nil
+		                local repeatTelegraph = function()
+		                    elapsed = elapsed + repeatInterval
+		                    if elapsed >= totalDuration then
+		                        if telegraphTimerId ~= nil then
+		                            _TimerService:ClearTimer(telegraphTimerId)
+		                        end
+		                        return
+		                    end
+		                    playPersistentTelegraph()
+		                end
+		                telegraphTimerId = _TimerService:SetTimerRepeat(repeatTelegraph, repeatInterval)
+		            end
+		        end
+		        if skillVfx.endEffectDelay ~= nil and skillVfx.effect2 ~= nil then
+		            _TimerService:SetTimerOnce(function()
+		                if not castIsValid() then return end
+		                _FogOfWarLogic:PlayEffectSeen(skillVfx.effect2, self.Entity, effectPos, angleForEffect, effectScale, false, nil)
+		            end, skillVfx.endEffectDelay)
+		        end
+		    end, windup)
+	end
+
+end

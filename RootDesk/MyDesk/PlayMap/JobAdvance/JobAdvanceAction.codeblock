@@ -1,0 +1,33 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "codeblock://ba3cbda6-3af1-4aea-932a-a7c0744d4d3d",
+  "ContentType": "x-mod/codeblock",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "CoreVersion": {
+        "Major": 0,
+        "Minor": 2
+      },
+      "ScriptVersion": {
+        "Major": 1,
+        "Minor": 1
+      },
+      "Description": "",
+      "Id": "ba3cbda6-3af1-4aea-932a-a7c0744d4d3d",
+      "Language": 1,
+      "Name": "JobAdvanceAction",
+      "Type": 1,
+      "Source": 0,
+      "Target": "codeblock://7ebb4172-6fa7-4f4e-8b45-4d8df7dfc6f5"
+    }
+  }
+}

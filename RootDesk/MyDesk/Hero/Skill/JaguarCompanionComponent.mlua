@@ -1,0 +1,188 @@
+@Component
+script JaguarCompanionComponent extends Component
+
+	@Sync
+	property integer slot = 1
+
+	@Sync
+	property string mode = "Follow"
+
+	property Entity owner = ""
+
+	property number moveSpeed = 3.6
+
+	property number leash = 6
+
+	property number attackInterval = 1.2
+
+	@ExecSpace("ServerOnly")
+	method void Configure(Entity master, integer index)
+		    -- 소환된 독립 개체를 소유자와 같은 진영으로 등록한다.
+		    self.owner = master
+		    self.slot = index
+		    self._T.nextAttack = 0
+		    self._T.nextRoam = 0
+		    self.Entity.TagComponent:AddTag("Unit")
+		    local hit = self.Entity:GetComponent("script.UnitHitComponent")
+		    hit:SetTeamKey(_CombatTeamLogic:GetTeamKey(master))
+		    -- 합본 우클릭/무기 탐색은 Unit 트리거를 사용한다. HP는 기존 UnitHit 하나만 유지한다.
+		    local trigger = self.Entity.TriggerComponent
+		    if trigger == nil then trigger = self.Entity:AddComponent("TriggerComponent") end
+		    trigger.ColliderType = ColliderType.Box
+		    trigger.BoxSize = Vector2(hit.hitColliderWidth, hit.hitColliderHeight)
+		    trigger.ColliderOffset = Vector2(0, hit.hitColliderOffsetY)
+		    trigger.CollisionGroup = CollisionGroups.Unit
+		    self:SetMode("Follow")
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean IsAlive()
+		    -- 피격 컴포넌트만 HP와 사망을 소유한다.
+		    local hit = self.Entity:GetComponent("script.UnitHitComponent")
+		    return hit ~= nil and not hit.isDead and hit.hp > 0
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SetMode(string nextMode)
+		    -- 별도 공격 모션 없이 idle/run/death 클립을 직접 선택한다.
+		    self.mode = nextMode
+		    local idle = { "60df5d75fe6d48f18493a5b4e34bcd84", "44184601be4b4eeaadeaa24e8baa11b8", "e68969b5beb04cbeb3f9635d865ab9ca" }
+		    local run = { "c1b433f0f09b4de7850e2286e89c6090", "fad4a17672f64e1192c781d1bd669a83", "9ea0f3b8340a43f188d16fce5862b44b" }
+		    local dead = { "e8d6c5d3d8324837bcfcf4f1284dcb92", "baa575cd4c994738b4a41c8ffa2cd2aa", "c0b8f693e8bf47b380be8053f0c2d93f" }
+		    local ruid = idle[self.slot]
+		    if nextMode == "Dead" then ruid = dead[self.slot]
+		    elseif nextMode ~= "Attack" and nextMode ~= "Idle" then ruid = run[self.slot] end
+		    if self.Entity.SpriteRendererComponent.SpriteRUID ~= ruid then
+		        self.Entity.SpriteRendererComponent.SpriteRUID = ruid
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void MoveToward(Vector2 destination, number speed)
+		    -- RectTile 연속 이동은 순간이동이 아닌 MovementComponent를 사용한다.
+		    local p = self.Entity.TransformComponent.WorldPosition:ToVector2()
+		    local difference = destination - p
+		    if difference:Magnitude() < 0.1 then self.Entity.MovementComponent:Stop() return end
+		    local direction = difference:Normalize()
+		    self.Entity.MovementComponent.InputSpeed = speed * 1.2
+		    self.Entity.MovementComponent:MoveToDirection(direction, 0)
+		    if math.abs(direction.x) > 0.05 then
+		        local s = self.Entity.TransformComponent.Scale
+		        self.Entity.TransformComponent.Scale = Vector3(math.abs(s.x) * (direction.x > 0 and -1 or 1), s.y, s.z)
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method Vector2 GetFacingDirection()
+		    -- 재규어 원본은 왼쪽을 향하며 MoveToward의 음수 X 배율이 오른쪽을 뜻한다.
+		    return Vector2(self.Entity.TransformComponent.Scale.x < 0 and 1 or -1, 0)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void BeginDash(Vector2 direction, number distance, number duration)
+		    -- W는 실제 이동 좌표 사이의 구간을 판정하며 개체별 중복 적중을 막는다.
+		    if not self:IsAlive() then return end
+		    local skills = self.owner:GetComponent("script.WildHunterSkillComponent")
+		    local p = self.Entity.TransformComponent.WorldPosition:ToVector2()
+		    self._T.dash = { direction = direction, start = p, previous = p, length = distance,
+		        remaining = duration, speed = distance / duration, info = skills:BeginAttack("W", skills:BuildKit().W.damage, 16) }
+		    self._T.firingUntil = 0
+		    self:SetMode("Dash")
+		    skills:PlayDash(self.Entity, direction, duration)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnUpdate(number delta)
+		    -- AI 의사 결정은 소유자가 배정한 대상을 쓰고 이동만 매 프레임 갱신한다.
+		    if not isvalid(self.owner) then return end
+		    local skills = self.owner:GetComponent("script.WildHunterSkillComponent")
+		    local ownerInfo = self.owner:GetComponent("script.Unit_Info")
+		    if ownerInfo ~= nil then self.moveSpeed = math.max(0, ownerInfo.MoveSpeed) end
+		    if not self:IsAlive() then
+		        self.Entity.MovementComponent:Stop()
+		        if self.mode ~= "Dead" then self:CancelDash() self:SetMode("Dead") end
+		        return
+		    end
+		    if skills == nil then return end
+		    if self.Entity.KinematicbodyComponent.SpeedFactor == Vector2.zero then
+		        self.Entity.MovementComponent:Stop() return
+		    end
+		    if _UtilLogic.ElapsedSeconds < (self._T.firingUntil or 0) then
+		        self:SetMode("Idle") self.Entity.MovementComponent:Stop() return
+		    end
+		    local p = self.Entity.TransformComponent.WorldPosition:ToVector2()
+		    local master = self.owner.TransformComponent.WorldPosition:ToVector2()
+		    local dash = self._T.dash
+		    if dash ~= nil then
+		        local segment = p - dash.previous
+		        if segment:Magnitude() > 0.001 then
+		            skills:AttackCorridor(dash.previous, segment:Normalize(), segment:Magnitude(), 1.6, dash.info, "W")
+		        end
+		        dash.previous = p
+		        dash.remaining = dash.remaining - delta
+		        if dash.remaining <= 0 or (p - dash.start):Magnitude() >= dash.length then
+		            self:CancelDash()
+		            self:SetMode("Return")
+		        else self:MoveToward(p + dash.direction, dash.speed) end
+		        return
+		    end
+		    if self.mode == "Return" or (p - master):Magnitude() > self.leash then
+		        self:SetMode("Return")
+		        self._T.target = nil
+		        if (p - master):Magnitude() > 1.4 then self:MoveToward(master, self.moveSpeed * ((p - master):Magnitude() > 3 and 1.25 or 1)) return end
+		        self:SetMode("Follow")
+		    end
+		    local target = self._T.target
+		    if skills:IsLivingEnemy(target) then
+		        local targetPos = target.TransformComponent.WorldPosition:ToVector2()
+		        if (targetPos - master):Magnitude() <= self.leash then
+		            if (targetPos - p):Magnitude() > 1.05 then
+		                self:SetMode("Chase") self:MoveToward(targetPos, self.moveSpeed)
+		            else
+		                self:SetMode("Attack") self.Entity.MovementComponent:Stop()
+		                if _UtilLogic.ElapsedSeconds >= (self._T.nextAttack or 0) then
+		                    self._T.nextAttack = _UtilLogic.ElapsedSeconds + self.attackInterval
+		                    skills:PassiveAttack(self.Entity, target)
+		                end
+		            end
+		            return
+		        end
+		    end
+		    self._T.target = nil
+		    local ownerMove = self.owner:GetComponent("script.UnitMoveComponent")
+		    if ownerMove ~= nil and ownerMove.IsMove then
+		        local angle = self.slot * 2.094
+		        local followPoint = master + Vector2(math.cos(angle), math.sin(angle)) * 1.4
+		        self:SetMode("Follow")
+		        self:MoveToward(followPoint, self.moveSpeed * ((p - master):Magnitude() > 3 and 1.25 or 1))
+		        return
+		    end
+		    if _UtilLogic.ElapsedSeconds >= (self._T.nextRoam or 0) or self._T.roamTarget == nil
+		        or (self._T.roamTarget - master):Magnitude() > 2.8 then
+		        local angle = self.slot * 2.094 + _UtilLogic:RandomDouble() * 1.2
+		        self._T.roamTarget = master + Vector2(math.cos(angle), math.sin(angle)) * 1.6
+		        self._T.nextRoam = _UtilLogic.ElapsedSeconds + 2 + _UtilLogic:RandomDouble()
+		    end
+		    if (self._T.roamTarget - p):Magnitude() < 0.15 then
+		        self:SetMode("Idle") self.Entity.MovementComponent:Stop()
+		    else self:SetMode("Roam") self:MoveToward(self._T.roamTarget, self.moveSpeed * 0.6) end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CancelDash()
+		    -- 사망/종료/돌진 완료 모두 동일한 공격 필터를 정리한다.
+		    if self._T.dash ~= nil and isvalid(self.owner) then
+		        local core = self.owner:GetComponent("script.HeroSkillComponent")
+		        if core ~= nil then core:EndAttackTargetFilter(self._T.dash.info) end
+		    end
+		    self._T.dash = nil
+		    if isvalid(self.Entity.MovementComponent) then self.Entity.MovementComponent:Stop() end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnEndPlay()
+		    -- 개체 삭제 후 누적 돌진 필터가 남지 않게 한다.
+		    self:CancelDash()
+	end
+
+end

@@ -1,0 +1,61 @@
+@Component
+script XenonHeroDataComponent extends Component
+
+	method table BuildKit()
+		    return {
+		        name = "제논",
+		        Q = { shape = "front", length = 4.5, width = 1.5, damage = 155, cooldown = 1, tickCount = 1 },
+		        -- W는 PDF가 "이동 3칸, 반경 1.8칸"으로 명시(도약 후 타격) -- 전방 3칸 판정에 폭 3.6칸(반경x2).
+		        W = { shape = "front", length = 3, width = 3.6, damage = 200, cooldown = 9, tickCount = 1 },
+		        E = { shape = "front", length = 6, width = 4.6, damage = 290, cooldown = 11, tickCount = 1, projectile = true },
+		        R = { shape = "front", length = 7, width = 6, damage = 400, cooldown = 8, tickCount = 1, projectile = true },
+		        T = { shape = "front", length = 10, width = 2, damage = 1200, cooldown = 120, tickCount = 35, tickInterval = 1 / 7, duration = 5, projectile = true },
+		    }
+	end
+
+	method table BuildVfx()
+		    -- 제논: 사용자 지정 시전/타격 리소스. 배율은 클라이언트 VFX 전용이다.
+		    -- E/R/T는 서버상 projectile이지만, 무기/빔을 포함한 시전 이미지를 ball로 이동시키지 않는다.
+		    return {
+		        Q = {
+		            effect = "dd9bf3160b4144638d9d4975d279d9e9",
+		            impact = "c016ea95bc8147638589c9e33981b465",
+		            castVisualScaleMultiplier = 0.98,
+		            impactScaleMultiplier = 0.95,
+		            playCastEffectOnInput = true,
+		        },
+		        W = {
+		            effect = "96a61fe31122477a8c18685790bb6cde",
+		            impact = "6c367e03609a4beaa3ef180b2c65b148",
+		            castVisualScaleMultiplier = 0.92,
+		            impactScaleMultiplier = 1.0,
+		            playCastEffectOnInput = true,
+		        },
+		        E = {
+		            effect = "d5dbef88bdc64bf79707a2bcc2364b00",
+		            impact = "0c94251dc40a432db6a0e175f3bee787",
+		            castVisualScaleMultiplier = 1.0,
+		            impactScaleMultiplier = 0.75,
+		            playCastEffectOnInput = true,
+		        },
+		        R = {
+		            effect = "2311d82baf5347278da83527dc9788c4",
+		            impact = "30e87b0a955b4e099bb43a9e2146889b",
+		            castVisualScaleMultiplier = 0.85,
+		            effectForwardOffset = 1.75, -- 중심형 연출을 기존 전방 3.5 범위의 중앙에 배치
+		            impactScaleMultiplier = 0.8,
+		            playCastEffectOnInput = true,
+		        },
+		        -- 제논 전용 컴포넌트가 5초 빔의 생성/제거와 종료 연출을 관리한다.
+		        T = {
+		            effect = "0516d7594a394561893e04de713cfb6a",
+		            effect2 = "1c5ba226dfa9405f9735e40ed6f71186",
+		            impact = "a57f7597505742228f5fbf8bb094e8c5",
+		            castVisualScaleMultiplier = 0.75,
+		            impactScaleMultiplier = 0.85,
+		            playCastEffectOnInput = true,
+		        },
+		    }
+	end
+
+end

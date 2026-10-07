@@ -1,0 +1,23 @@
+@Logic
+script CollisionQueryLogic extends Logic
+
+	method table OverlapBoxAllGroups(any simulator, table groups, Vector2 position, Vector2 size, number angle)
+		-- groups(그룹 이름 목록)에 속한 모든 콜라이더 중 박스와 겹치는 것을 중복 없이 모아 돌려준다.
+		local result = {}
+		local seen = {}
+		for _, name in ipairs(groups) do
+			local hits = simulator:OverlapBoxAll(name, position, size, angle)
+			if hits ~= nil then
+				for i = 1, #hits do
+					local hit = hits[i]
+					if hit ~= nil and not seen[hit] then
+						seen[hit] = true
+						table.insert(result, hit)
+					end
+				end
+			end
+		end
+		return result
+	end
+
+end

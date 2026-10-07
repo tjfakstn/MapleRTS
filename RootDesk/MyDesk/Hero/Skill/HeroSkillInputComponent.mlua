@@ -1,0 +1,119 @@
+@Component
+script HeroSkillInputComponent extends Component
+
+	property any keyHandler = nil
+
+	property any keyUpHandler = nil
+
+	@ExecSpace("ClientOnly")
+	method Component GetSkillComponent()
+		    ---@type HeroSkillComponent
+		    local skillComp = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return skillComp
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		    -- 자신의 로컬 플레이어만 키 입력을 구독한다. 원격 플레이어 복제본은 입력을 받지 않는다.
+		    if self.Entity ~= _UserService.LocalPlayer then return end
+		    if self.keyHandler ~= nil or self.keyUpHandler ~= nil then
+		        return
+		    end
+		
+		    self.keyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnKeyDown)
+		    self.keyUpHandler = _InputService:ConnectEvent(KeyUpEvent, self.OnKeyUp)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		    -- 등록한 이벤트만 정확히 해제해 재생성/맵 전환 시 중복 입력을 막는다.
+		    if self.keyHandler ~= nil then
+		        _InputService:DisconnectEvent(KeyDownEvent, self.keyHandler)
+		        self.keyHandler = nil
+		    end
+		    if self.keyUpHandler ~= nil then
+		        _InputService:DisconnectEvent(KeyUpEvent, self.keyUpHandler)
+		        self.keyUpHandler = nil
+		    end
+		    self._T.galeChargeStartAt = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnKeyDown(KeyDownEvent event)
+		    -- 키를 스킬 슬롯/테스트 명령으로 변환하고, 커서 좌표만 읽어 기존 서버 RPC로 전달한다.
+		    local skillComp = self:GetSkillComponent()
+		    if skillComp ~= nil and skillComp.heroSelectionOpen then return end
+		    if skillComp == nil then
+		        return
+		    end
+		
+		    if event.key == KeyboardKey.F6 then
+		        local dummyScreenPos = _InputService:GetCursorPosition()
+		        local dummyWorldPos = _UILogic:ScreenToWorldPosition(dummyScreenPos)
+		        skillComp:RequestSpawnTrainingDummy(dummyWorldPos)
+		        return
+		    end
+		    if event.key == KeyboardKey.F7 then
+		        skillComp:RequestClearTrainingDummies()
+		        return
+		    end
+		
+		    local skillKey = nil
+		    if event.key == KeyboardKey.Q then skillKey = "Q"
+		    elseif event.key == KeyboardKey.W then skillKey = "W"
+		    elseif event.key == KeyboardKey.E then skillKey = "E"
+		    elseif event.key == KeyboardKey.R then skillKey = "R"
+		    elseif event.key == KeyboardKey.T then skillKey = "T"
+		    end
+		    if skillKey == nil then return end
+		
+		    -- 차징 여부와 차징 VFX는 스킬 데이터/VFX를 소유한 기존 컴포넌트에 그대로 둔다.
+		    if skillKey == "T" and skillComp:IsChargedSkillKey("T") then
+		        if self._T.galeChargeStartAt == nil then
+		            self._T.galeChargeStartAt = _UtilLogic.ElapsedSeconds
+		            skillComp:PlayChargeMotionEffect("T")
+		        end
+		        return
+		    end
+		
+		    ---@type ClickToMoveComponent
+		    local moveComp = self.Entity:GetComponent("script.ClickToMoveComponent")
+		    if moveComp ~= nil then
+		        moveComp:StopMovement()
+		    end
+		
+		    local screenPos = _InputService:GetCursorPosition()
+		    local aimWorldPos = _UILogic:ScreenToWorldPosition(screenPos)
+		    skillComp:RequestCastSkill(skillKey, aimWorldPos)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnKeyUp(KeyUpEvent event)
+		    -- 차징 스킬은 같은 컴포넌트가 KeyDown과 KeyUp 상태를 모두 소유해야 한다.
+		    if event.key ~= KeyboardKey.T then return end
+		
+		    local startAt = self._T.galeChargeStartAt
+		    if startAt == nil then return end
+		    self._T.galeChargeStartAt = nil
+		
+		    local skillComp = self:GetSkillComponent()
+		    if skillComp == nil then return end
+		    skillComp:StopSustainedAttachedEffect()
+		    if skillComp.heroSelectionOpen then return end
+		
+		    local heldSeconds = (_UtilLogic.ElapsedSeconds or 0) - startAt
+		    if heldSeconds < 0 then heldSeconds = 0 end
+		
+		    ---@type ClickToMoveComponent
+		    local moveComp = self.Entity:GetComponent("script.ClickToMoveComponent")
+		    if moveComp ~= nil then
+		        moveComp:StopMovement()
+		    else
+		    end
+		
+		    local screenPos = _InputService:GetCursorPosition()
+		    local aimWorldPos = _UILogic:ScreenToWorldPosition(screenPos)
+		    skillComp:RequestCastWindGale(aimWorldPos, heldSeconds)
+	end
+
+end

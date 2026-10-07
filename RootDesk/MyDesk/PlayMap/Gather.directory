@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "directory://b22bd9bd9cdb4ceba69d58bf9fbc147a",
+  "ContentType": "x-mod/directory",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "entry_id": "directory://b22bd9bd9cdb4ceba69d58bf9fbc147a",
+      "name": "Gather",
+      "lock": false,
+      "folding": false,
+      "nameEditable": true
+    }
+  }
+}

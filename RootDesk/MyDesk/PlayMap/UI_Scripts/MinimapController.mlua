@@ -1,0 +1,599 @@
+@Component
+script MinimapController extends Component
+
+	property string PlayMapName = "map02"
+
+	property number WorldMinX = -31
+
+	property number WorldMaxX = 31
+
+	property number WorldMinY = -33
+
+	property number WorldMaxY = 30
+
+	property number TickInterval = 0.3
+
+	property string MapImageEntityName = "RTS_Terrain"
+
+	property string MinimapImageChildName = "MapImage"
+
+	@HideFromInspector
+	property boolean _mapImageReady = false
+
+	@HideFromInspector
+	property integer _mapImageRetry = 0
+
+	@HideFromInspector
+	property any _template = nil
+
+	@HideFromInspector
+	property table _markers = {}
+
+	@HideFromInspector
+	property any _tickTimerId = nil
+
+	property string ClickAreaChildName = "ClickArea"
+
+	@HideFromInspector
+	property any _clickArea = nil
+
+	@HideFromInspector
+	property any _hClick = nil
+
+	@HideFromInspector
+	property any _hDrag = nil
+
+	@HideFromInspector
+	property integer _sceneVersion = -1
+
+	@DisplayName("카메라 사각형 색")
+	property Color CameraRectColor = Color(1, 1, 1, 0.95)
+
+	@DisplayName("카메라 사각형 선 두께(px)")
+	property number CameraRectThickness = 2
+
+	@HideFromInspector
+	property table _camEdges = {}
+
+	property Color MarkerMine = Color(0.2, 0.9, 0.2, 1)
+
+	property Color MarkerEnemy = Color(0.9, 0.2, 0.2, 1)
+
+	property Color MarkerNeutral = Color(0.95, 0.85, 0.2, 1)
+
+	@DisplayName("미니맵 안개 칸 크기(월드)")
+	property number FogCellWorld = 3.0
+
+	@DisplayName("프레임당 미니맵 안개 칸 생성 수")
+	property integer FogCellsPerFrame = 60
+
+	@DisplayName("미니맵 안개 칸 스프라이트(흰 사각형)")
+	property string FogCellRuid = "34933a8d498b481e840ee60438145b72"
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		self._template = self.Entity:GetChildByName("MarkerTemplate")
+		if isvalid(self._template) then
+			self._template.Enable = false
+		end
+		self._markers = {}
+		self._sceneVersion = -1
+		-- 미니맵 클릭 → 카메라 이동. ClickArea(투명 스프라이트 + UITouchReceive)의 UITouchDownEvent는 화면 좌표(TouchPoint)를 들고 온다
+		-- (ButtonClickEvent에는 좌표가 없다).
+		-- 미니맵 입력은 UI 터치 이벤트(UITouchDown/Drag) 대신 마우스 버튼을 직접 읽고 커서가 미니맵 박스 안인지 계산한다.
+		-- 예전 방식은 유닛·건물 마커(템플릿 복제, 클릭을 받는 스프라이트)가 클릭을 가로채 "됐다 말았다" 했고,
+		-- 우클릭은 UI 터치 이벤트가 오지 않아(맵 우클릭 처리도 UI 위라 무시) 미니맵 우클릭 이동이 전혀 안 됐다.
+		-- ClickArea는 그대로 두어 미니맵 위 클릭이 맵(드래그 선택·우클릭 이동)으로 새지 않게 막는 역할만 한다.
+		self._clickArea = self.Entity:GetChildByName(self.ClickAreaChildName)
+		self._hClick = _InputService:ConnectEvent(KeyDownEvent, function(event) self:OnMouseDown(event) end)
+		self._hDrag = _InputService:ConnectEvent(KeyUpEvent, function(event) self:OnMouseUp(event) end)
+		self._T.dragging = false
+		self._tickTimerId = _TimerService:SetTimerRepeat(function() self:Tick() end, self.TickInterval)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		if self._tickTimerId ~= nil then
+			_TimerService:ClearTimer(self._tickTimerId)
+			self._tickTimerId = nil
+		end
+		if self._hClick ~= nil then _InputService:DisconnectEvent(KeyDownEvent, self._hClick) end
+		self._hClick = nil
+		if self._hDrag ~= nil then _InputService:DisconnectEvent(KeyUpEvent, self._hDrag) end
+		self._hDrag = nil
+		self._T.dragging = false
+		for _, marker in pairs(self._markers) do
+			if isvalid(marker) then marker:Destroy() end
+		end
+		self._markers = {}
+		for _, edge in pairs(self._camEdges) do
+			if isvalid(edge) then edge:Destroy() end
+		end
+		self._camEdges = {}
+		self:DestroyFog()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- 카메라가 부드럽게 움직이므로 카메라 사각형은 매 프레임 갱신한다(엔티티 4개 위치/크기만 바꿈).
+		-- 미니맵에서 왼쪽 버튼을 누른 채 끄는 동안에는 매 프레임 커서 지점으로 카메라를 옮긴다(미니맵 밖으로 끌면 가장자리로 잘림).
+		if self._T.dragging then
+			if _InputService:IsKeyPressed(KeyboardKey.Mouse0) and self:IsActiveMap() then
+				_RTSCameraLogic:MoveTo(self:MinimapToWorld(self:CursorLocal()))
+			else
+				self._T.dragging = false
+			end
+		end
+		self:UpdateCameraRect()
+		self:BuildFogStep()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void EnsureCameraEdges()
+		-- 카메라 사각형의 네 변(Top/Bottom/Left/Right)을 MarkerTemplate(기본 둥근 사각 스프라이트) 복제로 만든다. 한 번만.
+		if not isvalid(self._template) then return end
+		for _, n in ipairs({ "Top", "Bottom", "Left", "Right" }) do
+			local e = self._camEdges[n]
+			if e == nil or not isvalid(e) then
+				e = self._template:Clone("CameraRect_" .. n)
+				local ut = e.UITransformComponent
+				ut.AnchorsMin = Vector2(0.5, 0.5)
+				ut.AnchorsMax = Vector2(0.5, 0.5)
+				ut.Pivot = Vector2(0.5, 0.5)
+				local sr = e.SpriteGUIRendererComponent
+				sr.Color = self.CameraRectColor
+				sr.RaycastTarget = false   -- 미니맵 클릭(ClickArea)을 가로채지 않게
+				self._camEdges[n] = e
+				self:BringCameraRectToFront()
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetCameraEdgesEnable(boolean on)
+		for _, e in pairs(self._camEdges) do
+			if isvalid(e) and e.Enable ~= on then e.Enable = on end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateCameraRect()
+		-- 실제 렌더링 화면의 모서리를 월드 좌표로 변환한 범위를
+		-- 미니맵 박스 좌표로 바꿔 흰 사각형으로 그린다(스타크래프트 미니맵의 시야 사각형). 박스 밖으로 나가는 부분은 잘라 낸다.
+		if not self:IsActiveMap() or not self._mapImageReady then
+			self:SetCameraEdgesEnable(false)
+			return
+		end
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) then return end
+		self:EnsureCameraEdges()
+		local screenW, screenH = _UILogic.ScreenWidth, _UILogic.ScreenHeight
+		if screenW == nil or screenH == nil or screenW <= 0 or screenH <= 0 then
+			self:SetCameraEdgesEnable(false)
+			return
+		end
+		local bl = _UILogic:ScreenToWorldPosition(Vector2(0, 0))
+		local tr = _UILogic:ScreenToWorldPosition(Vector2(screenW, screenH))
+		local box = self.Entity.UITransformComponent.RectSize
+		local hx, hy = box.x / 2, box.y / 2
+		local spanX = self.WorldMaxX - self.WorldMinX
+		local spanY = self.WorldMaxY - self.WorldMinY
+		if spanX <= 0 or spanY <= 0 then return end
+		local function toX(wx) return math.max(-hx, math.min(hx, ((wx - self.WorldMinX) / spanX - 0.5) * box.x)) end
+		local function toY(wy) return math.max(-hy, math.min(hy, ((wy - self.WorldMinY) / spanY - 0.5) * box.y)) end
+		local x0, x1 = toX(math.min(bl.x, tr.x)), toX(math.max(bl.x, tr.x))
+		local y0, y1 = toY(math.min(bl.y, tr.y)), toY(math.max(bl.y, tr.y))
+		local t = self.CameraRectThickness
+		local w, h = math.max(x1 - x0, t), math.max(y1 - y0, t)
+		local cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+		self:PlaceEdge("Top", cx, y1, w, t)
+		self:PlaceEdge("Bottom", cx, y0, w, t)
+		self:PlaceEdge("Left", x0, cy, t, h)
+		self:PlaceEdge("Right", x1, cy, t, h)
+		self:SetCameraEdgesEnable(true)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlaceEdge(string name, number x, number y, number w, number h)
+		local e = self._camEdges[name]
+		if not isvalid(e) then return end
+		local ut = e.UITransformComponent
+		ut.anchoredPosition = Vector2(x, y)
+		ut.RectSize = Vector2(w, h)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void BringCameraRectToFront()
+		-- 지도 조각·유닛 마커보다 위에 그리도록 네 변을 맨 뒤 형제로 옮긴다. 마커는 Tick에서 새로 복제되므로 Tick 끝에서도 호출.
+		local last = #self.Entity.Children:ToTable() - 1
+		for _, e in pairs(self._camEdges) do
+			if isvalid(e) then _UILogic:SetSiblingIndex(e.UITransformComponent, last) end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method Vector2 CursorLocal()
+		-- 현재 마우스 커서의 미니맵 박스 로컬 좌표(중심 기준, WorldToMinimap과 같은 기준).
+		return _UILogic:ScreenToLocalUIPosition(_InputService:GetCursorPosition(), self.Entity.UITransformComponent)
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean IsInsideBox(Vector2 localPos)
+		-- 로컬 좌표가 미니맵 박스 안인지.
+		local box = self.Entity.UITransformComponent.RectSize
+		return math.abs(localPos.x) <= box.x / 2 and math.abs(localPos.y) <= box.y / 2
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnMouseDown(KeyDownEvent event)
+		-- 미니맵 위 마우스 입력: 왼쪽 = 카메라를 그 지점으로(누른 채 끌면 계속 따라옴), 오른쪽 = 선택한 유닛을 그 지점으로 이동.
+		if event.key ~= KeyboardKey.Mouse0 and event.key ~= KeyboardKey.Mouse1 then return end
+		if not self:IsActiveMap() or not self.Entity.Enable then return end
+		local localPos = self:CursorLocal()
+		if not self:IsInsideBox(localPos) then return end
+		local worldPos = self:MinimapToWorld(localPos)
+		if event.key == KeyboardKey.Mouse1 then
+			self:MoveSelectedTo(worldPos)
+			return
+		end
+		if _BuildModeLogic.IsPlacing then return end
+		self._T.dragging = true
+		_RTSCameraLogic:MoveTo(worldPos)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnMouseUp(KeyUpEvent event)
+		-- 왼쪽 버튼을 떼면 미니맵 드래그를 끝낸다.
+		if event.key == KeyboardKey.Mouse0 then self._T.dragging = false end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnMinimapTouch(UITouchDownEvent event)
+		-- 미니맵 좌클릭(또는 터치) 지점을 월드 좌표로 바꿔 카메라를 그곳으로 옮긴다.
+		-- 우클릭(-3)은 스타처럼 선택한 유닛을 그 지점으로 이동시킨다(카메라는 그대로). 휠 클릭(-2)은 무시.
+		if not self:IsActiveMap() then return end
+		if event.TouchId == -2 then return end
+		-- 화면 좌표 → 미니맵 박스(자신의 UITransform, 피벗 중심) 로컬 좌표. WorldToMinimap의 anchoredPosition과 같은 기준이다.
+		local localPos = _UILogic:ScreenToLocalUIPosition(event.TouchPoint, self.Entity.UITransformComponent)
+		local worldPos = self:MinimapToWorld(localPos)
+		if event.TouchId == -3 then
+			self:MoveSelectedTo(worldPos)
+			return
+		end
+		_RTSCameraLogic:MoveTo(worldPos)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void MoveSelectedTo(Vector2 worldPos)
+		-- 맵 우클릭 이동과 같은 경로(Mouse_Command.MoveUnits: 원형 분산·건설 중 일꾼 제외·건물 밖으로 밀어내기·서버 이동 요청)를 쓴다.
+		-- 건물 배치 중이면 무시(배치 중 우클릭은 취소용).
+		if _BuildModeLogic.IsPlacing then return end
+		local lp = _UserService.LocalPlayer
+		local map = isvalid(lp) and lp.CurrentMap or nil
+		if not isvalid(map) then return end
+		---@type Mouse_Command
+		local mouse = map:GetComponent("script.Mouse_Command")
+		if mouse == nil then
+			return
+		end
+		mouse:MoveUnits(worldPos)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnMinimapDrag(UITouchDragEvent event)
+		-- 미니맵 위에서 왼쪽 버튼(또는 터치)을 누른 채 끄는 동안 매 이벤트마다 카메라를 그 지점으로 옮긴다(로그는 남기지 않음).
+		if not self:IsActiveMap() then return end
+		if event.TouchId == -2 or event.TouchId == -3 then return end
+		local localPos = _UILogic:ScreenToLocalUIPosition(event.TouchPoint, self.Entity.UITransformComponent)
+		_RTSCameraLogic:MoveTo(self:MinimapToWorld(localPos))
+	end
+
+	method Vector2 MinimapToWorld(Vector2 localPos)
+		-- WorldToMinimap의 역변환: 미니맵 박스 로컬 좌표(중심 기준) → 월드 좌표. 박스 밖 값은 가장자리로 자른다.
+		local box = self.Entity.UITransformComponent.RectSize
+		local rx = localPos.x / box.x + 0.5
+		local ry = localPos.y / box.y + 0.5
+		rx = math.max(0, math.min(1, rx))
+		ry = math.max(0, math.min(1, ry))
+		local wx = self.WorldMinX + rx * (self.WorldMaxX - self.WorldMinX)
+		local wy = self.WorldMinY + ry * (self.WorldMaxY - self.WorldMinY)
+		return Vector2(wx, wy)
+	end
+
+	method void ResetMapImage()
+		-- 재경기 대응: 복제해 둔 지도 조각(MapImage_Piece*)과 마커를 지우고 원본 MapImage를 다시 켜서,
+		-- 다음 Tick에서 SetupMapImage가 지도 범위/이미지를 처음부터 다시 세팅하게 한다.
+		for _, child in ipairs(self.Entity.Children:ToTable()) do
+			if isvalid(child) and string.sub(child.Name, 1, 14) == "MapImage_Piece" then
+				child:Destroy()
+			end
+		end
+		local uiImage = self.Entity:GetChildByName(self.MinimapImageChildName)
+		if isvalid(uiImage) then uiImage.Enable = true end
+		for _, marker in pairs(self._markers) do
+			if isvalid(marker) then marker:Destroy() end
+		end
+		self._markers = {}
+		self:DestroyFog()
+		self._mapImageReady = false
+		self._mapImageRetry = 0
+	end
+
+	method boolean IsActiveMap()
+		-- 미니맵은 게임 맵(map02)에서만 동작해야 한다. 로비(map01)에서는 무시.
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) then return false end
+		local m = lp.CurrentMap
+		return isvalid(m) and m.Name == self.PlayMapName
+	end
+
+	method void SetupMapImage(Entity map)
+		-- 게임 맵의 지도 이미지 엔티티(들)에서 스프라이트와 월드 범위를 읽어 미니맵 배경/좌표 범위를 맞춘다(게임 맵 진입 후 1회).
+		-- 지도가 한 장(MapImageEntityName)이거나 여러 조각(이름이 MapImageEntityName으로 시작, 예: RTS_Terrain_x4_NW/NE/SW/SE)이어도
+		-- 모든 조각의 합집합을 월드 범위로 쓰고, 조각마다 UI 이미지를 복제해 같은 위치/크기로 배치한다.
+		local pieces = {}
+		for _, child in ipairs(map.Children:ToTable()) do
+			if string.sub(child.Name, 1, #self.MapImageEntityName) == self.MapImageEntityName and isvalid(child.SpriteRendererComponent) then
+				table.insert(pieces, child)
+			end
+		end
+		if #pieces == 0 then
+			-- 맵 진입 직후에는 클라이언트에 아직 엔티티가 복제되지 않았을 수 있다 — 기본 범위로 확정하지 말고 다음 틱에 재시도한다.
+			self._mapImageRetry = self._mapImageRetry + 1
+			if self._mapImageRetry == 1 or self._mapImageRetry % 20 == 0 then
+			end
+			return
+		end
+		
+		-- 조각별 월드 사각형 계산: 월드 크기 = 픽셀 크기 / PPU × 엔티티 배율, 중심 = 위치 + (0.5 - 피벗) × 크기
+		local rects = {}
+		local minX, maxX, minY, maxY = math.huge, -math.huge, math.huge, -math.huge
+		for _, src in ipairs(pieces) do
+			local ruid = src.SpriteRendererComponent.SpriteRUID
+			local sprite = _ResourceService:LoadSpriteAndWait(ruid)
+			if sprite == nil then
+				return -- 다음 틱에 다시 시도
+			end
+			local tf = src.TransformComponent
+			local wp = tf.WorldPosition
+			local w = sprite.Width / sprite.PixelPerUnit * math.abs(tf.Scale.x)
+			local h = sprite.Height / sprite.PixelPerUnit * math.abs(tf.Scale.y)
+			local cx = wp.x + (0.5 - sprite.Pivot.x) * w
+			local cy = wp.y + (0.5 - sprite.Pivot.y) * h
+			table.insert(rects, { ruid = ruid, cx = cx, cy = cy, w = w, h = h })
+			minX = math.min(minX, cx - w / 2)
+			maxX = math.max(maxX, cx + w / 2)
+			minY = math.min(minY, cy - h / 2)
+			maxY = math.max(maxY, cy + h / 2)
+		end
+		self.WorldMinX = minX
+		self.WorldMaxX = maxX
+		self.WorldMinY = minY
+		self.WorldMaxY = maxY
+		
+		-- UI 배경: 원본 MapImage(UI)는 숨기고 조각마다 복제해 미니맵 박스 안의 같은 비율 위치/크기로 둔다.
+		local uiImage = self.Entity:GetChildByName(self.MinimapImageChildName)
+		if isvalid(uiImage) and isvalid(uiImage.SpriteGUIRendererComponent) then
+			local box = self.Entity.UITransformComponent.RectSize
+			local spanX = maxX - minX
+			local spanY = maxY - minY
+			for i, r in ipairs(rects) do
+				local piece = uiImage:Clone("MapImage_Piece" .. i)
+				piece.Enable = true
+				local ut = piece.UITransformComponent
+				ut.AnchorsMin = Vector2(0.5, 0.5)
+				ut.AnchorsMax = Vector2(0.5, 0.5)
+				ut.Pivot = Vector2(0.5, 0.5)
+				ut.RectSize = Vector2(r.w / spanX * box.x, r.h / spanY * box.y)
+				ut.anchoredPosition = Vector2(((r.cx - minX) / spanX - 0.5) * box.x, ((r.cy - minY) / spanY - 0.5) * box.y)
+				piece.SpriteGUIRendererComponent.ImageRUID = DataRef(r.ruid)
+				-- 마커(템플릿 Clone)보다 항상 뒤에 그려지도록 앞쪽 자식으로 둔다.
+				_UILogic:SetSiblingIndex(ut, 0)
+			end
+			uiImage.Enable = false
+		end
+		self._mapImageReady = true
+	end
+
+	method void Tick()
+		-- 맵 전환(SceneController.SceneVersion 변화)을 감지하면 지도 이미지/마커를 초기화한다(재경기 때 이전 경기 상태 유지 방지).
+		if _SceneController.SceneVersion ~= self._sceneVersion then
+			self._sceneVersion = _SceneController.SceneVersion
+			if self._mapImageReady or next(self._markers) ~= nil then
+				self:ResetMapImage()
+			end
+		end
+		if not self:IsActiveMap() or not isvalid(self._template) then return end
+		local lp = _UserService.LocalPlayer
+		local map = lp.CurrentMap
+		local localUserId = lp.PlayerComponent.UserId
+		if not self._mapImageReady then
+			self:SetupMapImage(map)
+			-- 지도 범위가 확정되기 전에는 마커를 찍지 않는다(약 3초 재시도 후에도 못 찾으면 기본 범위로 표시).
+			if not self._mapImageReady and self._mapImageRetry < 10 then return end
+		end
+		
+		self:EnsureFog()
+		self:UpdateFog()
+		
+		local seen = {}
+		
+		-- 유닛(MyUnits 그룹 자식): 소유자(PlayerID) 비교로 초록/빨강 판정.
+		-- 내 시야 밖(또는 탐지 안 된 은신)이라 VisionLogic이 숨긴 대상은 마커도 찍지 않는다(스펙 §9-3) — seen에 안 들어가 아래에서 제거된다.
+		local group = map:GetChildByName("MyUnits")
+		if isvalid(group) then
+			for _, child in ipairs(group.Children:ToTable()) do
+				---@type Unit_Info
+				local info = child:GetComponent("script.Unit_Info")
+				if info ~= nil and not info.IsDead and _VisionLogic:IsShownLocally(child) then
+					self:UpdateMarker(child, info.PlayerID == localUserId)
+					seen[child.Id] = true
+				end
+			end
+		end
+		
+		-- 건물(MyStructures 그룹 + 맵 최상위의 본진 등): 소유자 기준 내 것 초록 / 상대 빨강 / 중립 노랑.
+		-- (예전엔 맵 최상위 건물을 소유자와 상관없이 전부 초록으로 찍어 적 본진도 초록이었고, MyStructures 안 건물은 아예 안 찍혔다.)
+		-- 맵 최상위의 Unit_Info 대상(중립 몬스터 등)은 빨강.
+		local structures = map:GetChildByName("MyStructures")
+		local candidates = map.Children:ToTable()
+		if isvalid(structures) then
+			for _, child in ipairs(structures.Children:ToTable()) do table.insert(candidates, child) end
+		end
+		for _, child in ipairs(candidates) do
+			if child ~= group and child ~= structures and _VisionLogic:IsShownLocally(child) then
+				---@type Unit_Info
+				local info = child:GetComponent("script.Unit_Info")
+				---@type Structure_Info
+				local sinfo = child:GetComponent("script.Structure_Info")
+				if info ~= nil and not info.IsDead then
+					self:UpdateMarker(child, false)
+					seen[child.Id] = true
+				elseif sinfo ~= nil and not sinfo.IsDestroyed then
+					local color = _UnitOverlayLogic:OwnerColor(sinfo.PlayerID, sinfo.PlayerID == localUserId)
+					local p = child.TransformComponent.WorldPosition
+					self:UpdateMarkerAt(child.Id, p.x, p.y, color)
+					seen[child.Id] = true
+				end
+			end
+		end
+		
+		-- 안개 속 적 건물 잔상(VisionLogic)도 마지막으로 본 자리에 빨강으로 남긴다.
+		for id, rec in pairs(_VisionLogic:GetSnapshots()) do
+			local key = "snap_" .. id
+			local owner = rec.owner or ""
+			self:UpdateMarkerAt(key, rec.x, rec.y, (owner ~= "") and _UnitOverlayLogic:OwnerColor(owner, false) or self.MarkerEnemy)
+			seen[key] = true
+		end
+		
+		-- 더 이상 존재하지 않는(죽거나 사라진) 대상의 마커는 제거한다.
+		for id, marker in pairs(self._markers) do
+			if not seen[id] then
+				if isvalid(marker) then marker:Destroy() end
+				self._markers[id] = nil
+			end
+		end
+		self:BringCameraRectToFront()
+	end
+
+	method void UpdateMarker(Entity target, boolean isMine)
+		-- 유닛 마커: 내 것 초록 / 그 외 빨강.
+		local pos = target.TransformComponent.WorldPosition
+		local info = target.Unit_Info
+		local owner = (info ~= nil) and info.PlayerID or ""
+		self:UpdateMarkerAt(target.Id, pos.x, pos.y, _UnitOverlayLogic:OwnerColor(owner, isMine))
+	end
+
+	method void UpdateMarkerAt(string key, number wx, number wy, Color color)
+		-- 키 1개당 마커 1개를 유지(없으면 템플릿을 Clone)하고, 색상과 위치를 매 틱 갱신한다.
+		local marker = self._markers[key]
+		if marker == nil or not isvalid(marker) then
+			marker = self._template:Clone("Marker_" .. key)
+			marker.Enable = true
+			marker.SpriteGUIRendererComponent.RaycastTarget = false   -- 미니맵 클릭을 가로채지 않게
+			self._markers[key] = marker
+		end
+		marker.SpriteGUIRendererComponent.Color = color
+		marker.UITransformComponent.anchoredPosition = self:WorldToMinimap(wx, wy)
+	end
+
+	method void EnsureFog()
+		-- 미니맵 안개 칸(FogCellWorld 월드 크기) 배치 계획만 세운다. 실제 복제는 BuildFogStep이 프레임당 FogCellsPerFrame개씩 한다(시작 렉 방지).
+		if self._T.fog ~= nil or not isvalid(self._template) then return end
+		local spanX = self.WorldMaxX - self.WorldMinX
+		local spanY = self.WorldMaxY - self.WorldMinY
+		local c = self.FogCellWorld
+		if spanX <= 0 or spanY <= 0 or c <= 0 then return end
+		self._T.fog = {}
+		self._T.fogNx = math.ceil(spanX / c)
+		self._T.fogNy = math.ceil(spanY / c)
+		self._T.fogNext = 0
+	end
+
+	method void BuildFogStep()
+		-- 남은 미니맵 안개 칸을 이번 프레임 몫만큼 복제한다. 다 만들면 마커·카메라 사각형을 안개 위로 올린다.
+		local cells = self._T.fog
+		if cells == nil or not isvalid(self._template) then return end
+		local nx = self._T.fogNx
+		local ny = self._T.fogNy
+		local total = nx * ny
+		local n = self._T.fogNext
+		if n >= total then return end
+		local box = self.Entity.UITransformComponent.RectSize
+		local spanX = self.WorldMaxX - self.WorldMinX
+		local spanY = self.WorldMaxY - self.WorldMinY
+		local c = self.FogCellWorld
+		local cw = box.x * c / spanX
+		local ch = box.y * c / spanY
+		local last = math.min(total, n + math.max(1, self.FogCellsPerFrame)) - 1
+		for k = n, last do
+			local i = k % nx
+			local j = k // nx
+			local x0 = self.WorldMinX + i * c
+			local y0 = self.WorldMinY + j * c
+			local x1 = math.min(x0 + c, self.WorldMaxX)
+			local y1 = math.min(y0 + c, self.WorldMaxY)
+			local e = self._template:Clone("Fog_" .. i .. "_" .. j)
+			e.Enable = true
+			local ut = e.UITransformComponent
+			ut.AnchorsMin = Vector2(0.5, 0.5)
+			ut.AnchorsMax = Vector2(0.5, 0.5)
+			ut.Pivot = Vector2(0.5, 0.5)
+			ut.RectSize = Vector2(cw * (x1 - x0) / c + 1, ch * (y1 - y0) / c + 1)
+			ut.anchoredPosition = Vector2((((x0 + x1) / 2 - self.WorldMinX) / spanX - 0.5) * box.x, (((y0 + y1) / 2 - self.WorldMinY) / spanY - 0.5) * box.y)
+			local sr = e.SpriteGUIRendererComponent
+			sr.ImageRUID = DataRef(self.FogCellRuid)
+			sr.Type = ImageType.Simple
+			sr.RaycastTarget = false   -- 미니맵 클릭(ClickArea)을 가로채지 않게
+			sr.Color = Color(0, 0, 0, 1)
+			table.insert(cells, { e = e, x0 = x0, y0 = y0, x1 = x1, y1 = y1, a = 1 })
+		end
+		self._T.fogNext = last + 1
+		-- 이미 있던 마커와 카메라 사각형은 안개 위로 올린다(이후 새 마커는 Clone 시 맨 뒤 형제라 자연히 위).
+		local lastIdx = #self.Entity.Children:ToTable() - 1
+		for _, marker in pairs(self._markers) do
+			if isvalid(marker) then _UILogic:SetSiblingIndex(marker.UITransformComponent, lastIdx) end
+		end
+		self:BringCameraRectToFront()
+		if self._T.fogNext >= total then
+		end
+	end
+
+	method void UpdateFog()
+		-- 칸마다 FogOfWarLogic의 탐사/시야 상태로 불투명도를 맞춘다(바뀐 칸만 색을 쓴다). 안개가 꺼져 있으면 전부 투명.
+		local cells = self._T.fog
+		if cells == nil then return end
+		local active = _FogOfWarLogic:IsActive()
+		for _, cell in ipairs(cells) do
+			local a = 0
+			if active then a = _FogOfWarLogic:AreaFogAlpha(cell.x0, cell.y0, cell.x1, cell.y1) end
+			if a ~= cell.a and isvalid(cell.e) then
+				cell.a = a
+				cell.e.SpriteGUIRendererComponent.Color = Color(0, 0, 0, a)
+			end
+		end
+	end
+
+	method void DestroyFog()
+		-- 미니맵 안개 칸을 지운다(맵 전환/종료).
+		local cells = self._T.fog
+		if cells == nil then return end
+		for _, cell in ipairs(cells) do
+			if isvalid(cell.e) then cell.e:Destroy() end
+		end
+		self._T.fog = nil
+	end
+
+	method Vector2 WorldToMinimap(number wx, number wy)
+		-- 월드 좌표를 미니맵 박스(자신의 RectSize) 안의 로컬 anchoredPosition으로 선형 변환한다.
+		local box = self.Entity.UITransformComponent.RectSize
+		local rx = (wx - self.WorldMinX) / (self.WorldMaxX - self.WorldMinX)
+		local ry = (wy - self.WorldMinY) / (self.WorldMaxY - self.WorldMinY)
+		rx = math.max(0, math.min(1, rx))
+		ry = math.max(0, math.min(1, ry))
+		local x = (rx - 0.5) * box.x
+		local y = (ry - 0.5) * box.y
+		return Vector2(x, y)
+	end
+
+end

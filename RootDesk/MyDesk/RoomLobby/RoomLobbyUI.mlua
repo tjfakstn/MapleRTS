@@ -1,0 +1,186 @@
+@Component
+script RoomLobbyUI extends Component
+
+	property Entity myPanel = "c7229b3d-905f-495b-97fd-d4ff94be2d2d"
+
+	property Entity createBar = "fcdf46df-eea3-497b-a5e0-50bfca935435"
+
+	property TextGUIRendererInputComponent nameInput = "f25ded7a-6321-4dac-b360-ca2016d39c8f"
+
+	property ButtonComponent btnCreate = "ac24a5cc-a001-4cea-9a43-8a893b7fa532"
+
+	property TextGUIRendererComponent myTitle = "f2b2d16f-cec4-4a8e-b854-b372a0345d33"
+
+	property Entity myRow1 = "4b90981c-7daf-4dff-831e-f0bd99884d36"
+
+	property Entity myRow2 = "2f69109f-da65-4f08-9bb3-0adb3b588c7b"
+
+	property Entity myRow3 = "1423ebf6-fd32-42b0-8ead-6248236d69e9"
+
+	property Entity myRow4 = "96ca94b5-911e-4f49-91a6-3ca796f9ce77"
+
+	property Entity myHint = "5ddf6ee1-0dc6-4b70-bc21-3c6babb4d2c8"
+
+	property ButtonComponent btnStart = "7783ef3d-ca18-4ece-a33d-3a40a5eb51ec"
+
+	property ButtonComponent btnLeave = "5f8085c7-0b8d-4338-b0a6-ae24f5ad468b"
+
+	property TextGUIRendererComponent statusText = "93bd1b0f-4f52-4d24-afd9-e30b42f9fcd9"
+
+	@HideFromInspector
+	property table _handlers = {}
+
+	@HideFromInspector
+	property integer _shownVersion = -1
+
+	@HideFromInspector
+	property number _acc = 0
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		-- 버튼 연결: 만들기/시작/나가기(입장은 광장의 노점을 클릭 — RoomBooth).
+		self._handlers = {}
+		self:Bind(self.btnCreate, function() self:OnCreate() end)
+		self:Bind(self.btnStart, function() _RoomLobbyLogic:RequestStartRoom() end)
+		self:Bind(self.btnLeave, function() _RoomLobbyLogic:RequestLeaveRoom() end)
+		self._shownVersion = -1
+		self:Render()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		-- 버튼 연결을 푼다.
+		for _, rec in ipairs(self._handlers) do
+			if isvalid(rec.entity) then rec.entity:DisconnectEvent(ButtonClickEvent, rec.cb) end
+		end
+		self._handlers = {}
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Bind(ButtonComponent btn, any fn)
+		-- 버튼 클릭 연결(없으면 건너뜀).
+		if not isvalid(btn) then return end
+		local h = btn.Entity:ConnectEvent(ButtonClickEvent, fn)
+		table.insert(self._handlers, { entity = btn.Entity, cb = h })
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- 방 목록이 바뀌었을 때만(버전 비교) 다시 그린다.
+		self._acc += delta
+		if self._acc < 0.2 then return end
+		self._acc = 0
+		if _RoomLobbyLogic.RoomListVersion ~= self._shownVersion then
+			self:Render()
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method string MyId()
+		-- 로컬 플레이어 UserId.
+		local lp = _UserService.LocalPlayer
+		if isvalid(lp) and isvalid(lp.PlayerComponent) then return lp.PlayerComponent.UserId end
+		return ""
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnCreate()
+		-- 입력한 이름으로 방 만들기(비면 서버가 "<닉네임>의 방"으로 정한다).
+		local name = ""
+		if isvalid(self.nameInput) then name = self.nameInput.Text or "" end
+		_RoomLobbyLogic:RequestCreateRoom(name)
+		if isvalid(self.nameInput) then self.nameInput.Text = "" end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetText(Entity parent, string child, string text)
+		-- 자식 글자 바꾸기(없으면 무시).
+		if not isvalid(parent) then return end
+		local e = parent:GetChildByName(child)
+		if isvalid(e) and e.TextGUIRendererComponent ~= nil then e.TextGUIRendererComponent.Text = text end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetChip(Entity parent, string child, string text, Color color, boolean on)
+		-- 색 칩(배경 + 글자) 바꾸기.
+		if not isvalid(parent) then return end
+		local e = parent:GetChildByName(child)
+		if not isvalid(e) then return end
+		e.Enable = on
+		if not on then return end
+		if e.SpriteGUIRendererComponent ~= nil then e.SpriteGUIRendererComponent.Color = color end
+		if e.TextGUIRendererComponent ~= nil then e.TextGUIRendererComponent.Text = text end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Render()
+		-- 내 방 패널(방에 있을 때만) + 하단 안내 + 만들기 버튼 색을 다시 그린다.
+		self._shownVersion = _RoomLobbyLogic.RoomListVersion
+		local rooms = _RoomLobbyLogic:ParseRooms(_RoomLobbyLogic.RoomListText)
+		local me = self:MyId()
+		local maxM = _RoomLobbyLogic.MaxMembers
+		local myRoom = nil
+		for _, r in ipairs(rooms) do
+			if r.state == "waiting" then
+				for _, m in ipairs(r.members) do
+					if m == me then myRoom = r end
+				end
+			end
+		end
+		
+		local gold = Color(1.0, 0.82, 0.25, 1)
+		local gray = Color(0.24, 0.28, 0.36, 1)
+		-- 아래 바는 한 자리를 번갈아 쓴다: 방 밖 = "방 만들기", 방 안 = "내 방" 띠(광장을 가리지 않게).
+		if isvalid(self.myPanel) then self.myPanel.Enable = (myRoom ~= nil) end
+		if isvalid(self.createBar) then self.createBar.Enable = (myRoom == nil) end
+		
+		-- 내 방 패널
+		local myRows = { self.myRow1, self.myRow2, self.myRow3, self.myRow4 }
+		if isvalid(self.myTitle) then
+			self.myTitle.Text = (myRoom ~= nil) and myRoom.name or "내 방"
+		end
+		for k, row in ipairs(myRows) do
+			if isvalid(row) then
+				local uid = (myRoom ~= nil) and myRoom.members[k] or nil
+				row.Enable = (myRoom ~= nil)
+				if myRoom ~= nil then
+					if uid ~= nil then
+						local nick = myRoom.nicks[k] or uid
+						self:SetText(row, "Name", (uid == me) and (nick .. " (나)") or nick)
+						self:SetChip(row, "Host", "방장", gold, uid == myRoom.host)
+					else
+						self:SetText(row, "Name", "빈 자리")
+						self:SetChip(row, "Host", "", gold, false)
+					end
+				end
+			end
+		end
+		if isvalid(self.myHint) then self.myHint.Enable = (myRoom == nil) end
+		local isHost = myRoom ~= nil and myRoom.host == me
+		if isvalid(self.btnStart) then
+			self.btnStart.Entity.Enable = isHost
+			local minM = _RoomLobbyLogic.MinMembersToStart
+			local ready = myRoom ~= nil and #myRoom.members >= minM
+			if self.btnStart.Entity.TextGUIRendererComponent ~= nil then
+				self.btnStart.Entity.TextGUIRendererComponent.Text = ready and "게임 시작" or (tostring(minM) .. "명부터 시작")
+			end
+			if self.btnStart.Entity.SpriteGUIRendererComponent ~= nil then
+				self.btnStart.Entity.SpriteGUIRendererComponent.Color = ready and gold or gray
+			end
+		end
+		if isvalid(self.btnLeave) then self.btnLeave.Entity.Enable = (myRoom ~= nil) end
+		if isvalid(self.btnCreate) then
+			self.btnCreate.Entity.SpriteGUIRendererComponent.Color = (myRoom == nil) and gold or gray
+		end
+		if isvalid(self.statusText) then
+			if myRoom == nil then
+				self.statusText.Text = "광장의 노점을 클릭하면 입장 · 아래에서 새 방을 열 수 있어요  (방 " .. tostring(#rooms) .. "개)"
+			elseif isHost then
+				self.statusText.Text = "모두 모이면 '게임 시작'을 누르세요 — 방 인원이 함께 진영 선택 화면으로 이동합니다"
+			else
+				self.statusText.Text = "방장이 게임을 시작하기를 기다리는 중"
+			end
+		end
+	end
+
+end

@@ -1,0 +1,33 @@
+@Logic
+script GatherTargetLogic extends Logic
+
+	property boolean IsTargeting = false
+
+	property Entity Worker = nil
+
+	method boolean CanGather(Entity unit)
+		-- 메소 채집은 일꾼(Unit_Info.RoleKey == "Worker")이면서 WorkerGatherComponent를 가진 유닛만 할 수 있다. 영웅/전투 유닛/건물은 불가.
+		if not isvalid(unit) then return false end
+		local info = unit.Unit_Info
+		if info == nil or info.IsDead or info.RoleKey ~= "Worker" then return false end
+		return unit:GetComponent("script.WorkerGatherComponent") ~= nil
+	end
+
+	method boolean BeginTargeting(Entity worker)
+		-- 일꾼이 아니면 대기 모드에 들어가지 않는다(false).
+		if not self:CanGather(worker) then
+			self.IsTargeting = false
+			self.Worker = nil
+			return false
+		end
+		self.IsTargeting = true
+		self.Worker = worker
+		return true
+	end
+
+	method void EndTargeting()
+		self.IsTargeting = false
+		self.Worker = nil
+	end
+
+end

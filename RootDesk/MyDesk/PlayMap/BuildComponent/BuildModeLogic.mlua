@@ -1,0 +1,211 @@
+@Logic
+script BuildModeLogic extends Logic
+
+	property boolean IsPlacing = false
+
+	property Entity ActiveGhost = nil
+
+	property string GhostModelId = "model://buildghost"
+
+	property table StructureDataSets = {"Adv_Structure_Stat_DataSet", "Cyg_Structure_Stat_DataSet", "Res_Structure_Stat_DataSet"}
+
+	property table _structureRuidCache = {}
+
+	method void BeginPlacing(Entity ghost)
+		self.IsPlacing = true
+		self.ActiveGhost = ghost
+	end
+
+	method string LookupStructureRuid(string modelId)
+		-- 건물 Model ID로 3개 진영 Structure_Stat_DataSet에서 Ruid 열 값을 찾아 돌려준다(못 찾으면 "").
+		if modelId == nil or modelId == "" then return "" end
+		local cached = self._structureRuidCache[modelId]
+		if cached ~= nil then return cached end
+		local found = ""
+		for _, name in ipairs(self.StructureDataSets) do
+			local temp = _DataService:GetTable(name)
+			if temp ~= nil then
+				for idx = 1, temp:GetRowCount() do
+					if temp:GetCell(idx, "Model") == modelId then
+						local r = temp:GetCell(idx, "Ruid")
+						if r ~= nil and r ~= "" then found = r end
+						break
+					end
+				end
+			end
+			if found ~= "" then break end
+		end
+		self._structureRuidCache[modelId] = found
+		return found
+	end
+
+	method void StartPlacement(Entity source, table data)
+		-- Action UI의 건물 버튼(UIButtonAction "PlaceBuilding")을 눌렀을 때 호출된다(클라이언트 전용).
+		-- source: 건설 목록을 연 일꾼 또는 영역 건물. data: { Model, Ruid, SizeX, SizeY, ScaleX, ScaleY, BuildTime }.
+		-- 마우스를 따라다니는 고스트를 만들고 배치 모드로 진입한다 — 이후는 BuildGhostComponent가 처리한다
+		-- (좌클릭 확정 → 일꾼 이동 → 도착 시 서버 건설 요청 / 우클릭 취소).
+		if data == nil or data.Model == nil or data.Model == "" or not isvalid(source) then return end
+		if self.IsPlacing then return end
+		
+		local map = _UserService.LocalPlayer.CurrentMap
+		if not isvalid(map) then return end
+		
+		local sp = source.TransformComponent.WorldPosition
+		local ghost = _SpawnService:SpawnByModelId(self.GhostModelId, "BuildGhost", sp, map)
+		if ghost == nil then
+			return
+		end
+		
+		-- 실제 건물 모델을 잠깐 스폰해 그 TransformComponent.Scale을 읽고 즉시 지운다(고스트가 실제 크기와 항상 일치).
+		-- 같은 프로브에서 건물 종류(Structure_Info.BuildingKey, 모델 기본값)도 읽어 영역 규칙(BuildZoneLogic)에 쓴다.
+		local buildingKey = ""
+		local structureName = ""
+		local scaleX = data.ScaleX or 1
+		local scaleY = data.ScaleY or 1
+		local targetSize = 0
+		local fitted = nil
+		local probe = _SpawnService:SpawnByModelId(data.Model, "BuildScaleProbe", sp, map)
+		if probe ~= nil then
+			local tf = probe.TransformComponent
+			if isvalid(tf) then
+				scaleX = tf.Scale.x
+				scaleY = tf.Scale.y
+			end
+			-- 자동 크기 건물(Structure_Info.TargetSize > 0)은 완공 후 서버가 정할 크기와 같은 계산으로 고스트 크기를 맞춘다.
+			fitted = _StructureSizeLogic:ResolveForEntity(probe)
+			if fitted ~= nil then
+				scaleX = (scaleX < 0) and -fitted.scale or fitted.scale
+				scaleY = fitted.scale
+			end
+			---@type Structure_Info
+			local probeInfo = probe:GetComponent("script.Structure_Info")
+			if probeInfo ~= nil then
+				buildingKey = probeInfo.BuildingKey
+				structureName = probeInfo.StructureName
+				targetSize = probeInfo.TargetSize
+			end
+			_EntityService:Destroy(probe)
+		end
+		
+		---@type BuildGhostComponent
+		local ghostComp = ghost:GetComponent("script.BuildGhostComponent")
+		if ghostComp ~= nil then
+			ghostComp.worker = source
+			ghostComp.buildingModelId = data.Model
+			-- 고스트 스프라이트는 건물 데이터셋(Structure_Stat_DataSet)의 Ruid를 우선 쓰고, 없으면 건설 목록의 Ruid로 대신한다.
+			local dsRuid = self:LookupStructureRuid(data.Model)
+			ghostComp.ruid = (dsRuid ~= "") and dsRuid or (data.Ruid or "")
+			ghostComp.sizeX = data.SizeX or 1
+			ghostComp.sizeY = data.SizeY or 1
+			ghostComp.spriteScaleX = scaleX
+			ghostComp.spriteScaleY = scaleY
+			if fitted ~= nil then
+				-- 겹침 검사 박스도 완공 후 실제 충돌 박스 크기로 맞춘다.
+				ghostComp.sizeX = fitted.boxW
+				ghostComp.sizeY = fitted.boxH
+				ghostComp.sizeOffset = Vector2(fitted.boxX, fitted.boxY)
+				-- 고스트가 건물 모델과 다른 RUID(데이터셋 Ruid)를 그린다면 그 스프라이트 기준으로 같은 목표 크기에 맞춘다.
+				if ghostComp.ruid ~= "" and ghostComp.ruid ~= fitted.ruid then
+					local gs = _StructureSizeLogic:ComputeScale(_StructureSizeLogic:MeasureSprite(ghostComp.ruid), targetSize)
+					if gs > 0 then
+						ghostComp.spriteScaleX = (scaleX < 0) and -gs or gs
+						ghostComp.spriteScaleY = gs
+					end
+				end
+			end
+			ghostComp.buildTime = data.BuildTime or 5
+			-- 건물 종류(탐사 안 한 곳 건설 허용 판단 — 영역 확장 건물 Territory는 허용, BuildGhostComponent.CanBuildUnexplored).
+			ghostComp.buildingKey = buildingKey
+			-- 모델에 박힌 기본 스프라이트가 보이지 않도록 스폰 직후 곧바로 건물 스프라이트/배율을 적용한다.
+			ghostComp:ApplyBuildingSprite()
+		
+			-- 진영/건물 종류에 따라 영역(제공 건물 반경 합집합) 안에서만 건설 가능 — 고스트가 검증하고, 범위를 원으로 보여준다.
+			local localPlayer = _UserService.LocalPlayer
+			local camp = localPlayer.PlayerInfo.SelectedCamp
+			local providers = _BuildZoneLogic:ProvidersFor(camp, buildingKey, structureName)
+			-- 에르다 채집 건물은 진영 건설 영역 제한을 받지 않는다(2026-10-07, 모험가·시그너스) — 스포너 영역 조건만 남는다.
+			if _ArdaBuildLogic:IsArdaStructureModel(data.Model) then providers = "" end
+			if providers ~= "" then
+				ghostComp.zoneProviders = providers
+				ghostComp.zoneCamp = camp
+				ghostComp.zoneOwnerId = localPlayer.PlayerComponent.UserId
+				_BuildZoneLogic:ShowZones(map, ghostComp.zoneOwnerId, providers)
+			end
+		end
+		self:BeginPlacing(ghost)
+	end
+
+	method void EndPlacing()
+		_BuildZoneLogic:HideZones()
+		self.IsPlacing = false
+		self.ActiveGhost = nil
+	end
+
+	method boolean IsWorkerBusy(Entity unit)
+		-- 일꾼이 건설 중이라 명령을 받을 수 없으면 true. 일반 유닛은 항상 false.
+		-- 건설 위치로 "가는 중"인 일꾼은 막지 않는다 — 다른 명령을 내리면 건설 예약이 풀리고 그 명령을 따른다(스타 방식,
+		-- WorkerBuildState.CancelBuildOrder). 건설 시작 후(IsBuilding)만 묶인다(시그너스는 FreeWhileBuilding이라 안 묶임).
+		if not isvalid(unit) then return false end
+		---@type WorkerBuildState
+		local state = unit:GetComponent("script.WorkerBuildState")
+		if state == nil then return false end
+		return state:IsBuildLocked()
+	end
+
+	method boolean IsBuildOrdered(Entity unit)
+		-- 일꾼이 건설 위치로 가는 중(건설 예약)인지.
+		if not isvalid(unit) then return false end
+		---@type WorkerBuildState
+		local state = unit:GetComponent("script.WorkerBuildState")
+		return state ~= nil and state.BuildOrdered == true
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CancelBuildOrder(Entity unit)
+		-- 서버: 다른 명령이 들어온 일꾼의 건설 예약을 푼다(없으면 아무것도 안 함).
+		if not isvalid(unit) then return end
+		---@type WorkerBuildState
+		local state = unit:GetComponent("script.WorkerBuildState")
+		if state ~= nil then state:CancelBuildOrder() end
+	end
+
+	method Entity ResolveBuilder(Entity source, Vector2 targetPos)
+		-- 배치가 확정됐을 때 "실제로 건물을 지을 일꾼"을 정한다(클라이언트 전용).
+		-- source가 일꾼(WorkerBuildState 보유)이면 그 일꾼이 직접 짓는다. source가 영역 건물(RegionBuildAction)이면
+		-- 내 소유의 일꾼 중 지금 건설 중이 아니고 살아있는 일꾼 가운데 목표 위치에서 가장 가까운 일꾼을 고른다.
+		-- 조건에 맞는 일꾼이 없으면 nil.
+		if not isvalid(source) then return nil end
+		
+		if source:GetComponent("script.WorkerBuildState") ~= nil then
+			return source
+		end
+		
+		local map = source.CurrentMap
+		local localPlayer = _UserService.LocalPlayer
+		if not isvalid(map) or not isvalid(localPlayer) then return nil end
+		local userId = localPlayer.PlayerComponent.UserId
+		
+		local best = nil
+		local bestDist = math.huge
+		local states = map:GetChildComponentsByTypeName("script.WorkerBuildState", true)
+		for _, comp in ipairs(states) do
+			---@type WorkerBuildState
+			local state = comp
+			local e = state.Entity
+			if isvalid(e) and not state:IsBuildLocked() then
+				---@type Unit_Info
+				local info = e:GetComponent("script.Unit_Info")
+				if info ~= nil and info.PlayerID == userId and not info.IsDead then
+					local wp = e.TransformComponent.WorldPosition
+					local dist = Vector2.Distance(Vector2(wp.x, wp.y), targetPos)
+					if dist < bestDist then
+						best = e
+						bestDist = dist
+					end
+				end
+			end
+		end
+		return best
+	end
+
+end

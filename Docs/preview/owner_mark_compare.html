@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>아군·적군 구분 비교</title>
+<style>
+  :root { --bg:#111; --ink:#eee; --sub:#9ab; --btn:#2b3550; --btnOn:#4a6bd1; --edge:#556; }
+  body { background:var(--bg); color:var(--ink); font:14px/1.5 sans-serif; margin:0; padding:16px; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  p.note { margin:0 0 10px; color:#aab; }
+  .controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; }
+  button { background:var(--btn); color:#fff; border:1px solid var(--edge); border-radius:6px; padding:8px 12px; font:14px sans-serif; cursor:pointer; }
+  button.on { background:var(--btnOn); border-color:#8aa4ff; }
+  label { color:var(--sub); display:flex; align-items:center; gap:6px; cursor:pointer; }
+  .desc { min-height:44px; color:#cfd6e4; background:#1a2030; border:1px solid #334; border-radius:6px; padding:8px 12px; margin-bottom:10px; max-width:836px; }
+  .wrap { overflow-x:auto; }
+  #field { position:relative; width:860px; height:470px; border:2px solid #4a5570; border-radius:8px; overflow:hidden; flex:none;
+    background: radial-gradient(circle at 30% 40%, #3f6b3a 0, #355c31 40%, #2c4d29 100%); user-select:none; }
+  #field::before { content:""; position:absolute; inset:0; opacity:.18;
+    background-image: linear-gradient(#000 1px, transparent 1px), linear-gradient(90deg, #000 1px, transparent 1px); background-size:48px 48px; }
+  .unit { position:absolute; transform:translate(-50%, -100%); cursor:pointer; }
+  .unit img { display:block; image-rendering:pixelated; pointer-events:none; }
+  .unit.flip img { transform:scaleX(-1); }
+  .ring { position:absolute; left:50%; transform:translate(-50%, -50%); border-radius:50%; pointer-events:none; box-sizing:border-box; }
+  .hp { position:absolute; left:50%; transform:translateX(-50%); height:7px; background:rgba(0,0,0,.8); pointer-events:none; box-sizing:border-box; }
+  .hp i { position:absolute; left:1px; top:1px; bottom:1px; }
+  .legend { margin-top:10px; color:var(--sub); display:flex; flex-wrap:wrap; gap:4px 16px; }
+  .legend span b { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+  .tag { position:absolute; padding:2px 8px; border-radius:4px; font:bold 13px sans-serif; background:rgba(0,0,0,.55); }
+</style>
+</head>
+<body>
+<h1>아군·적군 구분 비교 — 4인 개인전 교전 장면</h1>
+<p class="note">나(시그너스) vs 상대 A(시그너스, 같은 진영 — 그림이 똑같음) vs 상대 B(에델슈타인) + 중립 에르다 몬스터. 유닛 그림은 실제 리소스 썸네일. 클릭하면 선택(Shift로 추가).</p>
+<div class="controls">
+  <button data-mode="now">현재 (선택 시만 링)</button>
+  <button data-mode="ring">바닥 링만 (방금 넣은 것)</button>
+  <button data-mode="opt1" class="on">1번: 체력바 상시 + 주인 색</button>
+  <button data-mode="opt2">2번: 플레이어별 고유 색</button>
+  <label><input type="checkbox" id="mineDamaged"> 내 유닛 체력바는 다쳤을 때만</label>
+  <label><input type="checkbox" id="withRing" checked> 바닥 링 같이 쓰기</label>
+</div>
+<div class="desc" id="desc"></div>
+<div class="wrap"><div id="field"></div></div>
+<div class="legend" id="legend"></div>
+
+<script>
+const CDN = id => `https://mod-resource-search-images.dn.nexoncdn.co.kr/maplestory_world/${id}.png`;
+const SPR = { kE:"f9255169fabf42c4b9d464499ce77be4", kC:"d1997942461e468f84cf47d8f2d08416", af:"b2e0bb788379476b9064149f957c8f91", arda:"c947c25ffcd1453da9ad4f4db16c2183" };
+const SIZE = { kE:[80,72], kC:[44,64], af:[76,96], arda:[104,96] };
+// 플레이어: 2번 방식의 고유 색(대기실 슬롯 색) — 스타처럼 빨강·파랑·청록·보라
+const PLAYERS = {
+  me: { name:"나", slot:"#e8463a", mine:true },
+  a:  { name:"상대 A (시그너스)", slot:"#3d7cf0" },
+  b:  { name:"상대 B (에델슈타인)", slot:"#2ec4b6" },
+  n:  { name:"중립 (에르다 몬스터)", slot:"#ffe64d", neutral:true },
+};
+const MINE = "#4df24d", ENEMY = "#ff4040", NEUTRAL = "#ffe64d";
+// [스프라이트, 주인, x, y, 체력비율]
+const UNITS = [
+  ["kE","me",250,200,1], ["kC","me",300,250,0.6], ["kE","me",230,300,1], ["kC","me",320,340,0.3],
+  ["kE","a",420,190,0.85], ["kC","a",380,240,1], ["kE","a",450,285,1], ["kC","a",370,330,0.45],
+  ["af","b",620,300,1], ["af","b",680,360,0.7], ["af","b",590,400,1],
+  ["arda","n",700,150,0.7],
+];
+const DESC = {
+  now: "현재 게임: 선택했을 때만 링 색(초록/빨강)으로 구분. 선택 안 한 유닛은 어느 편인지 알 수 없음 — 특히 상대 A는 그림까지 똑같음.",
+  ring: "방금 넣은 것: 발밑에 옅은 링(내 초록 / 적 빨강). 초록 바닥 위에서 빨간 링이 탁해 보이고, 유닛이 겹치면 링이 가려짐.",
+  opt1: "1번: 모든 유닛 머리 위에 체력바가 항상 뜨고 색이 주인으로 고정(내 초록 / 적 빨강 / 중립 노랑). 남은 체력은 바 길이로 봄. 머리 위라 겹쳐도 잘 보임. 단, 적끼리(상대 A와 B)는 둘 다 빨강.",
+  opt2: "2번: 링·체력바를 플레이어 고유 색(대기실 슬롯 색)으로 칠함. 4인 개인전에서 '어느 적인지'까지 구분됨(상대 A 파랑, 상대 B 청록). 대신 내 색이 빨강일 수도 있어 '빨강 = 적'이 아님 — 미니맵·결과창도 같은 색으로 맞추는 게 좋음.",
+};
+const field = document.getElementById("field");
+let mode = "opt1";
+const units = UNITS.map(([s, own, x, y, hp]) => {
+  const [w, h] = SIZE[s];
+  const el = document.createElement("div");
+  el.className = "unit" + (own === "a" || own === "b" ? " flip" : "");
+  el.style.left = x + "px"; el.style.top = y + "px";
+  const ring = document.createElement("div"); ring.className = "ring";
+  const rw = Math.max(46, w * 0.9), rh = rw * 0.38;
+  Object.assign(ring.style, { width:rw + "px", height:rh + "px", top:(h - 4) + "px" });
+  const img = document.createElement("img"); img.src = CDN(SPR[s]); img.width = w; img.height = h;
+  img.onerror = () => img.replaceWith(Object.assign(document.createElement("div"), { style:`width:${w}px;height:${h}px;background:#889;border-radius:8px` }));
+  const bar = document.createElement("div"); bar.className = "hp";
+  const bw = s === "arda" ? 60 : 46;
+  Object.assign(bar.style, { width:bw + "px", top:"-11px" });
+  const fill = document.createElement("i"); bar.append(fill);
+  el.append(ring, img, bar);
+  field.append(el);
+  const u = { el, ring, bar, fill, own, hp, bw, selected:false };
+  el.addEventListener("mousedown", e => { e.stopPropagation(); if (!e.shiftKey) units.forEach(o => o.selected = false); u.selected = true; render(); });
+  return u;
+});
+field.addEventListener("mousedown", () => { units.forEach(o => o.selected = false); render(); });
+function hex2rgba(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
+function ownerColor(u) {
+  const p = PLAYERS[u.own];
+  if (mode === "opt2") return p.slot;
+  return p.neutral ? NEUTRAL : p.mine ? MINE : ENEMY;
+}
+function ratioColor(r) { return r > 0.6 ? "#4df24d" : r > 0.3 ? "#ffd933" : "#ff4040"; }
+function render() {
+  const mineDamaged = document.getElementById("mineDamaged").checked;
+  const withRing = document.getElementById("withRing").checked;
+  for (const u of units) {
+    const p = PLAYERS[u.own], col = ownerColor(u);
+    // 링
+    let showRing = u.selected;
+    if (mode === "ring") showRing = true;
+    if ((mode === "opt1" || mode === "opt2") && withRing) showRing = true;
+    const ringCol = (mode === "now" || mode === "ring") ? (p.neutral ? NEUTRAL : p.mine ? "#59ff59" : "#ff4d4d") : col;
+    u.ring.style.display = showRing ? "block" : "none";
+    u.ring.style.border = `3px solid ${hex2rgba(ringCol, u.selected ? 1 : (mode === "now" ? 1 : 0.5))}`;
+    u.ring.style.boxShadow = u.selected ? `0 0 6px ${hex2rgba(ringCol, .8)}` : "none";
+    // 체력바
+    let showHp, fillCol, frame = "none";
+    if (mode === "now" || mode === "ring") {
+      showHp = u.selected || u.hp < 1 || p.neutral;
+      fillCol = ratioColor(u.hp);
+    } else {
+      showHp = true;
+      if (p.mine && mineDamaged && u.hp >= 1 && !u.selected) showHp = false;
+      fillCol = col;
+      frame = `1px solid ${hex2rgba(col, .9)}`;
+    }
+    u.bar.style.display = showHp ? "block" : "none";
+    u.bar.style.border = frame;
+    u.fill.style.width = `calc(${u.hp * 100}% - 2px)`;
+    u.fill.style.background = fillCol;
+  }
+  document.getElementById("desc").textContent = DESC[mode];
+  const lg = document.getElementById("legend");
+  if (mode === "opt2") lg.innerHTML = Object.values(PLAYERS).map(p => `<span><b style="background:${p.slot}"></b>${p.name}</span>`).join("");
+  else lg.innerHTML = `<span><b style="background:${MINE}"></b>내 유닛</span><span><b style="background:${ENEMY}"></b>적 유닛(상대 A·B 모두)</span><span><b style="background:${NEUTRAL}"></b>중립</span>` + (mode === "now" || mode === "ring" ? `<span>· 체력바: 다쳤거나 선택했을 때만, 색 = 체력 비율</span>` : `<span>· 체력바: 항상, 색 = 주인, 길이 = 체력</span>`);
+}
+document.querySelectorAll("button[data-mode]").forEach(b => b.onclick = () => {
+  mode = b.dataset.mode;
+  document.querySelectorAll("button[data-mode]").forEach(o => o.classList.toggle("on", o === b));
+  render();
+});
+document.getElementById("mineDamaged").onchange = render;
+document.getElementById("withRing").onchange = render;
+render();
+</script>
+</body>
+</html>

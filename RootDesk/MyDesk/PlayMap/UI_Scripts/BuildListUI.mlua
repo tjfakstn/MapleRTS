@@ -1,0 +1,89 @@
+@Component
+script BuildListUI extends Component
+
+	@HideFromInspector
+	property table _slots = {}
+
+	@HideFromInspector
+	property boolean _suppressSelfHide = false
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		self:CacheSlots()
+		self:ApplyCanvasState(false)
+	end
+
+	method void CacheSlots()
+		if #self._slots > 0 then return end
+		for _, child in pairs(self.Entity.Children) do
+			---@type BuildSlotButton
+			local slotComp = child:GetComponent("script.BuildSlotButton")
+			if slotComp ~= nil then
+				table.insert(self._slots, { entity = child, comp = slotComp })
+			end
+		end
+	end
+
+	method void ApplyCanvasState(boolean shown)
+		local cg = self.Entity.CanvasGroupComponent
+		if not isvalid(cg) then return end
+		cg.GroupAlpha = shown and 1.0 or 0.0
+		cg.Interactable = shown
+		cg.BlocksRaycasts = shown
+	end
+
+	method void Show(table buildList, Entity worker)
+		self:CacheSlots()
+		for idx, slot in ipairs(self._slots) do
+			local data = buildList[idx]
+			if data ~= nil then
+				slot.entity.Enable = true
+				slot.entity.Visible = true
+				slot.entity.SpriteGUIRendererComponent.ImageRUID = DataRef(data.Ruid)
+				slot.comp.ModelId = data.Model
+				slot.comp.Ruid = data.Ruid
+				slot.comp.SizeX = data.SizeX
+				slot.comp.SizeY = data.SizeY
+				slot.comp.ScaleX = data.ScaleX
+				slot.comp.ScaleY = data.ScaleY
+				slot.comp.BuildTime = data.BuildTime
+				slot.comp.Worker = worker
+			else
+				slot.entity.Visible = false
+			end
+		end
+		
+		-- 같은 자리에 겹치는 다른 위젯(단일 선택 정보/생산 큐/다중 선택 그리드)을 전부 정리한다.
+		-- 이 이벤트를 우리 자신도 받게 되므로(HandleUnitUIChangeEvent), 그동안은 스스로 닫히지
+		-- 않도록 억제한다.
+		self._suppressSelfHide = true
+		local clearEvt = UnitUIChangeEvent()
+		_UserService.LocalPlayer:SendEvent(clearEvt)
+		self._suppressSelfHide = false
+		
+		self:ApplyCanvasState(true)
+	end
+
+	method void Hide()
+		self:ApplyCanvasState(false)
+	end
+
+	@EventSender("LocalPlayer")
+	handler HandleBuildListShowEvent(BuildListShowEvent event)
+		local hasList = isvalid(event.Worker) and event.BuildList ~= nil and #event.BuildList > 0
+		if hasList then
+			self:Show(event.BuildList, event.Worker)
+		else
+			self:Hide()
+		end
+	end
+
+	@EventSender("LocalPlayer")
+	handler HandleUnitUIChangeEvent(UnitUIChangeEvent event)
+		-- 드래그/우클릭으로 다른 대상을 선택하면(정상적인 정보 갱신 흐름) 건설 목록은 자동으로 닫는다.
+		-- 단, Show() 자신이 정리용으로 쏜 이벤트에는 반응하지 않는다(위 _suppressSelfHide 참고).
+		if self._suppressSelfHide then return end
+		self:Hide()
+	end
+
+end

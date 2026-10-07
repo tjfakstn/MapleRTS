@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "directory://fefb9ea61ec64d14860990e1cf9110ef",
+  "ContentType": "x-mod/directory",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "entry_id": "directory://fefb9ea61ec64d14860990e1cf9110ef",
+      "name": "RoomLobby",
+      "lock": false,
+      "folding": false,
+      "nameEditable": true
+    }
+  }
+}

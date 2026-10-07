@@ -1,0 +1,343 @@
+@Component
+script HeroSkillAttackLogicComponent extends Component
+
+	method table GetMeasuredEffectBounds(string ruid)
+		    -- Maker animation frames: pixel pivot + frame offset, converted using PixelPerUnit.
+		    -- These are frame envelopes, not transparent-pixel collision masks.
+		    if self._T.measuredBounds == nil then
+		        self._T.measuredBounds = {
+		        ["721e56745c554a439e51ee1eb004753a"] = { -6.870, -0.800, 1.110, 4.740 },
+		        ["3781734e45a7402ab56826d50a366056"] = { -1.140, -0.960, 1.280, 1.060 },
+		        ["b72d8158cef947999ac6ab72573ceeab"] = { -6.600, -0.520, 1.560, 4.520 },
+		        ["15cdea54f3a04da89cf46aaa6fa1cf81"] = { -5.030, -0.760, 1.970, 2.050 },
+		        ["76dd9053eec5461cb953c900fea987b3"] = { -0.330, -0.090, 0.330, 0.090 },
+		        ["ed38cd53290046eb86ad9244632e950a"] = { -3.150, -0.960, 2.920, 2.190 },
+		        ["25fece015d3c4a4f9aa7fb78eafc1076"] = { -0.910, -0.540, 0.920, 0.530 },
+		        ["36dcd96411b9479b8a3be63f513facb4"] = { -5.340, -0.790, 1.540, 2.380 },
+		        ["389b0f3fdda0438caa06de6fe7691341"] = { -1.000, -0.820, 0.910, 0.880 },
+		        ["668e1de7954946c3a48f82fed4fafe74"] = { -1.170, 0.300, 0.730, 2.180 },
+		        ["9b8899ca8cb54d02926a1309dca73a5c"] = { -1.440, -0.680, 1.480, 5.080 },
+		        ["9942752e5db445f7a923f17ff17a3871"] = { -5.240, -2.830, 2.390, 3.930 },
+		        ["38becdc7ae334111a3c702a3b5194512"] = { -1.590, -1.290, 1.670, 1.450 },
+		        ["0c55f9decaee4966b0b22f2ec11d3ca9"] = { -5.470, -1.090, 5.300, 6.780 },
+		        ["69af12bc1bec41eabbcd6d74c4069313"] = { -0.990, -1.010, 1.000, 1.000 },
+		        ["1c434f7cecf94e1cb16b68ee0079b01d"] = { -2.460, -0.200, 2.380, 3.240 },
+		        ["befa4d153d36410ba30ba5ec09c88611"] = { -0.860, -0.020, 0.820, 2.730 },
+		        ["f0ae3ac26a83422795c25931d58da17e"] = { -1.590, -0.260, 1.500, 2.600 },
+		        ["6867a44ded694a5b847073b4c6ef49ba"] = { -1.580, 0.130, 1.500, 2.930 },
+		        ["ec3d24ba83b747abb6c71f99e6616f0c"] = { -1.730, -0.010, 1.650, 3.080 },
+		        ["e86eef7f960146fea646300653347c2e"] = { -2.810, -1.220, 1.070, 1.840 },
+		        ["77bc39d2bd9e455b8b2ce07555a90455"] = { -1.320, -0.630, 1.570, 0.620 },
+		        ["734670c1a7b046558bb8509ed4e3dec6"] = { -2.690, -0.610, 2.650, 4.120 },
+		        ["d102da7303a94e89aa842696211d8285"] = { -0.980, -0.320, 1.340, 0.350 },
+		        ["8303e16fa5834e0eaed0b20a6c458b99"] = { -2.480, -0.600, 2.200, 4.880 },
+		        ["30d2fab7b7104354bd47f2e1cf940c2e"] = { -3.030, -0.850, 2.980, 2.120 },
+		        ["2ed6be9152eb4bf0b22f4ca6e6fff9fe"] = { -0.930, -0.080, 0.400, 0.700 },
+		        ["64f775829e234918bd65e9d22214bb06"] = { -0.340, -0.260, 0.710, 0.270 },
+		        ["9ecf53652b4a437da81417bcd8fb58ca"] = { -0.940, -1.040, 0.610, 1.640 },
+		        ["a342d48c6f03440abdfe46fc5a39fa8a"] = { -0.330, -0.190, 0.350, 0.200 },
+		        ["8ceb24c27d3147e9a174bac20262358c"] = { -0.870, -1.020, 0.340, 1.620 },
+		        ["5b382e3dd14b430480b729cc3cb56c82"] = { -0.880, -1.080, 0.390, 1.680 },
+		        ["01f39ee5971246ed8306bc471d44a1fd"] = { -1.780, -0.600, 0.680, 1.130 },
+		        ["6294c62288bd46beb2ff548bd8671ee0"] = { -0.450, -0.150, 0.360, 0.140 },
+		        ["b187e24d9c0d42abbfa172a13e34059d"] = { -5.300, -0.960, 1.220, 2.690 },
+		        ["434fc1741d6040409f06c84551d3ffdf"] = { -3.740, -1.330, 3.780, 2.250 },
+		        ["7318763662cb4c8f93450a19b5191ebb"] = { -1.100, -0.170, 0.190, 0.780 },
+		        ["5ff5e80f964343c78966da45b6e1a80f"] = { -0.240, -0.050, 0.240, 0.040 },
+		        ["db19194fc2804ac887c0d5add5cf28cd"] = { -1.460, -0.320, 1.100, 1.300 },
+		        ["3cf9b68a0ab04210a1188bcaf941c229"] = { -0.960, -0.010, -0.360, 0.510 },
+		        ["f669f51ac74c4fafbc67b61b831f234d"] = { -5.200, -0.520, 0.650, 2.650 },
+		        ["ec2a2a71fc1845d68d8fef7ba6a7f22d"] = { -5.160, -3.320, 5.180, 5.220 },
+		        ["2b810ae1d1684488af89e5efed96c230"] = { -1.610, -0.220, -0.130, 0.810 },
+		        ["75c0f52e07f14f18a7528b7b6ec2ad9c"] = { -0.220, -0.110, 1.320, 1.030 },
+		        ["4475f02bcb66475391f28fe79469c770"] = { -1.090, -0.710, 1.250, 1.440 },
+		        ["af5115902b124a6db4fe549c582428d3"] = { -0.440, -0.270, 0.720, 0.250 },
+		        ["b3a764687e074c5cae57d22328d47687"] = { -1.100, -0.310, 1.300, 1.290 },
+		        ["530b2dfe70af42f88705e3ed467bd00a"] = { -1.040, -0.140, 1.240, 1.250 },
+		        ["f7307df6600a46de836f66c7e26896ba"] = { -5.290, -1.110, 1.130, 2.090 },
+		        ["4bdd2ce1a97943b6a93475afc4a90a4c"] = { -2.450, -0.530, 0.560, 1.680 },
+		        ["bba68b80d0374a55b14220a400144124"] = { -5.260, -1.070, 3.370, 4.300 },
+		        ["df8c25d9c2514d9c881a1b90c6bda1ec"] = { -2.510, -0.330, 0.260, 1.640 },
+		        ["734fea508167453f97182b570a32fbe9"] = { -2.360, -0.450, 2.730, 2.140 },
+		        ["d16084b8fa9e4cce8d04a8ce9517554a"] = { -5.170, -2.020, 2.090, 2.530 },
+		        ["d905c0a222c7451eb2e220c54dcf469d"] = { -3.700, -0.990, 0.850, 1.690 },
+		        ["5c6a3eb4a2ad4097ba87968f2ec34b5a"] = { -1.100, -0.250, 2.660, 1.350 },
+		        ["6b6f3a5e8c8046c1b4fe814c239632a3"] = { -3.010, -0.420, 1.030, 1.580 },
+		        ["609c70e9763641f28cc6739cbee4e311"] = { -2.530, -1.150, 2.670, 2.850 },
+		        ["efc2d6331b7e41d58bd118081862dc2c"] = { -1.050, -0.330, 1.030, 0.470 },
+		        ["2003ec10bced4099aa72ed1d7fa98ea1"] = { -4.420, -3.210, 3.820, 4.850 },
+		        ["3dbeadd63ea248f5bb2f6a839a840346"] = { -7.660, -5.700, 7.660, 5.300 },
+		        ["efd10038b0154e6c80cb87e634b31d3a"] = { -4.940, -0.650, 0.710, 1.700 },
+		        ["e745e0ae4fcf43caba935227ca792e94"] = { -5.210, -0.870, 0.200, 2.820 },
+		        ["2a1611d4ed69422a97077992d1506f73"] = { -4.270, -1.160, 4.130, 2.570 },
+		        ["ef43e8877d094b8f89d6f297755f9db8"] = { -1.740, -0.290, 2.230, 2.850 },
+		        ["9e304d1bac3841d3b319c30d17d9f394"] = { -7.230, -3.780, 7.260, 4.700 },
+		        ["5bebf2ee459f4266b682280e2d1b1933"] = { -0.400, 1.180, 6.870, 5.020 },
+		        ["afcbe9f1f576402295f55a143e5707ed"] = { -0.980, -0.140, 0.220, 1.040 },
+		        ["610e972a2ad84dd8ae7fc0fc657b0f88"] = { -0.840, -0.420, 1.670, 0.380 },
+		        ["08aa13242afa4f29925f13be72ef6fa7"] = { -1.440, -0.060, 0.450, 0.780 },
+		        ["8ec8ef64bcaa4a6fa820cd39a0827aa0"] = { -1.640, -0.670, -0.270, 1.570 },
+		        ["8f747df49c1a4ddc8c629e0bd8b8c5c0"] = { -1.690, -0.450, 0.560, 1.450 },
+		        ["ad4a1049a9244476a9400b37ad74c9da"] = { -2.560, -0.360, 0.230, 1.330 },
+		        ["1a925a094cb14011bf7eaf59c0b935e8"] = { -7.620, -0.840, 2.500, 2.860 },
+		        ["c799c5b21ad7447db663ae23f4c74949"] = { -3.200, -1.610, 4.840, 2.890 },
+		        ["a519495c707a4151ac0c0803be82a203"] = { -2.670, -0.570, 1.820, 2.450 },
+		        ["381b5c230115401791cd3596eefab4c7"] = { -2.270, -0.180, 0.880, 0.890 },
+		        ["16327064d87447deafedb444bd66ce93"] = { -3.430, -0.020, 0.230, 3.520 },
+		        ["7f92f0276b494eea94ed60d8c30ee75a"] = { -3.150, -1.640, 1.050, 0.970 },
+		        ["660bac466ea147d193987e787c96c472"] = { -4.440, -0.730, 2.860, 3.560 },
+		        ["8a455d60979b45dfbf3130acf11acb81"] = { -3.770, -0.500, 2.610, 2.480 },
+		        ["fc17c89463fb449089385902335872a5"] = { -4.140, -0.290, 0.870, 1.540 },
+		        ["2f6323999f174f62bf40a5e051ecf104"] = { -3.560, -2.240, 2.590, 3.320 },
+		        ["904626af9078493caa41fca8fe9786c9"] = { -3.920, -0.360, 3.560, 8.900 },
+		        ["b8e2ca8812f04ed0a9d6545aa0cdce36"] = { -0.440, -0.120, 0.640, 0.120 },
+		        ["a59b9339cc7e4d579e8d3389e1c95149"] = { -1.950, -1.350, 0.560, 1.930 },
+		        ["c6c958f1171d4cf7ab3799e54034623c"] = { -3.780, -0.180, 0.440, 0.880 },
+		        ["ecb222dddf2f4a50855d77fe133f1677"] = { -1.600, -0.620, 1.150, 1.240 },
+		        ["621d165eaf1c48e7b262809c66c89c3d"] = { -0.470, -0.170, 0.390, 0.150 },
+		        ["a18362751d9a4ea78c16d25109ec6088"] = { -3.590, -0.850, 1.660, 1.700 },
+		        ["f746aaec67084a0aa893d63014bd4f48"] = { -3.570, -1.090, 3.270, 3.890 },
+		        ["cd635dff027645b69ce5d1500ef78a1e"] = { -2.690, -0.940, 2.430, 3.900 },
+		        ["19b8d24dd003412c9d5f571e855b7c4c"] = { -0.530, -0.340, 0.760, 0.320 },
+		        ["2848caba295a4b3eb676e096cd5b8ca1"] = { -2.670, -0.860, 2.430, 3.550 },
+		        ["700c9bff1e2a40b686428962d7101fce"] = { -2.690, -0.860, 2.430, 3.550 },
+		        ["b64e41d2e3774276aa7db7bdb74410b9"] = { -2.720, -0.120, 3.740, 3.420 },
+		        ["63334f6f8b9d419e83baa47696287c8b"] = { -9.740, -1.560, 4.680, 5.270 },
+		        ["e99a05edc37541d698e0a85c18bad28a"] = { -6.550, -0.970, 1.420, 2.190 },
+		        ["439c73b2fd2c41fdb80a986d96fa8be8"] = { -0.690, -0.360, 0.700, 0.380 },
+		        ["82f638c8b84e4c589cd7ebd97644a9d5"] = { -1.870, -0.170, 0.540, 1.210 },
+		        ["6b9fbbbb7bfe4d46b95c309f7d7c9289"] = { -0.690, 0.000, 0.270, 0.520 },
+		        ["b4baba8de8a947ea9b34722fa4799170"] = { -2.870, -0.030, 2.320, 6.160 },
+		        ["cea5b35969aa456682300b77cfa990ea"] = { -0.960, -6.060, 8.690, 0.940 },
+		        ["61295562443a4dec8adf3b334d069c4b"] = { -4.010, -2.590, 3.950, 2.430 },
+		        ["e290ba65fd6648a4b4d5f6bb3ee7ec7b"] = { -5.120, -3.100, 5.200, 3.740 },
+		        ["496e2a7dda704825a1c7af4ac6f71683"] = { -4.490, -0.430, 1.870, 2.830 },
+		        ["963362c63ba74293b734e35fa623b90f"] = { -0.870, -0.130, 0.030, 0.720 },
+		        ["19b73405ee404e8dae423ba74ea90015"] = { -1.120, -0.550, 3.050, 1.470 },
+		        ["909de79d07fa423b98282b45b69219c6"] = { -1.280, -0.810, 0.410, 1.310 },
+		        ["0cd9fd9a21c44229a8421da7f3e1b883"] = { -5.860, 0.220, 5.980, 6.540 },
+		        ["131faeee275941aea6a1ef0378babab8"] = { -5.860, 0.220, 5.980, 6.540 },
+		        ["ce55606c96d94c059227f2956a1ae786"] = { -5.930, -0.690, 5.180, 7.190 },
+		        ["7af910a276e64dafbb148fd795aaeb0b"] = { -1.500, -0.260, 0.390, 0.970 },
+		        ["b5285001066a41729177af91c222eb73"] = { -4.330, -0.500, 4.330, 5.590 },
+		        ["322e4ca68d09446688d687f06bb0bd5c"] = { -0.940, -0.160, 0.820, 2.530 },
+		        ["7a5d0bc440ac4db585add4cbc0eac154"] = { -5.130, -0.330, 0.010, 0.980 },
+		        ["45c35ff093674a23a9f7a609916383cd"] = { -1.570, -0.430, 0.880, 1.680 },
+		        ["0516d7594a394561893e04de713cfb6a"] = { -8.870, -2.070, 6.060, 4.900 },
+		        ["1c5ba226dfa9405f9735e40ed6f71186"] = { -8.870, -2.070, 6.060, 4.900 },
+		        ["2311d82baf5347278da83527dc9788c4"] = { -7.030, -2.600, 7.170, 5.670 },
+		        ["dd9bf3160b4144638d9d4975d279d9e9"] = { -3.140, -0.620, 1.530, 1.980 },
+		        ["96a61fe31122477a8c18685790bb6cde"] = { -3.970, -0.540, 1.250, 2.260 },
+		        ["d5dbef88bdc64bf79707a2bcc2364b00"] = { -5.190, -0.090, 3.790, 2.040 },
+		        ["1f3d0bf6f7974c7aaa4de29901ee9230"] = { -3.910, -1.650, 0.250, 2.270 },
+		        ["0bac49137b31475ab68b9a2cda3814b8"] = { -6.100, -0.510, 1.840, 1.460 },
+		        ["9bcd86de860347a2aa4de0ea4b81bd4d"] = { -5.550, -0.310, 1.740, 1.210 },
+		        ["81415e9bb5724e419b4009033ff831a8"] = { -3.120, -0.780, 1.620, 1.410 },
+		        ["4ba60c46db434a5daee5f264444b6d1b"] = { -7.360, -1.070, 1.270, 4.130 },
+		        ["8926218a166542af90eb90910e134c8b"] = { -2.810, -0.540, 2.210, 1.740 },
+		        ["6a8ec0369d7143ec8df9261f78e1c01c"] = { -3.010, -0.640, 1.340, 3.140 },
+		        }
+		    end
+		    if ruid == nil or ruid == "" then return nil end
+		    if self._T.measuredBounds[ruid] == nil then
+		        local kind = _ResourceService:GetTypeAndWait(ruid)
+		        if kind == ResourceType.Sprite then
+		            local sprite = _ResourceService:LoadSpriteAndWait(ruid)
+		            if sprite == nil then return nil end
+		            local ppu = math.max(1, sprite.PixelPerUnit)
+		            self._T.measuredBounds[ruid] = { -sprite.PivotPixel.x / ppu, -sprite.PivotPixel.y / ppu,
+		                (sprite.Width - sprite.PivotPixel.x) / ppu, (sprite.Height - sprite.PivotPixel.y) / ppu }
+		            return self._T.measuredBounds[ruid]
+		        end
+		        if kind ~= ResourceType.AnimationClip then return nil end
+		        local clip = _ResourceService:LoadAnimationClipAndWait(ruid)
+		        if clip == nil then return nil end
+		        local bounds = { math.huge, math.huge, -math.huge, -math.huge }
+		        for _, frame in ipairs(clip.Frames:ToTable()) do
+		            local sprite = frame.FrameSprite
+		            if sprite ~= nil and sprite.Width > 1 and sprite.Height > 1 then
+		                local ppu = math.max(1, sprite.PixelPerUnit)
+		                bounds[1] = math.min(bounds[1], -sprite.PivotPixel.x / ppu + frame.Offset.x)
+		                bounds[2] = math.min(bounds[2], -sprite.PivotPixel.y / ppu + frame.Offset.y)
+		                bounds[3] = math.max(bounds[3], (sprite.Width - sprite.PivotPixel.x) / ppu + frame.Offset.x)
+		                bounds[4] = math.max(bounds[4], (sprite.Height - sprite.PivotPixel.y) / ppu + frame.Offset.y)
+		            end
+		        end
+		        if bounds[1] == math.huge then return nil end
+		        self._T.measuredBounds[ruid] = bounds
+		    end
+		    return self._T.measuredBounds[ruid]
+	end
+
+	method any BuildMeasuredPathBox(string ruid, Vector2 position, Vector2 direction, number scaleX, number scaleY, number angle)
+		    local bounds = self:GetMeasuredEffectBounds(ruid)
+		    if bounds == nil then return nil end
+		    local sign = direction.x >= 0 and -1 or 1
+		    local x = (bounds[1] + bounds[3]) * 0.5 * scaleX * sign
+		    local y = (bounds[2] + bounds[4]) * 0.5 * scaleY
+		    local center = position + Vector2(x * math.cos(angle) - y * math.sin(angle), x * math.sin(angle) + y * math.cos(angle))
+		    return BoxShape(center, Vector2((bounds[3] - bounds[1]) * scaleX, (bounds[4] - bounds[2]) * scaleY), angle)
+	end
+
+	method any BuildMeasuredEffectBox(string ruid, Vector2 position, Vector2 direction, number scale)
+		    local bounds = self:GetMeasuredEffectBounds(ruid)
+		    if bounds == nil then return nil end
+		    local sign = direction.x >= 0 and -1 or 1
+		    local center = position + Vector2((bounds[1] + bounds[3]) * 0.5 * scale * sign, (bounds[2] + bounds[4]) * 0.5 * scale)
+		    return BoxShape(center, Vector2((bounds[3] - bounds[1]) * scale, (bounds[4] - bounds[2]) * scale), 0)
+	end
+
+	method void BeginAttackTargetFilter(string attackInfo, integer maxTargets)
+		    -- 한 번의 Attack() 호출에서 허용할 최대 피격 수를 추적한다.
+		    if maxTargets == nil or maxTargets <= 0 then maxTargets = 2147483647 end
+		    if self._T.attackTargetFilters == nil then
+		        self._T.attackTargetFilters = {}
+		    end
+		    self._T.attackTargetFilters[attackInfo] = {
+		        maxTargets = maxTargets,
+		        acceptedCount = 0,
+		        acceptedIds = {},
+		    }
+	end
+
+	method void EndAttackTargetFilter(string attackInfo)
+		    -- Attack() 직후 필터 상태를 제거해 다음 스킬 판정과 섞이지 않게 한다.
+		    if self._T.attackTargetFilters == nil then return end
+		    self._T.attackTargetFilters[attackInfo] = nil
+	end
+
+	method boolean AcceptAttackTarget(Entity defender, string attackInfo)
+		    -- Core의 부모 검사 이후 진영과 승인 대상 수를 기존 순서로 검사한다.
+		    -- 진영 판정은 CombatTeamLogic 한 곳에서만 한다. 예전에는 PlayerComponent.UserId를 직접 비교해서
+		    -- 플레이어끼리만 아군 판정이 됐고, PlayerComponent가 없는 RTS 유닛은 아군이어도 다 맞았다.
+		    if not isvalid(defender) then
+		        return false
+		    end
+		    if defender == self.Entity then
+		        return false
+		    end
+		    if not _CombatTeamLogic:IsEnemy(self.Entity, defender) then
+		        return false
+		    end
+		    if self._T.attackTargetFilters == nil then
+		        return true
+		    end
+		
+		    local filterState = self._T.attackTargetFilters[attackInfo]
+		    if filterState == nil or filterState.maxTargets == nil or filterState.maxTargets <= 0 then
+		        return true
+		    end
+		
+		    local defenderId = tostring(defender.Id)
+		    if filterState.acceptedIds[defenderId] == true then
+		        return false
+		    end
+		    if filterState.acceptedCount >= filterState.maxTargets then
+		        return false
+		    end
+		
+		    filterState.acceptedIds[defenderId] = true
+		    filterState.acceptedCount = filterState.acceptedCount + 1
+		    return true
+	end
+
+	method any BuildFrontBox(Vector2 casterPos, Vector2 aimDir, number length, number width)
+		    -- 캐스터에서 aimDir 방향으로 뻗는 박스 모양(전방 부채꼴/직선 판정의 근사).
+		    local center = casterPos + aimDir * (length / 2)
+		    local angle = math.atan(aimDir.y, aimDir.x)
+		    return BoxShape(center, Vector2(length, width), angle)
+	end
+
+	method any BuildCenteredBox(Vector2 centerPos, Vector2 aimDir, number length, number width)
+		    -- 조준 지점 중심의 직사각형 판정. 설치형/지정 장판이 클릭 위치를 기준으로 보이게 할 때 사용한다.
+		    local angle = math.atan(aimDir.y, aimDir.x)
+		    return BoxShape(centerPos, Vector2(length, width), angle)
+	end
+
+	method number ResolveEffectScaleMultiplier(table skill)
+		    -- 스킬 데이터의 연출 배율을 판정 계산에 동일하게 사용한다.
+		    local scaleMultiplier = tonumber(skill.effectScaleMultiplier or 1) or 1
+		    if scaleMultiplier <= 0 then
+		        return 1
+		    end
+		    return scaleMultiplier
+	end
+
+	method number ResolveEffectBaseLength(table skill, number rangeScale)
+		    -- effectBaseLength는 "이 이펙트를 스케일 1.0으로 띄웠을 때 화면에서 가로 몇 칸으로 보이는가"다.
+		    -- Maker에서 눈으로 재서 그대로 적으면 된다. 내부 판정 단위는 rangeScale을 곱하기 전 값이라
+		    -- 여기서 되돌려 준다(호출부에서 다시 rangeScale을 곱하므로 상쇄된다).
+		    if skill.effectBaseLength ~= nil then
+		        return (tonumber(skill.effectBaseLength) or 1) / rangeScale
+		    end
+		    -- 아직 안 적어둔 스킬은 현재 값에서 역산해서 기존 판정을 그대로 유지한다(회귀 없음).
+		    local currentLength = skill.hitLength or skill.hitRadius or skill.length or 1
+		    local telegraphLength = skill.telegraphLength or skill.telegraphRadius or currentLength
+		    return math.max(currentLength, telegraphLength) / self:ResolveEffectScaleMultiplier(skill)
+	end
+
+	method number ResolveEffectBaseWidth(table skill, number rangeScale)
+		    -- Core에서 전달한 단위 배율로 기존 판정 너비를 계산한다.
+		    if skill.effectBaseWidth ~= nil then
+		        return (tonumber(skill.effectBaseWidth) or 1) / rangeScale
+		    end
+		    if skill.effectBaseLength ~= nil then
+		        -- 길이만 지정한 스킬은 원형/정사각 판정으로 본다.
+		        return (tonumber(skill.effectBaseLength) or 1) / rangeScale
+		    end
+		    local currentLength = skill.hitLength or skill.hitRadius or skill.length or 1
+		    local currentWidth = skill.hitWidth or skill.hitRadius or skill.width or currentLength
+		    local telegraphWidth = skill.telegraphWidth or skill.telegraphRadius or currentWidth
+		    return math.max(currentWidth, telegraphWidth) / self:ResolveEffectScaleMultiplier(skill)
+	end
+
+	method table ResolveHitboxDimensions(table skill, number rangeScale, number minimumEffectHitPadding)
+		    -- ★ 판정 크기는 "보이는 이펙트 크기"에서 유도한다.
+		    --      판정(칸) = effectBaseLength × effectScaleMultiplier (+ 스킬별 보정 visualVsHitDelta)
+		    -- 예전에는 판정(length/width)과 이펙트(effectScaleMultiplier)가 서로를 전혀 모르는
+		    -- 별개 숫자였다. 그래서 이펙트를 키워도 판정은 그대로였고, 그 어긋남을 메우려고
+		    -- minimumEffectHitPadding 0.2칸을 전 스킬에 눈대중으로 더하고 있었다.
+		    -- 이제 effectScaleMultiplier 하나만 바꾸면 판정이 같이 따라온다.
+		    local hitShape = skill.hitShape or skill.shape
+		    local scaleMultiplier = self:ResolveEffectScaleMultiplier(skill)
+		    local baseLength = self:ResolveEffectBaseLength(skill, rangeScale)
+		    local baseWidth = self:ResolveEffectBaseWidth(skill, rangeScale)
+		    local extraPadding = (skill.visualVsHitDelta or 0) + (skill.minimumEffectHitPadding or minimumEffectHitPadding)
+		
+		    local resolvedLength = baseLength * scaleMultiplier + extraPadding
+		    local resolvedWidth = baseWidth * scaleMultiplier + extraPadding
+		    return {
+		        shape = hitShape,
+		        length = resolvedLength,
+		        width = resolvedWidth,
+		    }
+	end
+
+	method table ResolveImpactHitboxDimensions(table skill, number rangeScale, number minimumEffectHitPadding)
+		    -- 투사체가 도착한 지점에서 터지는 판정. 여기도 impactEffectBaseLength를 적어두면
+		    -- 폭발 이펙트 크기 기준으로 판정을 잡는다(단위는 effectBaseLength와 같은 "화면 칸").
+		    if skill.impactEffectBaseLength ~= nil then
+		        local scaleMultiplier = tonumber(skill.impactScaleMultiplier or skill.effectScaleMultiplier or 1) or 1
+		        if scaleMultiplier <= 0 then scaleMultiplier = 1 end
+		        local impactBaseLength = (tonumber(skill.impactEffectBaseLength) or 1) / rangeScale
+		        local impactBaseWidth = (tonumber(skill.impactEffectBaseWidth or skill.impactEffectBaseLength) or 1) / rangeScale
+		        local derivedPadding = (skill.impactVisualVsHitDelta or skill.visualVsHitDelta or 0)
+		        return {
+		            length = impactBaseLength * scaleMultiplier + derivedPadding,
+		            width = impactBaseWidth * scaleMultiplier + derivedPadding,
+		        }
+		    end
+		
+		    local baseLength = skill.impactHitLength or skill.hitLength or skill.hitRadius or skill.length or 1
+		    local baseWidth = skill.impactHitWidth or skill.hitWidth or skill.hitRadius or skill.width or baseLength
+		    local visualLength = skill.impactTelegraphLength or skill.impactTelegraphRadius or baseLength
+		    local visualWidth = skill.impactTelegraphWidth or skill.impactTelegraphRadius or baseWidth
+		    local extraPadding = (skill.impactVisualVsHitDelta or skill.visualVsHitDelta or 0) + (skill.minimumEffectHitPadding or minimumEffectHitPadding)
+		
+		    return {
+		        length = math.max(baseLength, visualLength) + extraPadding,
+		        width = math.max(baseWidth, visualWidth) + extraPadding,
+		    }
+	end
+
+end

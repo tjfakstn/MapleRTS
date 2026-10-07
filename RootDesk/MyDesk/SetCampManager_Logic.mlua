@@ -1,0 +1,168 @@
+@Logic
+script SetCampManager_Logic extends Logic
+
+	property table Adv_Data = {}
+
+	property table Cyg_Data = {}
+
+	property table Ede_Data = {}
+
+	property table Adv_StructureData = {}
+
+	property table Cyg_StructureData = {}
+
+	property table Ede_StructureData = {}
+
+	@ExecSpace("ServerOnly")
+	method void OnBeginPlay()
+		self.Adv_Data = self:ParseUnitTable("Adv_Unit_Stat_DataSet")
+		self.Cyg_Data = self:ParseUnitTable("Cyg_Unit_Stat_DataSet")
+		self.Ede_Data = self:ParseUnitTable("Res_Unit_Stat_DataSet")
+		
+		self.Adv_StructureData = self:ParseStructureTable("Adv_Structure_Stat_DataSet")
+		self.Cyg_StructureData = self:ParseStructureTable("Cyg_Structure_Stat_DataSet")
+		self.Ede_StructureData = self:ParseStructureTable("Res_Structure_Stat_DataSet")
+	end
+
+	@ExecSpace("ServerOnly")
+	method table SelectedCampUnit(string SelectedCamp)
+		--게임이 시작되면 유저가 선택한 진영을 return--
+		if SelectedCamp == "Adv" then
+			return self.Adv_Data
+		end
+		
+		if SelectedCamp == "Cyg" then
+			return self.Cyg_Data
+		end
+		
+		if SelectedCamp == "Ede" then
+			return self.Ede_Data
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method table SelectedCampStructure(string SelectedCamp)
+		-- SelectedCampUnit과 동일 — 건물(구조물) 버전. SpawnUnit.BuildStructureNow가 건물 스폰 직후
+		-- 이 테이블에서 Model(model://...) 키로 스탯을 조회해 Structure_Info에 주입한다.
+		if SelectedCamp == "Adv" then
+			return self.Adv_StructureData
+		end
+		
+		if SelectedCamp == "Cyg" then
+			return self.Cyg_StructureData
+		end
+		
+		if SelectedCamp == "Ede" then
+			return self.Ede_StructureData
+		end
+	end
+
+	method boolean HasColumn(any temp, string name)
+		-- 데이터셋마다(Adv만 우선 갱신됨) 열 구성이 달라 존재 여부를 먼저 확인한다.
+		-- 없는 열 이름으로 GetCell을 호출하면 데이터셋에 따라 [LEA-3011]이 날 수 있어(AttackRange 사례) 가드가 필요하다.
+		for _, col in ipairs(temp.Columns:ToTable()) do
+			if col == name then return true end
+		end
+		return false
+	end
+
+	method string GetCellAny(any temp, integer idx, string nameA, string nameB)
+		-- 열 이름이 영문/한글로 데이터셋마다 다를 수 있어 둘 다 시도한다(Adv=영문, Cyg/Res=한글).
+		if self:HasColumn(temp, nameA) then
+			local v = temp:GetCell(idx, nameA)
+			if v ~= nil and v ~= "" then return v end
+		end
+		if self:HasColumn(temp, nameB) then
+			return temp:GetCell(idx, nameB)
+		end
+		return nil
+	end
+
+	@ExecSpace("ServerOnly")
+	method table ParseUnitTable(string dataSetName)
+		--중복되는 code를 단순화--
+		local temp = _DataService:GetTable(dataSetName)
+		local result = {}
+		for idx = 1, temp:GetRowCount() do
+			local row = {
+				id     = tonumber(temp:GetCell(idx, "id")),
+		        Line   = temp:GetCell(idx, "Line"),
+		        Model  = temp:GetCell(idx, "Model"),
+		        ["역할"]     = self:GetCellAny(temp, idx, "role", "역할"),
+		        ["메소"]     = tonumber(self:GetCellAny(temp, idx, "Meso", "메소")),
+		        ["에르다"]   = tonumber(self:GetCellAny(temp, idx, "Arda", "에르다")),
+		        ["인구"]     = tonumber(self:GetCellAny(temp, idx, "papulation", "인구")),
+		        ["생산(초)"] = tonumber(self:GetCellAny(temp, idx, "time", "생산(초)")),
+		        HP = tonumber(temp:GetCell(idx, "HP")),
+		        defense = tonumber(temp:GetCell(idx, "defense")),
+		        damage  = tonumber(temp:GetCell(idx, "damage")),
+		        Cooltime = tonumber(temp:GetCell(idx, "Cooltime")),
+		        MoveSpeed = tonumber(temp:GetCell(idx, "MoveSpeed")),
+		        Target = tonumber(temp:GetCell(idx, "Target")),
+				-- AttackRange: 이제 3개 CSV 모두에 열이 존재한다(Adv="AttackRange", Cyg/Res="사거리" 원본 →
+				-- 저장 시 "AttackRange"로 통일). GetCellAny로 열 이름 차이를 흡수해 안전하게 읽는다.
+				AttackRange = tonumber(self:GetCellAny(temp, idx, "AttackRange", "사거리")),
+				-- Ruid: 대기방 구조물 액션 버튼 아이콘용. 3개 CSV 모두 열이 존재한다(각 유닛 자신의 SpriteRUID).
+				Ruid = temp:GetCell(idx, "Ruid"),
+			}
+			-- 특수능력 열(RoleKey/AbilityValue/AbilityDuration)은 아직 Adv에만 있다 — 있을 때만 읽는다.
+			if self:HasColumn(temp, "RoleKey") then
+				row.RoleKey = temp:GetCell(idx, "RoleKey")
+				row.AbilityValue = tonumber(temp:GetCell(idx, "AbilityValue")) or 0
+				row.AbilityDuration = tonumber(temp:GetCell(idx, "AbilityDuration")) or 0
+			else
+				row.RoleKey = ""
+				row.AbilityValue = 0
+				row.AbilityDuration = 0
+			end
+			-- 지상/공중 구분(IsAerial 열, 1=공중 유닛). 없는 데이터셋은 전부 지상으로 취급한다.
+			row.IsAerial = self:HasColumn(temp, "IsAerial") and (tonumber(temp:GetCell(idx, "IsAerial")) == 1)
+			-- 시야(vision 열, 200~300 스케일 — 반지름은 SpawnUnit.SetUnitdata에서 ÷50) / 은신(IsStealth 열, 1=은신).
+			-- 열이 없으면 nil/false로 두고 주입부가 기본값(225 → 4.5)을 쓴다(Vision-Spec-20261004.md §1, §8-3, §10).
+			row.vision = self:HasColumn(temp, "vision") and tonumber(temp:GetCell(idx, "vision")) or nil
+			row.IsStealth = self:HasColumn(temp, "IsStealth") and (temp:GetCell(idx, "IsStealth") == "1")
+			result[row.Model] = row
+		end
+		return result
+	end
+
+	@ExecSpace("ServerOnly")
+	method table ParseStructureTable(string dataSetName)
+		-- ParseUnitTable의 건물(구조물) 버전. 3개 Structure_Stat_DataSet CSV는 처음부터 동일한 영문
+		-- 헤더로 만들어져 있어(ParseUnitTable처럼 진영마다 영문/한글이 섞여 있지 않음) GetCellAny 없이
+		-- 바로 GetCell로 읽는다. 아직 Model 열이 비어 있는 행(모델을 만들지 않은 건물)은 건너뛴다 —
+		-- 빈 문자열을 키로 겹쳐 쓰면 의미 없는 항목이 남을 뿐 조회에 걸리지 않으니 해가 없지만, 굳이
+		-- 채워 넣지 않는다.
+		local temp = _DataService:GetTable(dataSetName)
+		local result = {}
+		-- 시야(vision) 열은 2026-10-04에 추가됐다 — 아직 없는 데이터셋이 있을 수 있어 존재 여부를 먼저 본다(ParseUnitTable과 동일 가드).
+		local hasVision = self:HasColumn(temp, "vision")
+		for idx = 1, temp:GetRowCount() do
+			local model = temp:GetCell(idx, "Model")
+			if model ~= nil and model ~= "" then
+				result[model] = {
+					id = tonumber(temp:GetCell(idx, "id")),
+					Line = temp:GetCell(idx, "Line"),
+					Model = model,
+					Name = temp:GetCell(idx, "Name"),
+					category = temp:GetCell(idx, "category"),
+					Meso = tonumber(temp:GetCell(idx, "Meso")),
+					Arda = tonumber(temp:GetCell(idx, "Arda")),
+					Population = tonumber(temp:GetCell(idx, "Population")),
+					BuildTime = tonumber(temp:GetCell(idx, "BuildTime")),
+					HP = tonumber(temp:GetCell(idx, "HP")),
+					defense = tonumber(temp:GetCell(idx, "defense")),
+					BuildCondition = temp:GetCell(idx, "BuildCondition"),
+					Function = temp:GetCell(idx, "Function"),
+					BuildStyle = temp:GetCell(idx, "BuildStyle"),
+					BuildingKey = temp:GetCell(idx, "BuildingKey"),
+					Ruid = temp:GetCell(idx, "Ruid"),
+					-- 시야(200~300 스케일). 반지름 변환(÷50)은 SpawnUnit.ApplyStructureData가 한다. 열이 없으면 nil.
+					vision = hasVision and tonumber(temp:GetCell(idx, "vision")) or nil,
+				}
+			end
+		end
+		return result
+	end
+
+end

@@ -1,0 +1,87 @@
+@Component
+script BuildSlotButton extends Component
+
+	property string ModelId = ""
+
+	property string Ruid = ""
+
+	property number SizeX = 1
+
+	property number SizeY = 1
+
+	property number ScaleX = 1
+
+	property number ScaleY = 1
+
+	property number BuildTime = 5
+
+	property Entity Worker = nil
+
+	property string GhostModelId = ""
+
+	method Vector2 ResolveBuildingScale(Entity map, Vector3 probePos)
+		-- 슬롯에 손으로 입력된 ScaleX/Y는 일꾼 모델마다 누락/오입력되기 쉬워 실제 건물과 크기가 어긋난다.
+		-- 실제 건물 모델을 클라이언트 로컬로 잠깐 스폰해 그 TransformComponent.Scale을 읽고 즉시 지워,
+		-- 고스트가 "생성되었을 때의 건물 크기"와 항상 일치하도록 한다. 실패하면 슬롯 값으로 대체한다.
+		local probe = _SpawnService:SpawnByModelId(self.ModelId, "BuildScaleProbe", probePos, map)
+		if probe == nil then
+			return Vector2(self.ScaleX, self.ScaleY)
+		end
+		local scale = Vector2(self.ScaleX, self.ScaleY)
+		local tf = probe.TransformComponent
+		if isvalid(tf) then
+			scale = Vector2(tf.Scale.x, tf.Scale.y)
+		end
+		-- 자동 크기 건물은 서버가 완공 후 정할 배율과 같은 계산값을 쓴다(StructureSizeLogic).
+		local fitted = _StructureSizeLogic:ResolveForEntity(probe)
+		if fitted ~= nil then
+			scale = Vector2((scale.x < 0) and -fitted.scale or fitted.scale, fitted.scale)
+		end
+		_EntityService:Destroy(probe)
+		return scale
+	end
+
+	method void StartPlacement()
+		if self.ModelId == "" or self.GhostModelId == "" or not isvalid(self.Worker) then
+			return
+		end
+		
+		local map = _UserService.LocalPlayer.CurrentMap
+		if not isvalid(map) then return end
+		
+		local wp = self.Worker.TransformComponent.WorldPosition
+		local ghost = _SpawnService:SpawnByModelId(self.GhostModelId, "BuildGhost", wp, map)
+		if ghost == nil then return end
+		
+		---@type BuildGhostComponent
+		local ghostComp = ghost:GetComponent("script.BuildGhostComponent")
+		if ghostComp ~= nil then
+			ghostComp.worker = self.Worker
+			ghostComp.buildingModelId = self.ModelId
+			ghostComp.ruid = self.Ruid
+			ghostComp.sizeX = self.SizeX
+			ghostComp.sizeY = self.SizeY
+			local scale = self:ResolveBuildingScale(map, wp)
+			ghostComp.spriteScaleX = scale.x
+			ghostComp.spriteScaleY = scale.y
+			ghostComp.buildTime = self.BuildTime
+		end
+		_BuildModeLogic:BeginPlacing(ghost)
+		
+		-- 건물을 골랐으니 목록 UI는 닫는다(빈 목록 이벤트로 BuildListUI를 원래 정보 패널로 되돌린다).
+		local evt = BuildListShowEvent()
+		_UserService.LocalPlayer:SendEvent(evt)
+	end
+
+	@EventSender("Self")
+	handler HandleButtonClickEvent(ButtonClickEvent event)
+		--------------- Native Event Sender Info ----------------
+		-- Sender: ButtonComponent
+		-- Space: Client
+		---------------------------------------------------------
+		if self.Entity == event.Entity then
+			self:StartPlacement()
+		end
+	end
+
+end

@@ -1,0 +1,21 @@
+﻿id,Line,Model,역할,메소,에르다,인구,생산(초),HP,defense,damage,Cooltime,MoveSpeed,Target,AttackRange,vision,RoleKey,AbilityValue,AbilityDuration,IsAerial,Ruid,IsStealth
+1,일꾼,model://c9d23b6f-6c91-4288-b67b-aa711591957d,일꾼,50,0,1,14,55,0,4,1.5,3.5,0,40,220,Worker,2,0,0,fe9f1d065105420c9cb7cd0f7e715633,0
+2,기사단,model://41e17daa-b409-4a52-8d4a-32c2fdca39aa,지상 근접,130,0,2,18,170,1,16,1,3.667,0,50,220,MeleeBasic,0,0,0,f9255169fabf42c4b9d464499ce77be4,0
+3,기사단,model://9f80e95b-01b6-43e8-bd33-1c56c060789b,지상 근접,130,0,2,18,165,1,17,1,3.833,0,50,220,MeleeBasic,0,0,0,d1997942461e468f84cf47d8f2d08416,0
+4,기사단,model://35ec46db-ae06-4eac-aeef-d92bbc6a29bc,지상&공중 원거리,160,4,2,21,140,1,18,0.8,3.167,2,220,260,RangedBasic,0,0,0,e1de8ffb3e764a0f8458aa31b3d7b16e,0
+5,기사단,model://968ab3a9-8219-4b86-9006-a6733ead9b03,지상&공중 원거리,160,4,2,21,135,1,19,0.8,3,2,210,260,RangedMage,0,0,0,db6d2f255e06417485e583b7bde139aa,0
+6,기사단,model://a5dbc8a0-8759-4054-ac3b-844d00d4c96b,지상 근접 (은신),180,8,2,22,130,1,22,1.1,4,0,50,240,AerialStealth,0,0,0,f0a9f8bbf9e24bcea846baed8b7244bf,1
+7,진화,model://fa4f259b-ba68-43fb-a578-63783cf5fe22,정예 근접,230,6,3,28,280,2,26,1,3.667,0,50,240,MeleeAoe,0,0,0,d1ea8dfb10a04ef6af29b6e64b40be87,0
+8,진화,model://f48cd2a2-0c2c-4c68-91ef-115174138a7f,정예 근접,230,6,3,28,270,2,28,1,3.833,0,55,240,MeleeBasic,0,0,0,9a374abf7889449482669f20ef5a76fc,0
+9,진화,model://cc5e4416-a545-49ca-8410-a3410164fbf9,정예 원거리,270,8,3,31,220,2,28,0.8,3.167,2,240,280,RangedBasic,0,0,0,b79216ad57114843804c8bb654c3c4c6,0
+10,진화,model://1adbc508-a4d9-4a5d-a57f-21a71017dac4,정예 원거리,270,8,3,31,210,2,30,0.8,3,2,230,280,RangedMage,0,0,0,c08d79f6f04b4d4fb0fa5ab3c1d4d3bf,0
+11,진화,model://18da8345-6744-49c2-a3ea-fdcd95034e02,정예 은신,310,12,3,32,200,2,34,1.1,4.167,0,50,260,AerialStealth,0,0,0,fdbae6caca364306b1a2609697c6803a,1
+12,정예,model://f452953d-0dde-4c70-ba29-161671090f31,대형 탱커,280,8,5,29,500,4,28,0.8,2.833,0,60,240,EliteGuard,0,0,0,f2a8ddedc6e34cb188650435baa0cd37,0
+13,정예,model://c88cf424-abe4-4124-9353-1eb42eaa1f15,대형 근접,300,10,5,31,460,3,34,0.8,3,0,60,240,EliteAssault,0,0,0,f0a4bd658a9e4fedb727f6a26f4983f9,0
+14,정예,model://05d28f23-6378-4495-849d-a21d910e2f61,대형 광역,320,12,5,33,480,3,30,0.7,2.833,0,80,240,FireAssault,0.4,0,0,d364b8dc4fec4c2cb5fab05c70095c6b,0
+15,정령,model://c6660784-8468-4dc7-be04-cb7dcf7ba60b,공중 소형,90,4,1,18,70,0,9,1.2,5.333,2,60,300,AerialBasic,0,0,1,c9b00fc4690644a181c81e87a67b0abf,0
+16,정령,model://333aa212-2d27-49bf-ac71-cc09ec91c911,공중 소형,90,2,1,18,70,0,10,1.1,5.167,2,60,260,AerialBasic,0,0,1,f2ca4b8dda9b4ed998e0fb2352becb8f,0
+17,정령,model://784376f8-2d55-4a4b-b2b1-1f0fb0c50272,공중 소형,90,2,1,18,70,0,9,1.2,5.5,2,60,260,AerialBasic,0,0,1,de30b5c509ce42c5b09ee31ff1656558,0
+18,정령,model://39fbec61-5557-4c37-8840-b4e4b2bd1853,공중 소형,90,4,1,18,70,0,10,1.1,5.167,2,60,260,AerialBasic,0,0,1,f21125fb91834dac91d90e262066da72,0
+19,정령,model://9d3ed966-aaf8-4f71-a0cd-20aaf3aaa130,공중 소형,90,4,1,18,70,0,11,1.1,5.333,2,60,260,AerialBasic,0,0,1,dce727800d414e5a9c577ea97b1fe98b,0
+20,정예,model://8b403ef2-79b7-4324-abf2-09eb033f07df,공중 대형,350,19,6,36,520,3,36,0.7,3.667,2,90,280,AerialElite,0,0,1,e1ed3242e6ba4d6692a35b9ebe79fca8,0

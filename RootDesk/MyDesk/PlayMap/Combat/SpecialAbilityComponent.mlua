@@ -1,0 +1,299 @@
+@Component
+script SpecialAbilityComponent extends Component
+
+	property number TickInterval = 1.0
+
+	property number StealthTickInterval = 0.2
+
+	property number SupportRange = 3.0
+
+	property number HealRange = 4.0
+
+	@DisplayName("힐러 최대 에너지")
+	property number HealMaxEnergy = 200
+
+	@DisplayName("힐러 시작 에너지")
+	property number HealStartEnergy = 50
+
+	@DisplayName("힐러 에너지 초당 충전")
+	property number HealEnergyRegen = 0.8
+
+	@DisplayName("에너지 1당 회복량")
+	property number HealPerEnergy = 2
+
+	property number StealthAlpha = 0.35
+
+	@HideFromInspector
+	property any _tickTimerId = nil
+
+	method void OnBeginPlay()
+		-- 서버는 능력 틱, 클라이언트는 은신 연출 틱을 각자 돌린다.
+		if self:IsServer() then
+			self._tickTimerId = _TimerService:SetTimerRepeat(function() self:Tick() end, self.TickInterval)
+		else
+			self._tickTimerId = _TimerService:SetTimerRepeat(function() self:ClientTick() end, self.StealthTickInterval)
+		end
+	end
+
+	method void OnEndPlay()
+		if self._tickTimerId ~= nil then
+			_TimerService:ClearTimer(self._tickTimerId)
+			self._tickTimerId = nil
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Tick()
+		if not isvalid(self.Entity) then return end
+		---@type Unit_Info
+		local info = self.Entity:GetComponent("script.Unit_Info")
+		if info == nil or info.IsDead then return end
+		
+		if info.RoleKey == "RangedSupport" then
+			if info.AbilityToggle then
+				-- 오라를 끈 상태(U, UnitAbilityLogic): 모든 아군을 기본 공격력으로 되돌린다.
+				self:ForEachAlly(info, function(allyInfo, allyEntity)
+					self:ApplySupportBuff(info, allyInfo, allyEntity, false)
+				end)
+				return
+			end
+			self:TickSupportAura(info)
+		elseif info.RoleKey == "RangedHealer" then
+			self:TickHeal(info)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ClientTick()
+		if not isvalid(self.Entity) then return end
+		---@type Unit_Info
+		local info = self.Entity:GetComponent("script.Unit_Info")
+		if info == nil or info.IsDead then return end
+		-- 영웅은 초상화용 스프라이트를 일부러 투명하게 둔다(HeroUnitVisual) — 알파를 건드리지 않는다.
+		if self.Entity:GetComponent("script.HeroUnit") ~= nil then return end
+		if info.RoleKey == "AerialStealth" and info.IsStealth then
+			self:TickStealth()
+		elseif info.IsStealth then
+			-- 은신(K 켜기, 또는 시트 기본 은신) 유닛은 항상 반투명하게 보인다(상대 화면에서는 VisionLogic이 숨김).
+			self:SetAlpha(self.StealthAlpha)
+		else
+			self:SetAlpha(1.0)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TickSupportAura(Unit_Info info)
+		-- 반경 내 아군은 공격력을 (1+AbilityValue) 배로, 범위를 벗어난 아군은 기본 공격력으로 되돌린다.
+		-- Weapon.damage는 @Sync라 서버에서 바로 써도 모든 클라이언트에 전파된다.
+		local myPos = self.Entity.TransformComponent.WorldPosition
+		local rangeSq = self.SupportRange * self.SupportRange
+		self:ForEachAlly(info, function(allyInfo, allyEntity)
+			local op = allyEntity.TransformComponent.WorldPosition
+			local dx = op.x - myPos.x
+			local dy = op.y - myPos.y
+			local inRange = (dx * dx + dy * dy) <= rangeSq
+			self:ApplySupportBuff(info, allyInfo, allyEntity, inRange)
+		end)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplySupportBuff(Unit_Info info, Unit_Info allyInfo, Entity allyEntity, boolean inRange)
+		-- 아군 무기 공격력을 서버 권위로 갱신한다.
+		local weaponEntity = self:FindWeaponChild(allyEntity)
+		if not isvalid(weaponEntity) then return end
+		---@type Weapon
+		local weapon = weaponEntity:GetComponent("script.Weapon")
+		if weapon == nil then return end
+		if inRange then
+			weapon.damage = allyInfo.damage * (1 + info.AbilityValue)
+		else
+			weapon.damage = allyInfo.damage
+		end
+	end
+
+	method Entity FindWeaponChild(Entity unitEntity)
+		-- unitEntity의 자식 중 TagComponent에 "Weapon" 태그가 붙은 엔티티를 찾는다(Unit_Info.OnBeginPlay와 동일한 탐색 로직).
+		for _, child in ipairs(unitEntity.Children:ToTable()) do
+			if isvalid(child.TagComponent) then
+				for _, tag in ipairs(child.TagComponent.Tags:ToTable()) do
+					if tag == "Weapon" then return child end
+				end
+			end
+		end
+		return nil
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TickHeal(Unit_Info info)
+		-- 에너지(스타 메딕식, 2026-10-07): 처음 틱에 시작 에너지를 주고 매 틱 충전한다. 치유는 ApplyHeal에서 에너지를 쓴다.
+		if info.MaxEnergy <= 0 then
+			info.MaxEnergy = self.HealMaxEnergy
+			info.Energy = self.HealStartEnergy
+		else
+			info.Energy = math.min(info.MaxEnergy, info.Energy + self.HealEnergyRegen * self.TickInterval)
+		end
+		
+		-- 우선 회복 대상(힐 버튼 → 우클릭으로 직접 지정, Unit_Info.PriorityHealTarget)이 있으면
+		-- 반경 내 최저 체력 자동 선택보다 우선 처리한다. 지정한 대상은 체력이 가득 차도 곁을 따라다니고, 대상이 죽거나 사라지면 해제.
+		-- 다른 명령(이동·정지·홀드·공격 지정·어택땅)을 내리면 해제된다(2026-10-07 — UnitMoveComponent.ClearCombatOrders, Unit_Info 명령들).
+		if isvalid(info.PriorityHealTarget) then
+			---@type Unit_Info
+			local priTarget = info.PriorityHealTarget.Unit_Info
+			if priTarget == nil or priTarget.IsDead then
+				info.PriorityHealTarget = nil
+			else
+				self:PursueAndHeal(info, info.PriorityHealTarget)
+				return
+			end
+		end
+		
+		-- 반경 내에서 체력 비율이 가장 낮은 아군 1명을 골라 AbilityValue 만큼 회복시킨다.
+		-- 다른 힐러는 자동 치유 대상에서 뺀다(힐러끼리 서로 무한히 살려 주는 문제 — 직접 지정은 허용).
+		local myPos = self.Entity.TransformComponent.WorldPosition
+		local rangeSq = self.HealRange * self.HealRange
+		local targetEntity = nil
+		local lowestRatio = 1.0
+		self:ForEachAlly(info, function(allyInfo, allyEntity)
+			if allyInfo.MaxHp <= 0 or allyInfo.RoleKey == "RangedHealer" then return end
+			local op = allyEntity.TransformComponent.WorldPosition
+			local dx = op.x - myPos.x
+			local dy = op.y - myPos.y
+			if (dx * dx + dy * dy) > rangeSq then return end
+			local ratio = allyInfo.Hp / allyInfo.MaxHp
+			if ratio < 1.0 and ratio < lowestRatio then
+				lowestRatio = ratio
+				targetEntity = allyEntity
+			end
+		end)
+		if targetEntity ~= nil then
+			self:ApplyHeal(info, targetEntity)
+		end
+		self:TickHealerAdvance(info, targetEntity ~= nil)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void TickHealerAdvance(Unit_Info info, boolean someoneHurt)
+		-- 치유하며 따라가기(2026-10-07): 부대 공격 명령(어택땅·적 지정)을 받은 힐러는 _T.amDest로 가되,
+		-- 사거리 안에 다친 아군이 있으면 멈춰서 치유하고, 다 나으면 다시 목적지로 간다. 도착하면 끝.
+		-- (공격력 0이라 Weapon.AutoAcquire가 어택땅 재개를 해 주지 않으므로 여기서 맡는다.)
+		local dest = info._T.amDest
+		if dest == nil then return end
+		---@type UnitMoveComponent
+		local mover = self.Entity:GetComponent("script.UnitMoveComponent")
+		if mover == nil then return end
+		if someoneHurt then
+			if mover.IsMove then mover:Stop() end
+			return
+		end
+		local p = self.Entity.TransformComponent.WorldPosition
+		if Vector2.Distance(Vector2(p.x, p.y), dest) <= 0.5 then
+			info._T.amDest = nil
+			return
+		end
+		if not mover.IsMove then mover:FindTarget(dest) end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void PursueAndHeal(Unit_Info info, Entity targetEntity)
+		-- 우선 회복 대상이 사거리(HealRange) 안이면 즉시 회복하고, 밖이면 다가간다(Weapon.MoveToTarget과
+		-- 동일한 여유로 사거리의 90%까지만 접근해 경계에서 판정이 애매해지는 것을 피한다).
+		-- 대상이 체력이 가득해도 곁을 지킨다: 사거리의 60 %보다 멀어지면 다시 다가간다(따라다니기).
+		local myPos = self.Entity.TransformComponent.WorldPosition
+		local tPos = targetEntity.TransformComponent.WorldPosition
+		local dx = tPos.x - myPos.x
+		local dy = tPos.y - myPos.y
+		local dist = math.sqrt(dx * dx + dy * dy)
+		
+		if dist <= self.HealRange then
+			self:ApplyHeal(info, targetEntity)
+		end
+		if dist <= self.HealRange * 0.6 then return end
+		
+		---@type UnitMoveComponent
+		local mover = self.Entity:GetComponent("script.UnitMoveComponent")
+		if mover == nil or dist <= 0.0001 then return end
+		local nx, ny = dx / dist, dy / dist
+		local stopPos = Vector2(tPos.x - nx * (self.HealRange * 0.4), tPos.y - ny * (self.HealRange * 0.4))
+		mover:FindTarget(stopPos)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplyHeal(Unit_Info info, Entity targetEntity)
+		-- 서버 권위로 회복을 적용한다. Unit_Info.Hp는 @Sync라 모든 클라이언트에 회복 결과가 전파된다.
+		if not isvalid(targetEntity) or info.AbilityValue <= 0 then return end
+		---@type Unit_Info
+		local targetInfo = targetEntity:GetComponent("script.Unit_Info")
+		if targetInfo == nil or targetInfo.IsDead then return end
+		-- 회복량 = min(AbilityValue, 잃은 체력, 남은 에너지 × HealPerEnergy). 에너지는 실제 회복한 만큼만 줄어든다.
+		local amount = info.AbilityValue
+		if targetInfo.MaxHp > 0 then amount = math.min(amount, targetInfo.MaxHp - targetInfo.Hp) end
+		if info.MaxEnergy > 0 then amount = math.min(amount, info.Energy * self.HealPerEnergy) end
+		amount = math.floor(amount)
+		if amount < 1 then return end
+		targetInfo:Heal(amount)
+		if info.MaxEnergy > 0 then info.Energy = math.max(0, info.Energy - amount / self.HealPerEnergy) end
+		self:BroadcastHealEffect(targetEntity)
+	end
+
+	@ExecSpace("Multicast")
+	method void BroadcastHealEffect(Entity targetEntity)
+		-- 회복이 실제로 적용된 대상 위치에 전 클라이언트에서 힐 이펙트를 1회 재생한다(서버가 호출 →
+		-- 모든 클라이언트에서 실행). RUID는 CombatConfig.HealRUID(힐/지원 전용 명중 이펙트)를 직접
+		-- 쓴다 — 힐러 자신의 Unit_Info.HitEffectRUID는 "이 유닛이 공격했을 때"의 연출이라 .model에서
+		-- 개별적으로 다른 값으로 덮어써 있을 수 있어(예: 유닛별 고유 공격 이펙트) 힐 연출과는 별개로 취급한다.
+		if not isvalid(targetEntity) then return end
+		local ruid = _CombatConfig.HealRUID
+		if ruid == "" then return end
+		---@type Unit_Info
+		local info = self.Entity:GetComponent("script.Unit_Info")
+		local s = (info ~= nil) and info.HitEffectScale or 1.0
+		local pos = targetEntity.TransformComponent.WorldPosition + Vector3(0, 0.3, 0)
+		_FogOfWarLogic:PlayEffectSeen(
+			ruid, self.Entity, pos, 0, Vector3(s, s, 1), false,
+			{ SortingLayer = "MapLayer0", OrderInLayer = 30 })
+	end
+
+	@ExecSpace("ClientOnly")
+	method void TickStealth()
+		-- 정지 상태면 반투명해지고(은신 표현), 이동을 시작하면 원래 색으로 돌아온다(IsMove는 서버 @Sync 값).
+		---@type UnitMoveComponent
+		local mover = self.Entity:GetComponent("script.UnitMoveComponent")
+		local renderer = self.Entity.SpriteRendererComponent
+		if mover == nil or not isvalid(renderer) then return end
+		local c = renderer.Color
+		if mover.IsMove then
+			renderer.Color = Color(c.r, c.g, c.b, 1.0)
+		else
+			renderer.Color = Color(c.r, c.g, c.b, self.StealthAlpha)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetAlpha(number alpha)
+		-- 스프라이트 불투명도만 바꾼다(같은 값이면 건드리지 않음).
+		local renderer = self.Entity.SpriteRendererComponent
+		if not isvalid(renderer) then return end
+		local c = renderer.Color
+		if math.abs(c.a - alpha) < 0.001 then return end
+		renderer.Color = Color(c.r, c.g, c.b, alpha)
+	end
+
+	method void ForEachAlly(Unit_Info info, any callback)
+		-- 같은 PlayerID를 가진, 자기 자신을 제외한 생존 아군 전체에 callback(allyInfo, allyEntity)을 실행한다.
+		-- (거리 판정은 호출부에서 각자의 용도에 맞게 수행한다 — 지원 오라는 범위 밖 원복이 필요하고, 힐은 범위 내만 필요하기 때문)
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return end
+		local group = map:GetChildByName("MyUnits")
+		if not isvalid(group) then return end
+		for _, child in ipairs(group.Children:ToTable()) do
+			if child ~= self.Entity then
+				---@type Unit_Info
+				local allyInfo = child:GetComponent("script.Unit_Info")
+				if allyInfo ~= nil and not allyInfo.IsDead and allyInfo.PlayerID == info.PlayerID then
+					callback(allyInfo, child)
+				end
+			end
+		end
+	end
+
+end

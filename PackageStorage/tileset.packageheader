@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "packageheader://bf1a6e997ee74a8cb1fc013050e203a2",
+  "ContentType": "x-mod/packageheader",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "id": "packageheader://bf1a6e997ee74a8cb1fc013050e203a2",
+      "name": "tileset",
+      "packageHeaderData": "{\"entries\":[{\"entryKey\":\"tileset://1516be39-9621-4aac-968f-2208273c4814\",\"name\":\"NewTileSet\",\"type\":\"MODTileSetEntry\",\"directory\":\"@workspace/RootDesk/MyDesk/Models\",\"dependency\":null,\"idConstraints\":0,\"nameConstraints\":0,\"hash\":1879010821}],\"entities\":null,\"version\":2,\"coreVersion\":\"26.7.0.0\",\"studioVersion\":\"0.1.0.0\"}",
+      "packageRevision": 1,
+      "packageVersion": "1"
+    }
+  }
+}

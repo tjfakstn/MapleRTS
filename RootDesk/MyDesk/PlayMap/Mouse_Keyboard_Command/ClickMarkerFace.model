@@ -1,0 +1,30 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "model://67135926-0416-43a7-8f6a-81b2e650b28c",
+  "ContentType": "x-mod/model",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.7.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "Version": 1,
+      "Name": "ClickMarkerFace",
+      "BaseModelId": null,
+      "Id": "67135926-0416-43a7-8f6a-81b2e650b28c",
+      "Components": [
+        "MOD.Core.TransformComponent",
+        "MOD.Core.PolygonRendererComponent"
+      ],
+      "Properties": [],
+      "Values": [],
+      "EventLinks": [],
+      "Children": []
+    }
+  }
+}

@@ -1,0 +1,84 @@
+@Component
+script RoomBooth extends Component
+
+	@Sync
+	property integer RoomId = 0
+
+	@Sync
+	property string Title = ""
+
+	@Sync
+	property integer Count = 0
+
+	@Sync
+	property integer MaxCount = 4
+
+	@Sync
+	property string State = "waiting"
+
+	@Sync
+	property string HostNick = ""
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		-- 처음 보일 때 말풍선·이름표를 채운다. 말풍선은 시간이 지나면 사라지므로 주기적으로 다시 띄운다.
+		self:Refresh()
+		local entity = self.Entity
+		self._T.timer = _TimerService:SetTimerRepeat(function()
+			if isvalid(entity) then self:Refresh() end
+		end, 20)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		-- 말풍선 갱신 타이머 해제.
+		if self._T.timer ~= nil then _TimerService:ClearTimer(self._T.timer) end
+		self._T.timer = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSyncProperty(string name, any value)
+		-- 방 정보가 바뀌면(입장·퇴장·게임 시작) 바로 다시 그린다.
+		self:Refresh()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Refresh()
+		-- 말풍선: 1줄 방 이름, 2줄 "2/4 · 대기 중"(게임 중이면 빨강). 이름표: "방장 ○○". 게임 중이면 노점을 살짝 어둡게.
+		local playing = self.State == "playing"
+		local stateText = playing and "<color=#D9594D>게임 중</color>" or "<color=#2E9E4F>대기 중 · 클릭해서 입장</color>"
+		local balloon = self.Entity.ChatBalloonComponent
+		if balloon ~= nil then
+			-- 말풍선을 계속 띄운다: AutoShow(ShowDuration 동안 보이고 HideDuration 동안 숨김)를 켜고 숨김 시간을 거의 0으로.
+			-- AutoShow를 끈 채 메시지만 바꾸면 한 번 잠깐 뜨고 사라져 노점 위에 방 정보가 안 보였다(10-05 실기 확인).
+			balloon.ChatModeEnabled = false
+			balloon.IsRichText = true
+			balloon.ShowDuration = 3600
+			balloon.HideDuration = 0.05
+			balloon.AutoShowEnabled = true
+			balloon.Message = "<b>" .. self.Title .. "</b>\n" .. tostring(self.Count) .. " / " .. tostring(self.MaxCount) .. "  ·  " .. stateText
+		end
+		local tag = self.Entity.NameTagComponent
+		if tag ~= nil then
+			tag.Name = (self.HostNick ~= "") and ("방장 " .. self.HostNick) or ""
+			tag.FontSize = 1.4
+			tag.Bold = true
+		end
+		local sr = self.Entity.SpriteRendererComponent
+		if sr ~= nil then
+			sr.Color = playing and Color(0.6, 0.6, 0.65, 1) or Color(1, 1, 1, 1)
+		end
+	end
+
+	@EventSender("Self")
+	handler HandleTouchEvent(TouchEvent event)
+		--------------- Native Event Sender Info ----------------
+		-- Sender: TouchReceiveComponent
+		-- Space: Client
+		---------------------------------------------------------
+		-- 노점 클릭 → 이 방 입장 요청(게임 중·꽉 참·이미 다른 방 등은 서버가 안내 메시지로 거절).
+		if self.RoomId <= 0 then return end
+		_RoomLobbyLogic:RequestJoinRoom(self.RoomId)
+	end
+
+end

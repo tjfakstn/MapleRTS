@@ -1,0 +1,146 @@
+@Component
+script SoulMasterSkillComponent extends Component
+
+	@ExecSpace("ServerOnly")
+	method string ResolveCastKey(string requestedSkillKey, table kit)
+		    -- 요청 키를 실제 시전 키로 해석한다. nil이면 이번 입력을 거부한다(연계 시전 잠금/공유 쿨다운/T 시전 잠금).
+		    if requestedSkillKey == "W" then return self:ResolveSoulMasterWCastKey() end
+		    if requestedSkillKey == "E" then return self:ResolveSoulMasterECastKey() end
+		    if requestedSkillKey == "R" then return self:ResolveSoulMasterRCastKey() end
+		    if requestedSkillKey == "T" and not self:CanCastSoulMasterT(kit.T) then return nil end
+		    return requestedSkillKey
+	end
+
+	@ExecSpace("ServerOnly")
+	method string GetCooldownKey(string requestedSkillKey)
+		    -- W/E/R은 첫 입력/후속 입력이 하나의 공유 쿨다운 키를 쓴다. 그 외 키는 nil(기본 "<영웅>:<키>" 사용).
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if requestedSkillKey == "W" then return core:GetChainSpec("soulMasterW").cooldownKey end
+		    if requestedSkillKey == "E" then return core:GetChainSpec("soulMasterE").cooldownKey end
+		    if requestedSkillKey == "R" then return core:GetChainSpec("soulMasterR").cooldownKey end
+		    return nil
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean CommitCast(string requestedSkillKey, string resolvedSkillKey, table skill)
+		    -- 시전 뒤 연계/충전 상태를 커밋한다. true면 공유 쿨다운까지 이 컴포넌트가 처리했으므로 기본 쿨다운을 쓰지 않는다.
+		    if requestedSkillKey == "W" then self:CommitSoulMasterWCast(resolvedSkillKey, skill) return true end
+		    if requestedSkillKey == "E" then self:CommitSoulMasterECast(resolvedSkillKey, skill) return true end
+		    if requestedSkillKey == "R" then self:CommitSoulMasterRCast(resolvedSkillKey, skill) return true end
+		    if requestedSkillKey == "T" then self:CommitSoulMasterTCast(skill) return true end
+		    return false
+	end
+
+	method table GetSoulMasterWChainState()
+		    -- 소울마스터 W 연계 상태 조회(공통 로직은 GetChainState).
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return core:GetChainState(core:GetChainSpec("soulMasterW"))
+	end
+
+	method string ResolveSoulMasterWCastKey()
+		    -- 소울마스터 W 입력을 첫 입력(WB)/후속 입력(WC)으로 해석(공통 로직은 ResolveChainCastKey).
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return core:ResolveChainCastKey(core:GetChainSpec("soulMasterW"))
+	end
+
+	method void CommitSoulMasterWCast(string actualSkillKey, table skill)
+		    -- 소울마스터 W: 후속 창 3초, 공유 쿨다운 1초.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    core:CommitChainCast(core:GetChainSpec("soulMasterW"), actualSkillKey, skill.castWindup or 0.5, 3, skill.cooldown or 1)
+	end
+
+	method table GetSoulMasterEChainState()
+		    -- 소울마스터 E 연계 상태 조회(공통 로직은 GetChainState).
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return core:GetChainState(core:GetChainSpec("soulMasterE"))
+	end
+
+	method string ResolveSoulMasterECastKey()
+		    -- 소울마스터 E 입력을 첫 입력(EB)/후속 입력(EC)으로 해석(공통 로직은 ResolveChainCastKey).
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return core:ResolveChainCastKey(core:GetChainSpec("soulMasterE"))
+	end
+
+	method void CommitSoulMasterECast(string actualSkillKey, table skill)
+		    -- 소울마스터 E: 후속 창 3초, 공유 쿨다운 1초.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    core:CommitChainCast(core:GetChainSpec("soulMasterE"), actualSkillKey, skill.castWindup or 0.5, 3, skill.cooldown or 1)
+	end
+
+	method table GetSoulMasterRChainState()
+		    -- 소울마스터 R 연계 상태 조회(공통 로직은 GetChainState).
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return core:GetChainState(core:GetChainSpec("soulMasterR"))
+	end
+
+	method string ResolveSoulMasterRCastKey()
+		    -- 소울마스터 R 입력을 첫 입력(RB)/후속 입력(RC)으로 해석(공통 로직은 ResolveChainCastKey).
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    return core:ResolveChainCastKey(core:GetChainSpec("soulMasterR"))
+	end
+
+	method void CommitSoulMasterRCast(string actualSkillKey, table skill)
+		    -- 소울마스터 R: 후속 창 3초, 공유 쿨다운 1초.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    core:CommitChainCast(core:GetChainSpec("soulMasterR"), actualSkillKey, skill.castWindup or 0.5, 3, skill.cooldown or 1)
+	end
+
+	method table GetSoulMasterTChargeState()
+		    local state = self._T.soulMasterTCharge
+		    if state == nil then return nil end
+		
+		    local now = _UtilLogic.ElapsedSeconds
+		    if now > (state.expiresAt or 0) then
+		        self._T.soulMasterTCharge = nil
+		        return nil
+		    end
+		
+		    if (state.remainingUses or 0) <= 0 then
+		        self._T.soulMasterTCharge = nil
+		        return nil
+		    end
+		
+		    return state
+	end
+
+	method boolean CanCastSoulMasterT(table skill)
+		    local now = _UtilLogic.ElapsedSeconds
+		    local state = self:GetSoulMasterTChargeState()
+		    if state ~= nil and now < (state.castUnlockAt or 0) then
+		        return false
+		    end
+		
+		    if state == nil then
+		        -- 충전 소진/만료로 새 창을 무한히 열지 않도록 최초 활성화 시 재사용 시간을 잡는다.
+		        if self.Entity:GetComponent("script.HeroUnitSkill") ~= nil then
+		            if now < (self._T.soulMasterTReadyAt or 0) then return false end
+		            self._T.soulMasterTReadyAt = now + (skill.cooldown or 75)
+		        end
+		        self._T.soulMasterTCharge = {
+		            remainingUses = 8,
+		            expiresAt = now + 20,
+		            castUnlockAt = 0,
+		        }
+		        state = self._T.soulMasterTCharge
+		    end
+		
+		    return (state.remainingUses or 0) > 0
+	end
+
+	method void CommitSoulMasterTCast(table skill)
+		    local state = self:GetSoulMasterTChargeState()
+		    if state == nil then return end
+		
+		    local now = _UtilLogic.ElapsedSeconds
+		    state.remainingUses = math.max(0, (state.remainingUses or 0) - 1)
+		    state.castUnlockAt = now + (skill.castWindup or 0.35)
+		
+		    if state.remainingUses <= 0 then
+		        self._T.soulMasterTCharge = nil
+		        return
+		    end
+		
+		    self._T.soulMasterTCharge = state
+	end
+
+end

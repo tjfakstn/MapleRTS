@@ -1,0 +1,210 @@
+@Logic
+script CombatTeamLogic extends Logic
+
+	method void EnsureRegistry()
+		    if self._T.teamKeyByEntityId == nil then
+		        self._T.teamKeyByEntityId = {}
+		    end
+	end
+
+	method void RegisterEntity(Entity target, string teamKey)
+		    -- 유닛/영웅/건물이 살아날 때 자기 진영을 등록한다. teamKey가 ""면 중립으로 남는다.
+		    if not isvalid(target) then
+		        return
+		    end
+		    self:EnsureRegistry()
+		    if teamKey == nil or teamKey == "" then
+		        self._T.teamKeyByEntityId[tostring(target.Id)] = nil
+		        return
+		    end
+		    self._T.teamKeyByEntityId[tostring(target.Id)] = teamKey
+	end
+
+	method void UnregisterEntity(Entity target)
+		    -- 엔티티가 사라질 때 등록을 지운다. Logic은 맵 전환에도 살아남으므로 이걸 안 하면 누적된다.
+		    if self._T.teamKeyByEntityId == nil then
+		        return
+		    end
+		    if not isvalid(target) then
+		        return
+		    end
+		    self._T.teamKeyByEntityId[tostring(target.Id)] = nil
+	end
+
+	method string GetTeamKey(Entity target)
+		    -- 등록된 진영이 최우선. 없으면 플레이어는 UserId 기반 개인 진영, 그 외는 중립("").
+		    -- PlayerComponent.UserId는 integer가 아니라 string이다(PlayerComponent.d.mlua:48).
+		    if not isvalid(target) then return "" end
+		    local unit = target:GetComponent("script.Unit_Info")
+		    local structure = target:GetComponent("script.Structure_Info")
+		    local owner = unit ~= nil and unit.PlayerID or (structure ~= nil and structure.PlayerID or "")
+		    if owner ~= "" then return "P:" .. owner end
+		    local companion = target:GetComponent("script.UnitHitComponent")
+		    if companion ~= nil and companion.teamKey ~= "" then return companion.teamKey end
+		    if self._T.teamKeyByEntityId ~= nil then
+		        local stored = self._T.teamKeyByEntityId[tostring(target.Id)]
+		        if stored ~= nil then return stored end
+		    end
+		    if target.PlayerComponent ~= nil then
+		        return "P:" .. tostring(target.PlayerComponent.UserId)
+		    end
+		    return ""
+	end
+
+	method boolean IsNeutral(Entity target)
+		    return self:GetTeamKey(target) == ""
+	end
+
+	method boolean IsEnemy(Entity attacker, Entity defender)
+		    -- 공격 판정의 최종 기준. 자기 자신은 절대 적이 아니고, 중립은 양쪽 모두에게 적이다.
+		    if not isvalid(attacker) or not isvalid(defender) then
+		        return false
+		    end
+		    if attacker == defender or attacker.CurrentMap ~= defender.CurrentMap then return false end
+		    if defender:GetComponent("script.MesoStructure") ~= nil or self:IsDead(defender) then return false end
+		
+		    local defenderKey = self:GetTeamKey(defender)
+		    if defenderKey == "" then return true end
+		
+		    local attackerKey = self:GetTeamKey(attacker)
+		    if attackerKey == "" then return true end
+		
+		    return attackerKey ~= defenderKey
+	end
+
+	method boolean IsAlly(Entity a, Entity b)
+		    -- 회복/버프 대상 판정용. 중립은 아군도 아니다(회복 대상에서 빠진다).
+		    if not isvalid(a) or not isvalid(b) or a.CurrentMap ~= b.CurrentMap or self:IsDead(b) then return false end
+		    local keyA = self:GetTeamKey(a)
+		    if keyA == "" then return false end
+		    return keyA == self:GetTeamKey(b)
+	end
+
+	method boolean IsDead(Entity actor)
+		-- 합본의 HP 보관자를 먼저 확인하고 원본 플레이어/소환체도 지원한다.
+		if not isvalid(actor) then return true end
+		local unit = actor:GetComponent("script.Unit_Info")
+		if unit ~= nil then return unit.IsDead or unit.Hp <= 0 end
+		local structure = actor:GetComponent("script.Structure_Info")
+		if structure ~= nil then return structure.IsDestroyed end
+		local hit = actor:GetComponent("script.UnitHitComponent")
+		if hit ~= nil then return hit.isDead or hit.hp <= 0 end
+		return actor.PlayerComponent ~= nil and actor.PlayerComponent:IsDead()
+	end
+
+	method Component GetReceiver(Entity actor)
+		-- 무적/기절 상태도 실제 HP 소유 컴포넌트에 보관한다.
+		if not isvalid(actor) then return nil end
+		return actor:GetComponent("script.Unit_Info") or actor:GetComponent("script.Structure_Info")
+			or actor:GetComponent("script.UnitHitComponent") or actor:GetComponent("script.HeroHitComponent")
+	end
+
+	method table GetCombatCandidates(Entity map)
+		-- 태그가 없는 합본 유닛·몬스터까지 같은 맵 안에서 중복 없이 수집한다.
+		local result = {} local seen = {}
+		if not isvalid(map) then return result end
+		for _, name in ipairs({"script.Unit_Info", "script.Structure_Info", "script.UnitHitComponent", "script.TrainingDummyComponent", "PlayerComponent"}) do
+			for _, comp in ipairs(map:GetChildComponentsByTypeName(name, true)) do
+				local actor = comp.Entity
+				if isvalid(actor) and actor.EnabledInHierarchy and not seen[actor.Id] and not self:IsDead(actor) then
+					seen[actor.Id] = true
+					table.insert(result, actor)
+				end
+			end
+		end
+		return result
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ForceMove(Entity actor, Vector2 destination, number duration)
+		-- RTS 끌어오기/밀치기도 원래 이동기의 벽·건물 검사를 거친다.
+		if self:IsDead(actor) then return end
+		local move = actor:GetComponent("script.UnitMoveComponent")
+		local receiver = self:GetReceiver(actor)
+		if move == nil or receiver == nil then return end
+		local map = actor.CurrentMap
+		local origin = actor.TransformComponent.WorldPosition:ToVector2()
+		local started = _UtilLogic.ElapsedSeconds
+		local deadline = started + math.max(duration, 0.02)
+		receiver._T.forcedMoveUntil = deadline
+		move:Stop()
+		local timer = nil
+		timer = _TimerService:SetTimerRepeat(function()
+			if self:IsDead(actor) or actor.CurrentMap ~= map or receiver._T.forcedMoveUntil ~= deadline then
+				_TimerService:ClearTimer(timer)
+				return
+			end
+			local ratio = math.min(1, (_UtilLogic.ElapsedSeconds - started) / math.max(duration, 0.02))
+			move.CurrentPos = actor.TransformComponent.WorldPosition:ToVector2()
+			local nextPos = move:AvoidStructures(origin + (destination - origin) * ratio)
+			move:SetWorldPos(nextPos.x, nextPos.y)
+			if ratio >= 1 then _TimerService:ClearTimer(timer) end
+		end, 0.02)
+	end
+
+	method integer UnitLockState(Entity actor)
+		-- 일반 RTS 유닛(Unit_Info는 있고 영웅은 아님)의 잠금을 컴포넌트 조회 2번으로 판정하는 빠른 경로.
+		-- 모든 유닛이 매 프레임 호출하므로 영웅 전용 컴포넌트 조회를 건너뛴다.
+		-- 반환: 1 = 잠김, 0 = 안 잠김, -1 = 일반 유닛이 아님(영웅/건물/소환체 — 전체 검사 필요).
+		if not isvalid(actor) then return 1 end
+		local unit = actor:GetComponent("script.Unit_Info")
+		if unit == nil or actor:GetComponent("script.HeroUnit") ~= nil then return -1 end
+		if unit.IsDead or unit.Hp <= 0 then return 1 end
+		local now = _UtilLogic.ElapsedSeconds
+		if now < (unit._T.forcedMoveUntil or 0) then return 1 end
+		local stun = unit._T.stunState
+		if stun ~= nil then
+			for _, deadline in pairs(stun.sources) do if now < deadline then return 1 end end
+		end
+		return 0
+	end
+
+	method boolean IsMovementLocked(Entity actor)
+		-- 이동형 연사도 사망/기절/강제 이동 중에는 조작할 수 없다.
+		local quick = self:UnitLockState(actor)
+		if quick >= 0 then return quick == 1 end
+		if self:IsDead(actor) then return true end
+		local now = _UtilLogic.ElapsedSeconds
+		local receiver = self:GetReceiver(actor)
+		if receiver ~= nil then
+			if now < (receiver._T.forcedMoveUntil or 0) then return true end
+			local stun = receiver._T.stunState
+			if stun ~= nil then
+				for _, deadline in pairs(stun.sources) do if now < deadline then return true end end
+			end
+		end
+		local adapter = actor:GetComponent("script.HeroUnitSkill")
+		if adapter ~= nil and adapter._T.mobileChannel == true and now < (adapter._T.castLockUntil or 0) then
+			return now < (adapter._T.movementLockUntil or 0)
+		end
+		return self:IsActionLocked(actor)
+	end
+
+	method boolean IsActionLocked(Entity actor)
+		-- RTS 이동/기본 공격도 원본 스킬의 기절·채널링 잠금을 존중한다.
+		local quick = self:UnitLockState(actor)
+		if quick >= 0 then return quick == 1 end
+		if self:IsDead(actor) then return true end
+		local now = _UtilLogic.ElapsedSeconds
+		local receiver = self:GetReceiver(actor)
+		if receiver ~= nil then
+			if now < (receiver._T.forcedMoveUntil or 0) then return true end
+			local stun = receiver._T.stunState
+			if stun ~= nil then
+				for _, deadline in pairs(stun.sources) do if now < deadline then return true end end
+			end
+		end
+		local core = actor:GetComponent("script.HeroSkillComponent")
+		if core == nil then return false end
+		if now < (core._T.rtsLockUntil or 0) then return true end
+		local dk = actor:GetComponent("script.DarkKnightSkillComponent")
+		if dk ~= nil and dk:IsCycleCasting() then return true end
+		for _, name in ipairs({"XenonSkillComponent", "MechanicSkillComponent", "WildHunterSkillComponent"}) do
+			local comp = actor:GetComponent("script." .. name)
+			if comp ~= nil and comp.casting then return true end
+		end
+		local blaster = actor:GetComponent("script.BlasterSkillComponent")
+		return blaster ~= nil and now < (blaster._T.busyUntil or 0)
+	end
+
+end

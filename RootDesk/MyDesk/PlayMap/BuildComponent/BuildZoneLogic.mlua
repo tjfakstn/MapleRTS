@@ -1,0 +1,168 @@
+@Logic
+script BuildZoneLogic extends Logic
+
+	property string ZoneModelId = "model://buildzoneindicator"
+
+	property string ZoneRuid = "0ac43ac8bf83461692fc56565d048df7"
+
+	property number ZoneSpriteWorldSize = 1.96
+
+	property Color ZoneColor = Color(0.3, 0.8, 1.0, 0.28)
+
+	property number OverlapBonusCap = 0.5
+
+	property table ActiveZones = {}
+
+	method string ProvidersFor(string camp, string buildingKey, string structureName)
+		-- camp 진영의 (buildingKey, structureName) 건물을 지으려면 어떤 BuildingKey 건물의 반경 안이어야 하는지(콤마 목록).
+		-- 빈 문자열이면 위치 제한이 없다.
+		if camp == "Cyg" then
+			if buildingKey == "Territory" then return "" end
+			return "Territory"
+		end
+		if camp == "Adv" then
+			-- 2026-10-06 모험가 건설 구조: 세계수의 뿌리(Territory)·전직관은 세계수·뿌리·전초지 반경 안(점막 확장),
+			-- 지역 건물(사냥터·채석장 등)은 그 지역 전초지 반경 안에만. 전초지는 뿌리를 변환해서 만든다(직접 배치 없음).
+			if buildingKey == "HQ" then return "" end
+			local outpost = self:AdvOutpostFor(structureName)
+			if outpost ~= "" then return outpost end
+			return "HQ,Territory,District"
+		end
+		return ""
+	end
+
+	method string AdvOutpostFor(string structureName)
+		-- 모험가 지역 건물 → 지어야 하는 전초지 이름. 지역 건물이 아니면 "".
+		local t = {
+			["헤네시스 사냥터"] = "헤네시스 전초지", ["헤네시스 무기점"] = "헤네시스 전초지", ["버섯의 성"] = "헤네시스 전초지",
+			["페리온 채석장"] = "페리온 전초지", ["전사의 성소"] = "페리온 전초지",
+			["요정의 숲"] = "엘리니아 전초지", ["마법 도서관"] = "엘리니아 전초지", ["엘리니아 마나 제단"] = "엘리니아 전초지",
+			["커닝시티 지하철"] = "커닝시티 전초지", ["다크로드의 은신처"] = "커닝시티 전초지",
+		}
+		return t[structureName or ""] or ""
+	end
+
+	method string RestrictMessage(string camp, string providers)
+		-- 영역 밖에 지으려 할 때 보여줄 안내 문구(providers = ProvidersFor 결과).
+		if camp == "Adv" then
+			if providers ~= nil and string.find(providers, "전초지", 1, true) ~= nil then
+				return providers .. " 주변 범위 안에만 지을 수 있습니다"
+			end
+			return "세계수/세계수의 뿌리/전초지 주변 범위 안에만 지을 수 있습니다"
+		end
+		return "신수/신수의 가호 주변 범위 안에만 지을 수 있습니다"
+	end
+
+	method table CollectSources(Entity map, string playerId, string providers)
+		-- playerId 소유의, 완공됐고 파괴되지 않았으며 BuildRadius > 0 이고 BuildingKey(또는 건물 이름 — 모험가 전초지별 제한)가 providers 목록에 있는 건물을
+		-- { pos, radius } 목록으로 반환한다. 건설 중인 건물은 영역을 제공하지 않는다(다른 건물의 기능과 동일한 규칙).
+		local sources = {}
+		if providers == nil or providers == "" or not isvalid(map) then return sources end
+		local wanted = "," .. providers .. ","
+		
+		local group = map:GetChildByName("MyStructures")
+		if not isvalid(group) then group = map end
+		
+		for _, child in ipairs(group.Children:ToTable()) do
+			---@type Structure_Info
+			local info = child:GetComponent("script.Structure_Info")
+			if info ~= nil and info.BuildRadius > 0 and info.PlayerID == playerId and not info.IsDestroyed and not info.IsUnderConstruction
+				and (string.find(wanted, "," .. info.BuildingKey .. ",", 1, true) ~= nil
+					or (info.StructureName ~= "" and string.find(wanted, "," .. info.StructureName .. ",", 1, true) ~= nil)) then
+				local wp = child.TransformComponent.WorldPosition
+				table.insert(sources, { pos = Vector3(wp.x, wp.y, wp.z), radius = info.BuildRadius })
+			end
+		end
+		self:ApplyOverlapBonus(sources)
+		return sources
+	end
+
+	method number CircleOverlapArea(number r1, number r2, number d)
+		-- 반경 r1, r2인 두 원(중심 거리 d)이 겹치는 면적.
+		if d >= r1 + r2 then return 0 end
+		local small = math.min(r1, r2)
+		if d <= math.abs(r1 - r2) then return math.pi * small * small end
+		local a1 = (d * d + r1 * r1 - r2 * r2) / (2 * d * r1)
+		local a2 = (d * d + r2 * r2 - r1 * r1) / (2 * d * r2)
+		a1 = math.max(-1, math.min(1, a1))
+		a2 = math.max(-1, math.min(1, a2))
+		local k = (-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2)
+		if k < 0 then k = 0 end
+		return r1 * r1 * math.acos(a1) + r2 * r2 * math.acos(a2) - 0.5 * math.sqrt(k)
+	end
+
+	method void ApplyOverlapBonus(table sources)
+		-- 영역 원이 서로 겹치면 겹친 비율만큼 그 원의 반경을 늘린다(radius = base * (1 + min(비율, OverlapBonusCap))).
+		-- 비율 = (다른 원들과 겹치는 면적 합) / (자기 원 면적). 모든 원에 대해 "원래 반경" 기준으로 한 번만 계산하므로
+		-- 서버/클라이언트가 같은 결과를 얻고 연쇄 증폭이 일어나지 않는다.
+		for _, s in ipairs(sources) do s.base = s.radius end
+		for i, a in ipairs(sources) do
+			local ratio = 0
+			local areaA = math.pi * a.base * a.base
+			for j, b in ipairs(sources) do
+				if i ~= j then
+					local dx = a.pos.x - b.pos.x
+					local dy = a.pos.y - b.pos.y
+					ratio = ratio + self:CircleOverlapArea(a.base, b.base, math.sqrt(dx * dx + dy * dy)) / areaA
+				end
+			end
+			a.radius = a.base * (1 + math.min(ratio, self.OverlapBonusCap))
+		end
+	end
+
+	method boolean IsWalkable(Entity map, Vector2 pos)
+		-- pos가 이동 불가 타일(벽/경계)이 아니면 true. 벽 정보(WallTileBlocker)가 없는 맵은 항상 true.
+		if not isvalid(map) then return true end
+		---@type WallTileBlocker
+		local blocker = map:GetFirstChildComponentByTypeName("script.WallTileBlocker", true)
+		if blocker == nil then return true end
+		return not blocker:IsBlocked(pos.x, pos.y)
+	end
+
+	method boolean IsInZone(Entity map, string playerId, Vector2 pos, string providers)
+		-- pos가 providers 건물들의 반경 합집합 안이면 true. providers가 비어 있으면(제한 없음) 항상 true.
+		if providers == nil or providers == "" then return true end
+		for _, src in ipairs(self:CollectSources(map, playerId, providers)) do
+			local dx = pos.x - src.pos.x
+			local dy = pos.y - src.pos.y
+			if dx * dx + dy * dy <= src.radius * src.radius then
+				return true
+			end
+		end
+		return false
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ShowZones(Entity map, string playerId, string providers)
+		-- 배치 모드 동안 providers 건물들 주변의 건설 가능 범위를 원으로 표시한다(겹치는 원은 하나로 이어져 보인다).
+		self:HideZones()
+		if not isvalid(map) then return end
+		
+		local scale = 1
+		for _, src in ipairs(self:CollectSources(map, playerId, providers)) do
+			local zone = _SpawnService:SpawnByModelId(self.ZoneModelId, "BuildZone", src.pos, map)
+			if zone ~= nil then
+				scale = (src.radius * 2) / self.ZoneSpriteWorldSize
+				zone.TransformComponent.Scale = Vector3(scale, scale, 1)
+				local renderer = zone.SpriteRendererComponent
+				if isvalid(renderer) then
+					renderer.SpriteRUID = self.ZoneRuid
+					renderer.Color = self.ZoneColor
+				end
+				table.insert(self.ActiveZones, zone)
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void HideZones()
+		-- 표시 중인 영역 인디케이터를 모두 지운다(배치 확정/취소 시).
+		for _, zone in ipairs(self.ActiveZones) do
+			if isvalid(zone) then
+				_EntityService:Destroy(zone)
+			end
+		end
+		self.ActiveZones = {}
+	end
+
+end

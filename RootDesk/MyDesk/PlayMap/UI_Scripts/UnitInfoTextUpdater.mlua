@@ -1,0 +1,361 @@
+@Component
+script UnitInfoTextUpdater extends Component
+
+	property Entity selectedTarget = nil
+
+	@HideFromInspector
+	property any _name = nil
+
+	@HideFromInspector
+	property any _role = nil
+
+	@HideFromInspector
+	property any _hpBar = nil
+
+	@HideFromInspector
+	property any _hpFill = nil
+
+	@HideFromInspector
+	property any _hpText = nil
+
+	@HideFromInspector
+	property any _statAtk = nil
+
+	@HideFromInspector
+	property any _statDef = nil
+
+	@HideFromInspector
+	property any _statRng = nil
+
+	@HideFromInspector
+	property any _status = nil
+
+	@HideFromInspector
+	property any _buildBar = nil
+
+	@HideFromInspector
+	property any _buildFill = nil
+
+	@HideFromInspector
+	property boolean _cached = false
+
+	@HideFromInspector
+	property table _last = {}
+
+	@HideFromInspector
+	property string _lastBuildRuid = ""
+
+	@HideFromInspector
+	property number _lastBuildTotal = 0
+
+	@HideFromInspector
+	property number _buildRemaining = 0
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		-- 선택 전에는 숨긴다.
+		self.Entity.Enable = false
+		self._last = {}
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		if not isvalid(self.selectedTarget) then return end
+		self:Refresh(delta)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void CacheRefs()
+		-- 자식을 이름으로 한 번만 찾아 둔다(UUID 바인딩 대신 — UI 구조가 바뀌어도 빌더 재바인딩이 필요 없게).
+		if self._cached then return end
+		local root = self.Entity
+		local function child(parent, name)
+			if not isvalid(parent) then return nil end
+			local e = parent:GetChildByName(name)
+			if isvalid(e) then return e end
+			return nil
+		end
+		self._name = child(root, "NameText")
+		self._role = child(root, "RoleText")
+		self._hpBar = child(root, "HpBarBg")
+		self._hpFill = child(self._hpBar, "Fill")
+		self._hpText = child(self._hpBar, "HpText")
+		self._statAtk = child(root, "StatAtk")
+		self._statDef = child(root, "StatDef")
+		self._statRng = child(root, "StatRng")
+		self._status = child(root, "StatusText")
+		self._buildBar = child(root, "BuildBarBg")
+		self._buildFill = child(self._buildBar, "Fill")
+		self._cached = true
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetText(any entity, string key, string text)
+		-- 바뀐 경우에만 TextGUIRenderer.Text를 대입한다.
+		if not isvalid(entity) or entity.TextGUIRendererComponent == nil then return end
+		if self._last[key] == text then return end
+		self._last[key] = text
+		entity.TextGUIRendererComponent.Text = text
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetEnable(any entity, boolean on)
+		if not isvalid(entity) then return end
+		if entity.Enable ~= on then entity.Enable = on end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetFill(any entity, number ratio)
+		if not isvalid(entity) or entity.SpriteGUIRendererComponent == nil then return end
+		if ratio < 0 then ratio = 0 end
+		if ratio > 1 then ratio = 1 end
+		entity.SpriteGUIRendererComponent.FillAmount = ratio
+	end
+
+	@ExecSpace("ClientOnly")
+	method string StructureFunction(string structureName)
+		-- 건물 이름 → 3진영 Structure_Stat_DataSet의 Function(기능) 열. 처음 한 번 읽어 캐시한다. 없으면 "".
+		if structureName == nil or structureName == "" then return "" end
+		if self._T.structFunc == nil then
+			local cache = {}
+			for _, name in ipairs({ "Adv_Structure_Stat_DataSet", "Cyg_Structure_Stat_DataSet", "Res_Structure_Stat_DataSet" }) do
+				local temp = _DataService:GetTable(name)
+				if temp ~= nil then
+					for r = 1, temp:GetRowCount() do
+						local n = temp:GetCell(r, "Name")
+						if n ~= nil and n ~= "" then cache[n] = temp:GetCell(r, "Function") or "" end
+					end
+				end
+			end
+			self._T.structFunc = cache
+		end
+		return self._T.structFunc[structureName] or ""
+	end
+
+	@ExecSpace("ClientOnly")
+	method string StateLabel(string state)
+		-- UnitStateComponent.CurrentState → 상태 줄 글자
+		if state == "IDLE" then return "대기 중" end
+		if state == "MOVE" then return "이동 중" end
+		if state == "ATTACK" then return "공격 중" end
+		if state == "BUILD" then return "건설 중" end
+		if state == "HIT" then return "피격" end
+		if state == "DEAD" then return "사망" end
+		return state or ""
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Refresh(number delta)
+		local target = self.selectedTarget
+		self:CacheRefs()
+		
+		local unitInfo = target.Unit_Info
+		local structInfo = nil
+		if unitInfo == nil then
+			---@type Structure_Info
+			local s = target:GetComponent("script.Structure_Info")
+			structInfo = s
+		end
+		
+		-- 이름 · 역할
+		local name = target.Name
+		local role = ""
+		if unitInfo ~= nil then
+			if target:GetComponent("script.HeroUnitSkill") ~= nil then
+				-- 영웅: 전직 단계에 맞춘 직업 이름(모험가는 원작 차수별 이름 — JobAdvanceLogic.JobName).
+				name = "영웅"
+				role = "영웅"
+				---@type HeroUnit
+				local heroComp = target:GetComponent("script.HeroUnit")
+				if heroComp ~= nil and heroComp.HeroId ~= "" then
+					local owner = _JobAdvanceLogic:PlayerInfoOf(heroComp.OwnerUserId)
+					local tier = (owner ~= nil) and owner.JobTier or 1
+					name = _JobAdvanceLogic:JobName(heroComp.HeroId, heroComp.HeroName, tier)
+					role = "영웅 · " .. tostring(tier) .. "차"
+				end
+			else
+				local data = _UnitCommandData:GetUnitData(unitInfo.UnitModelKey)
+				if data ~= nil then
+					name = data.Name
+					role = data.Role or ""
+				elseif unitInfo.RoleKey ~= "" then
+					role = unitInfo.RoleKey
+				end
+			end
+		elseif structInfo ~= nil then
+			if structInfo.StructureName ~= "" then name = structInfo.StructureName end
+			role = "건물"
+			if target:GetComponent("script.JobAdvanceAction") ~= nil then role = "전직 연구" end
+			-- 채집 광맥은 건물이 아니라 자원이다: 이름은 "메소", 체력 바 = 남은 메소 / 총 매장량(MesoStructure.SyncHp).
+			if target:GetComponent("script.MesoStructure") ~= nil then
+				name = "메소"
+				role = "자원"
+			end
+		end
+		self:SetText(self._name, "name", name)
+		self:SetText(self._role, "role", role)
+		
+		-- HP 바
+		local info = unitInfo
+		if info == nil then info = structInfo end
+		if info ~= nil then
+			self:SetEnable(self._hpBar, true)
+			local ratio = 0
+			if info.MaxHp > 0 then ratio = info.Hp / info.MaxHp end
+			self:SetFill(self._hpFill, ratio)
+			self:SetText(self._hpText, "hp", tostring(math.floor(info.Hp)) .. " / " .. tostring(math.floor(info.MaxHp)))
+		else
+			self:SetEnable(self._hpBar, false)
+		end
+		
+		-- 스탯 칩(유닛만): 공격 · 방어 · 사거리
+		local showStats = (unitInfo ~= nil)
+		self:SetEnable(self._statAtk, showStats)
+		self:SetEnable(self._statDef, showStats)
+		self:SetEnable(self._statRng, showStats)
+		if showStats then
+			-- 업그레이드 보너스는 "+N"으로 따로 붙인다(스타처럼 기본값 + 강화).
+			local atkBonus = _UpgradeLogic:AttackBonus(unitInfo)
+			local defBonus = _UpgradeLogic:DefenseBonus(unitInfo)
+			local atkText = "공격 " .. tostring(math.floor(unitInfo.damage))
+			if atkBonus > 0 then atkText = atkText .. "+" .. tostring(atkBonus) end
+			local defText = "방어 " .. tostring(math.floor(unitInfo.defense))
+			if defBonus > 0 then defText = defText .. "+" .. tostring(defBonus) end
+			if target:GetComponent("script.HeroUnitSkill") ~= nil then atkText = "공격 스킬 전용" end
+			self:SetText(self._statAtk, "atk", atkText)
+			self:SetText(self._statDef, "def", defText)
+			if unitInfo.AttackStyle == "melee" then
+				self:SetText(self._statRng, "rng", "사거리 근접")
+			else
+				self:SetText(self._statRng, "rng", "사거리 " .. tostring(math.floor(unitInfo.AttackRange)))
+			end
+		end
+		
+		-- 상태 줄 + 건설 진행 바
+		local status = ""
+		local buildProgress = -1
+		if unitInfo ~= nil and unitInfo.RoleKey == "Worker" then
+			---@type WorkerBuildState
+			local buildState = target:GetComponent("script.WorkerBuildState")
+			local bt = (buildState ~= nil) and buildState.BuildTarget or nil
+			local bsi = (bt ~= nil and isvalid(bt)) and bt.Structure_Info or nil
+			if bsi ~= nil and bsi.IsUnderConstruction and not bsi.IsDestroyed then
+				-- 테란식 건설(2026-10-07): 짓는 건물의 남은 시간을 그대로 보여 준다(건물 정보창과 같은 값).
+				-- 예전엔 일꾼을 선택한 순간부터 전체 건설 시간을 따로 세어, 도중에 선택하면 건물과 시간이 달랐다.
+				local remaining = bsi:RemainingBuildTime()
+				if buildState.IsRepairing then
+					status = "건설 중 · " .. tostring(math.ceil(remaining * 10) / 10) .. "s 남음"
+				else
+					status = "건설 중단 · 건물 곁으로 가면 이어 지음"
+				end
+				if bsi.BuildTime > 0 then buildProgress = 1 - remaining / bsi.BuildTime end
+			elseif buildState ~= nil and buildState.BuildingRuid ~= "" then
+				if buildState.BuildingRuid ~= self._lastBuildRuid or buildState.BuildTotalTime ~= self._lastBuildTotal then
+					self._lastBuildRuid = buildState.BuildingRuid
+					self._lastBuildTotal = buildState.BuildTotalTime
+					self._buildRemaining = buildState.BuildTotalTime
+				end
+				self._buildRemaining = self._buildRemaining - delta
+				if self._buildRemaining < 0 then self._buildRemaining = 0 end
+				status = "건설 중 · " .. tostring(math.ceil(self._buildRemaining * 10) / 10) .. "s 남음"
+				if self._lastBuildTotal > 0 then
+					buildProgress = 1 - self._buildRemaining / self._lastBuildTotal
+				end
+			else
+				self._lastBuildRuid = ""
+			end
+		end
+		if structInfo ~= nil and structInfo.IsUnderConstruction then
+			-- 남은 시간 = Structure_Info.RemainingBuildTime(완공 시각 기준, 테란식 건설이 멈춘 동안엔 멈출 때 저장한 값).
+			local remaining = structInfo:RemainingBuildTime()
+			status = "건설 중 · " .. tostring(math.ceil(remaining * 10) / 10) .. "s 남음"
+			if structInfo.ConstructionPaused then
+				status = "건설 중단 · 훈련로봇으로 우클릭해 이어 짓기 (" .. tostring(math.ceil(remaining)) .. "s 남음)"
+			end
+			if structInfo.BuildTime > 0 then
+				buildProgress = 1 - remaining / structInfo.BuildTime
+			end
+		end
+		if status == "" and unitInfo ~= nil then
+			---@type HeroUnit
+			local heroComp = target:GetComponent("script.HeroUnit")
+			if unitInfo.IsDead and heroComp ~= nil and heroComp.ReviveAt > 0 then
+				-- 서버가 부활 시각(ReviveAt, 서버 시계)을 동기화하므로 건물 건설 카운트다운과 같은 방식으로 남은 시간을 계산한다.
+				local remain = math.ceil(heroComp.ReviveAt - _UtilLogic.ServerElapsedSeconds)
+				if remain > 0 then
+					status = "부활까지 " .. tostring(remain) .. "초"
+				else
+					status = "부활 대기 · 본진 필요"
+				end
+			elseif unitInfo.IsDead then
+				status = "사망"
+			else
+				---@type UnitStateComponent
+				local state = target:GetComponent("script.UnitStateComponent")
+				if state ~= nil then status = self:StateLabel(state.CurrentState) end
+			end
+		end
+		-- 전직관: 교관·현재 전직 단계, 연구 중이면 남은 시간과 진행 바(내 전직관만 — 상대 것은 연구 상태를 감춘다).
+		---@type JobAdvanceAction
+		local job = target:GetComponent("script.JobAdvanceAction")
+		if job ~= nil and structInfo ~= nil and not structInfo.IsUnderConstruction then
+			local lp = _UserService.LocalPlayer
+			local mine = isvalid(lp) and isvalid(lp.PlayerComponent) and lp.PlayerComponent.UserId == structInfo.PlayerID
+			if mine then
+				status = job:StatusText()
+				buildProgress = job:ResearchProgress()
+			end
+		end
+		-- 업그레이드 건물: 현재 단계 / 연구 진행(내 건물만).
+		---@type StructureBuffAura
+		local upgrade = target:GetComponent("script.StructureBuffAura")
+		if upgrade ~= nil and structInfo ~= nil and not structInfo.IsUnderConstruction then
+			local lp = _UserService.LocalPlayer
+			if isvalid(lp) and isvalid(lp.PlayerComponent) and lp.PlayerComponent.UserId == structInfo.PlayerID then
+				status = upgrade:StatusText()
+				buildProgress = upgrade:ResearchProgress()
+			end
+		end
+		-- 힐러 에너지(2026-10-07, 스타 메딕식 — SpecialAbilityComponent).
+		if unitInfo ~= nil and not unitInfo.IsDead and unitInfo.MaxEnergy > 0 then
+			local e = "에너지 " .. tostring(math.floor(unitInfo.Energy)) .. " / " .. tostring(math.floor(unitInfo.MaxEnergy))
+			status = (status ~= "") and (status .. " · " .. e) or e
+		end
+		-- 기능 버튼이 없는 건물(연구소 같은 테크 건물 등)은 무슨 건물인지 상태 줄에 기능을 보여 준다(2026-10-07).
+		if status == "" and structInfo ~= nil and not structInfo.IsUnderConstruction and not structInfo.IsDestroyed then
+			status = self:StructureFunction(structInfo.StructureName)
+			if structInfo.IsDetector and string.find(status, "은신 탐지", 1, true) == nil then
+				status = (status ~= "") and (status .. " · 은신 탐지") or "은신 탐지"
+			end
+		end
+		local reserve = target:GetComponent("script.MesoStructure")
+		if reserve ~= nil then status = reserve:ReserveText() end
+		self:SetText(self._status, "status", status)
+		
+		
+		if buildProgress >= 0 then
+			self:SetEnable(self._buildBar, true)
+			self:SetFill(self._buildFill, buildProgress)
+		else
+			self:SetEnable(self._buildBar, false)
+		end
+	end
+
+	@EventSender("LocalPlayer")
+	handler HandleUnitUIChangeEvent(UnitUIChangeEvent event)
+		self.selectedTarget = event.SelectedUnitEntity
+		
+		if isvalid(self.selectedTarget) then
+			self.Entity.Enable = true
+			self.Entity.Visible = true
+			self._lastBuildRuid = ""
+			self._last = {}
+			self:CacheRefs()
+			self:Refresh(0)
+		else
+			self.Entity.Enable = false
+			self.Entity.Visible = false
+		end
+	end
+
+end

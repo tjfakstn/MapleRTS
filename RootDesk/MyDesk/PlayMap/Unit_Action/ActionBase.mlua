@@ -1,0 +1,8 @@
+@Component
+script ActionBase extends Component
+
+	method table ChangeActionUI()
+		return {}
+	end
+
+end

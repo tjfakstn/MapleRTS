@@ -1,0 +1,249 @@
+@Logic
+script UnitOverlayLogic extends Logic
+
+	@DisplayName("체력바 갱신 주기(초)")
+	property number TickInterval = 0.1
+
+	@DisplayName("피해 입은 대상은 선택 안 해도 체력바 표시")
+	property boolean ShowHpWhenDamaged = true
+
+	property Color RingMine = Color(0.35, 1.0, 0.35, 1.0)
+
+	property Color RingEnemy = Color(1.0, 0.3, 0.3, 1.0)
+
+	property Color RingNeutral = Color(1.0, 0.9, 0.3, 1.0)
+
+	@DisplayName("선택하지 않아도 유닛 발밑에 소유 링 표시")
+	property boolean ShowOwnerRing = true
+
+	@DisplayName("평소 소유 링 불투명도(선택하면 1)")
+	property number OwnerRingAlpha = 0.5
+
+	@DisplayName("플레이어 1 색")
+	property Color PlayerColor1 = Color(0.91, 0.27, 0.23, 1.0)
+
+	@DisplayName("플레이어 2 색")
+	property Color PlayerColor2 = Color(0.24, 0.49, 0.94, 1.0)
+
+	@DisplayName("플레이어 3 색")
+	property Color PlayerColor3 = Color(0.18, 0.77, 0.71, 1.0)
+
+	@DisplayName("플레이어 4 색")
+	property Color PlayerColor4 = Color(0.61, 0.35, 0.82, 1.0)
+
+	@DisplayName("유닛 체력바 항상 표시(색 = 주인 플레이어 색)")
+	property boolean ShowUnitHpAlways = true
+
+	property Color BarBack = Color(0.0, 0.0, 0.0, 0.75)
+
+	@DisplayName("건설 진행 바 색")
+	property Color BarBuild = Color(1.0, 0.82, 0.2, 1.0)
+
+	property Color BarHigh = Color(0.3, 0.95, 0.3, 1.0)
+
+	property Color BarMid = Color(1.0, 0.85, 0.2, 1.0)
+
+	property Color BarLow = Color(1.0, 0.25, 0.25, 1.0)
+
+	@HideFromInspector
+	property table _entries = {}
+
+	@HideFromInspector
+	property number _acc = 0
+
+	@ExecSpace("ClientOnly")
+	method void Register(Entity e)
+		-- 오버레이 자식(SelectRing/HpBarBg/HpBarFill)이 있는 엔티티를 관리 목록에 올린다.
+		-- 스폰 직후엔 자식이 아직 클라이언트에 안 붙었을 수 있어 0.5초 뒤 한 번 더 시도한다.
+		if not self:TryRegister(e) then
+			_TimerService:SetTimerOnce(function()
+				if isvalid(e) and not self:TryRegister(e) then
+				end
+			end, 0.5)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean TryRegister(Entity e)
+		-- 자식 3개를 찾아 등록하고 성공 여부를 돌려준다.
+		if not isvalid(e) then return false end
+		local ring = e:GetChildByName("SelectRing")
+		local bg = e:GetChildByName("HpBarBg")
+		local fill = e:GetChildByName("HpBarFill")
+		if not isvalid(ring) or not isvalid(bg) or not isvalid(fill) then return false end
+		
+		-- RUID는 UIResources 한곳에서 관리한다(모델에 박힌 값은 에디터 미리보기용 기본값).
+		local ringRuid = _UIResources:GetRuid("UnitSelectRing")
+		local barRuid = _UIResources:GetRuid("UnitHpBar")
+		if ringRuid ~= "" then ring.SpriteRendererComponent.SpriteRUID = ringRuid end
+		if barRuid ~= "" then
+			bg.SpriteRendererComponent.SpriteRUID = barRuid
+			fill.SpriteRendererComponent.SpriteRUID = barRuid
+		end
+		bg.SpriteRendererComponent.Color = self.BarBack
+		
+		local t = fill.TransformComponent
+		self._entries[e.Id] = {
+			e = e, ring = ring, bg = bg, fill = fill,
+			fullW = t.Scale.x, cx = t.Position.x, cy = t.Position.y, sz = t.Position.z,
+			lastRatio = -1,
+		}
+		return true
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshNow()
+		-- 선택이 바뀌었을 때 다음 프레임을 기다리지 않고 바로 갱신한다(SelectionLogic이 호출).
+		self:RefreshAll()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- TickInterval마다 등록된 대상 전체를 갱신한다.
+		self._acc += delta
+		if self._acc < self.TickInterval then return end
+		self._acc = 0
+		self:RefreshAll()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshAll()
+		-- 이번 갱신의 선택 집합을 만들고, 사라진 엔티티는 목록에서 뺀다.
+		local selected = {}
+		local drag = _SelectionLogic.Drag
+		if isvalid(drag) then
+			for _, u in pairs(drag.SelectedUnits) do
+				if isvalid(u) then selected[u.Entity.Id] = true end
+			end
+		end
+		local focus = _SelectionLogic.Focus
+		if isvalid(focus) then selected[focus.Id] = true end
+		
+		local lp = _UserService.LocalPlayer
+		local me = (isvalid(lp) and isvalid(lp.PlayerComponent)) and lp.PlayerComponent.UserId or ""
+		
+		self._T.colorCache = {}   -- 이번 갱신 동안 소유자별 색을 한 번만 찾는다(OwnerColor)
+		local dead = {}
+		for id, entry in pairs(self._entries) do
+			if not isvalid(entry.e) or not isvalid(entry.fill) then
+				table.insert(dead, id)
+			else
+				self:RefreshEntry(entry, selected[id] == true, me)
+			end
+		end
+		for _, id in ipairs(dead) do
+			self._entries[id] = nil
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshEntry(table entry, boolean isSelected, string me)
+		-- 한 대상의 링/체력바 표시 여부·색·채움 길이를 맞춘다.
+		local e = entry.e
+		local hp = 0
+		local maxHp = 0
+		local isDead = false
+		local owner = ""
+		local building = -1   -- 0~1이면 건설 중(지어진 비율)
+		local uinfo = e.Unit_Info
+		if uinfo ~= nil then
+			hp = uinfo.Hp
+			maxHp = uinfo.MaxHp
+			isDead = uinfo.IsDead
+			owner = uinfo.PlayerID
+		else
+			---@type Structure_Info
+			local sinfo = e:GetComponent("script.Structure_Info")
+			if sinfo ~= nil then
+				hp = sinfo.Hp
+				maxHp = sinfo.MaxHp
+				isDead = sinfo.IsDestroyed
+				owner = sinfo.PlayerID
+				-- 짓는 중인 건물은 체력바 대신 건설 진행 바(노랑, 길이 = 지어진 비율)를 항상 보여 준다(2026-10-07, 세 진영 공통).
+				-- 체력이 덜 찬 상태라 "다친 건물"로 보여 검은 막대처럼 보이던 문제 수정.
+				if sinfo.IsUnderConstruction and sinfo.BuildTime > 0 then
+					building = math.max(0, math.min(1, 1 - sinfo:RemainingBuildTime() / sinfo.BuildTime))
+				end
+			end
+		end
+		local mine = owner ~= "" and owner == me
+		
+		-- 은신 중인(반투명) 적 유닛은 체력바/링으로 위치가 드러나지 않게 숨긴다.
+		-- 영웅은 아바타로 그려지고 초상화용 스프라이트를 일부러 투명(알파 0, HeroUnitVisual)하게 둬서 예외 — 예전엔 이 검사에
+		-- 걸려 상대 영웅 체력바가 아예 안 보였다(2026-10-06 수정).
+		local hidden = false
+		local isHero = e:GetComponent("script.HeroUnit") ~= nil
+		if not mine and not isHero and e.SpriteRendererComponent ~= nil and e.SpriteRendererComponent.Color.a < 0.5 then
+			hidden = true
+		end
+		-- 내 시야 밖이라 VisionLogic이 본체를 숨긴 상대 엔티티는 오버레이도 켜지 않는다(스펙 §9-3: 본체·체력바·선택 링을 함께 끈다).
+		if not mine and not _VisionLogic:IsShownLocally(e) then
+			hidden = true
+		end
+		
+		-- 2026-10-07 피드백 "적군·아군 유닛 구분이 안 됨": 유닛은 선택하지 않아도 발밑에 옅은 소유 링을 보여 준다
+		-- (내 것 초록 / 상대 빨강 / 중립 노랑). 선택하면 지금처럼 진하게(불투명도 1). 건물은 예전처럼 선택했을 때만.
+		local ownerRing = self.ShowOwnerRing and uinfo ~= nil
+		local showRing = (isSelected or ownerRing) and not isDead and not hidden
+		local ringRenderer = entry.ring.SpriteRendererComponent
+		ringRenderer.Enable = showRing
+		local c = self:OwnerColor(owner, mine)
+		if showRing then
+			local a = isSelected and c.a or (c.a * self.OwnerRingAlpha)
+			local cur = ringRenderer.Color
+			if cur.r ~= c.r or cur.g ~= c.g or cur.b ~= c.b or math.abs(cur.a - a) > 0.001 then
+				ringRenderer.Color = Color(c.r, c.g, c.b, a)
+			end
+		end
+		
+		local damaged = maxHp > 0 and hp < maxHp
+		-- 에르다(아르다) 몬스터는 선택하지 않아도 현재 체력을 항상 보여 준다(사냥 대상 — 2026-10-06).
+		local alwaysHp = uinfo ~= nil and uinfo.RoleKey == "ArdaMonster"
+		-- 2번안: 유닛(영웅 포함)은 체력바를 항상 보여 준다(색 = 주인 플레이어 색, 길이 = 남은 체력). 건물은 예전처럼 다쳤거나 선택했을 때.
+		if self.ShowUnitHpAlways and uinfo ~= nil then alwaysHp = true end
+		local showHp = (not isDead) and (not hidden) and maxHp > 0 and (isSelected or alwaysHp or (self.ShowHpWhenDamaged and damaged))
+		if building >= 0 then showHp = (not isDead) and (not hidden) end
+		entry.bg.SpriteRendererComponent.Enable = showHp
+		local fillRenderer = entry.fill.SpriteRendererComponent
+		fillRenderer.Enable = showHp and (building >= 0 or hp > 0)
+		if not showHp then return end
+		
+		-- 체력바 색 = 주인 플레이어 색(체력 비율 색 대신), 건설 중이면 노랑. 색이 바뀌었을 때만 대입한다.
+		if building >= 0 then c = self.BarBuild end
+		local fc = fillRenderer.Color
+		if fc.r ~= c.r or fc.g ~= c.g or fc.b ~= c.b then fillRenderer.Color = Color(c.r, c.g, c.b, 1.0) end
+		
+		local ratio = math.max(0, math.min(1, hp / maxHp))
+		if building >= 0 then ratio = building end
+		if ratio == entry.lastRatio then return end
+		entry.lastRatio = ratio
+		
+		-- 왼쪽 끝을 고정한 채 폭만 줄인다(흰 사각형 스프라이트 pivot이 중앙이라 위치도 함께 옮김).
+		local w = entry.fullW * ratio
+		local t = entry.fill.TransformComponent
+		local s = t.Scale
+		t.Scale = Vector3(math.max(w, 0.0001), s.y, s.z)
+		t.Position = Vector3(entry.cx - entry.fullW / 2 + w / 2, entry.cy, entry.sz)
+	end
+
+	@ExecSpace("ClientOnly")
+	method Color OwnerColor(string owner, boolean mine)
+		-- 소유자 플레이어 고유 색(PlayerInfo.ColorIndex 1~4). 중립은 노랑, 색 번호가 없으면 내 것 초록 / 상대 빨강.
+		if owner == "" then return self.RingNeutral end
+		local cache = self._T.colorCache
+		local idx = (cache ~= nil) and cache[owner] or nil
+		if idx == nil then
+			---@type PlayerInfo
+			local pinfo = _JobAdvanceLogic:PlayerInfoOf(owner)
+			idx = (pinfo ~= nil) and pinfo.ColorIndex or 0
+			if cache ~= nil then cache[owner] = idx end
+		end
+		if idx == 1 then return self.PlayerColor1 end
+		if idx == 2 then return self.PlayerColor2 end
+		if idx == 3 then return self.PlayerColor3 end
+		if idx == 4 then return self.PlayerColor4 end
+		if mine then return self.RingMine end
+		return self.RingEnemy
+	end
+
+end

@@ -1,0 +1,182 @@
+@Component
+script ArdaMonsterSpawner extends Component
+
+	@DisplayName("스폰할 몬스터 모델(EntryKey)")
+	property string MonsterModelId = "model://aacd3ec2-0695-433c-842f-8b4b4ab0ac5f"
+
+	@DisplayName("동시에 유지할 몬스터 수")
+	property integer MaxCount = 10
+
+	@DisplayName("몬스터가 죽은 뒤 다시 스폰되기까지 걸리는 시간(초)")
+	property number RespawnDelay = 15
+
+	@DisplayName("몬스터 기본 데이터셋 이름")
+	property string DataSetName = "Arda_DataSet"
+
+	@DisplayName("TriggerComponent가 없을 때 쓰는 스폰 영역 크기")
+	property Vector2 FallbackAreaSize = Vector2(4, 3)
+
+	@HideFromInspector
+	property table _monsters = {}
+
+	@HideFromInspector
+	property table _data = {}
+
+	@HideFromInspector
+	property integer _pending = 0
+
+	@HideFromInspector
+	property any _timerId = nil
+
+	@ExecSpace("ServerOnly")
+	method void OnBeginPlay()
+		-- 인스턴스 룸에서는 table 프로퍼티 기본값({})이 nil로 올 수 있어 직접 초기화한다(table.insert 오류 방지).
+		self._monsters = {}
+		self._data = {}
+		self._pending = 0
+		self:LoadData()
+		for _ = 1, self.MaxCount do
+			self:SpawnOne()
+		end
+		self._timerId = _TimerService:SetTimerRepeat(function() self:CheckRespawn() end, 1)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnEndPlay()
+		if self._timerId ~= nil then
+			_TimerService:ClearTimer(self._timerId)
+			self._timerId = nil
+		end
+	end
+
+	method void LoadData()
+		-- Arda_DataSet 첫 행(HP/Attack/MoveSpeed/Cooltime)을 읽어 저장한다. 읽지 못하면 CSV 기본값과 같은 값을 쓴다.
+		local data = { HP = 300, Attack = 25, MoveSpeed = 3.5, Cooltime = 2 }
+		local temp = _DataService:GetTable(self.DataSetName)
+		if temp ~= nil and temp:GetRowCount() >= 1 then
+			data.HP = tonumber(temp:GetCell(1, "HP")) or data.HP
+			data.Attack = tonumber(temp:GetCell(1, "Attack")) or data.Attack
+			data.MoveSpeed = tonumber(temp:GetCell(1, "MoveSpeed")) or data.MoveSpeed
+			data.Cooltime = tonumber(temp:GetCell(1, "Cooltime")) or data.Cooltime
+		else
+		end
+		self._data = data
+	end
+
+	method table GetArea()
+		-- 스폰/배회 영역(월드 좌표): TriggerComponent 박스(BoxSize/ColliderOffset × Transform Scale). 없으면 FallbackAreaSize.
+		local tf = self.Entity.TransformComponent
+		local wp = tf.WorldPosition
+		local sx = math.abs(tf.Scale.x)
+		local sy = math.abs(tf.Scale.y)
+		local cx = wp.x
+		local cy = wp.y
+		local w = self.FallbackAreaSize.x
+		local h = self.FallbackAreaSize.y
+		
+		local trigger = self.Entity.TriggerComponent
+		if trigger ~= nil then
+			cx = cx + trigger.ColliderOffset.x * sx
+			cy = cy + trigger.ColliderOffset.y * sy
+			w = trigger.BoxSize.x * sx
+			h = trigger.BoxSize.y * sy
+		end
+		return { cx = cx, cy = cy, w = w, h = h }
+	end
+
+	method Vector2 RandomPoint()
+		-- 스폰 영역 안의 임의 월드 좌표.
+		local a = self:GetArea()
+		return Vector2(a.cx + (_UtilLogic:RandomDouble() - 0.5) * a.w, a.cy + (_UtilLogic:RandomDouble() - 0.5) * a.h)
+	end
+
+	method void SpawnOne()
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return end
+		
+		local p = self:RandomPoint()
+		-- SpawnByModelId의 pos는 parent(맵) 기준 로컬 좌표다. 맵 루트에 Transform이 없으면 (0,0,0) 기준.
+		local parentPos = Vector3(0, 0, 0)
+		if isvalid(map.TransformComponent) then
+			parentPos = map.TransformComponent.WorldPosition
+		end
+		local z = self.Entity.TransformComponent.WorldPosition.z
+		
+		local m = _SpawnService:SpawnByModelId(self.MonsterModelId, "Arda_Monster", Vector3(p.x - parentPos.x, p.y - parentPos.y, z - parentPos.z), map)
+		if m == nil then
+			return
+		end
+		self:ApplyData(m)
+		table.insert(self._monsters, m)
+	end
+
+	method void ApplyData(Entity m)
+		-- 데이터셋에서 읽은 기본 스탯(HP/공격력/이동속도/쿨타임)을 스폰한 몬스터에 저장한다. 중립 몬스터라 PlayerID는 비워 둔다.
+		local d = self._data
+		---@type Unit_Info
+		local info = m:GetComponent("script.Unit_Info")
+		if info ~= nil then
+			info.MaxHp = math.floor(d.HP)
+			info.Hp = math.floor(d.HP)
+			info.damage = d.Attack
+			info.MoveSpeed = d.MoveSpeed
+			info.RoleKey = "ArdaMonster"
+			info.PlayerID = ""
+		end
+		---@type ArdaMonster
+		local am = m:GetComponent("script.ArdaMonster")
+		if am ~= nil then
+			am.Cooltime = d.Cooltime
+			-- 몬스터는 이 영역 안에서만 배회한다.
+			local a = self:GetArea()
+			am:SetArea(Vector2(a.cx - a.w / 2, a.cy - a.h / 2), Vector2(a.cx + a.w / 2, a.cy + a.h / 2))
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method Entity GetNearestMonster(Vector2 pos)
+		-- 살아있는 몬스터 중 pos에서 가장 가까운 것(없으면 nil). ArdaHarvester가 공격 대상을 고를 때 쓴다.
+		local best = nil
+		local bestDist = math.huge
+		for _, m in ipairs(self._monsters) do
+			if isvalid(m) then
+				---@type Unit_Info
+				local info = m:GetComponent("script.Unit_Info")
+				if info ~= nil and not info.IsDead then
+					local p = m.TransformComponent.WorldPosition
+					local d = Vector2.Distance(pos, Vector2(p.x, p.y))
+					if d < bestDist then
+						best = m
+						bestDist = d
+					end
+				end
+			end
+		end
+		return best
+	end
+
+	method void CheckRespawn()
+		-- 1초마다 살아있는 몬스터 수를 세어, 부족한 만큼 RespawnDelay 뒤에 다시 스폰하도록 예약한다.
+		local alive = {}
+		for _, m in ipairs(self._monsters) do
+			if isvalid(m) then
+				---@type Unit_Info
+				local info = m:GetComponent("script.Unit_Info")
+				if info ~= nil and not info.IsDead then
+					table.insert(alive, m)
+				end
+			end
+		end
+		self._monsters = alive
+		
+		local missing = self.MaxCount - #alive - self._pending
+		for _ = 1, missing do
+			self._pending = self._pending + 1
+			_TimerService:SetTimerOnce(function()
+				self._pending = self._pending - 1
+				self:SpawnOne()
+			end, self.RespawnDelay)
+		end
+	end
+
+end

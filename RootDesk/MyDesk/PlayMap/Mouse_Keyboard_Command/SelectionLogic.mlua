@@ -1,0 +1,250 @@
+@Logic
+script SelectionLogic extends Logic
+
+	property DragComponent Drag = "9e94ae08-23e0-4218-8142-635a72a8112c"
+
+	property Entity Focus = nil
+
+	property table Groups = {}
+
+	@ExecSpace("ClientOnly")
+	method boolean IsInspectable(Entity entity)
+		if not isvalid(entity) then return false end
+		return entity:GetComponent("script.Unit_Info") ~= nil
+			or entity:GetComponent("script.Structure_Info") ~= nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method string LocalUserId()
+		-- 로컬 플레이어 UserId(없으면 빈 문자열).
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) or not isvalid(lp.PlayerComponent) then return "" end
+		return lp.PlayerComponent.UserId
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean IsMyAliveUnit(Entity e)
+		-- 내 소유의 살아있는, 이동 가능한 유닛인지(드래그 선택 대상 조건과 동일).
+		if not isvalid(e) or e.UnitMoveComponent == nil then return false end
+		local info = e.Unit_Info
+		if info == nil then return false end
+		if info.IsDead then
+			-- 부활 대기 중인 영웅(HeroUnit.ReviveAt > 0)은 선택을 유지해 커맨드카드에 카운트다운이 보이게 한다.
+			-- 사망 유닛 명령은 서버가 거부하므로 선택만 남는다.
+			---@type HeroUnit
+			local hero = e:GetComponent("script.HeroUnit")
+			if hero == nil or hero.ReviveAt <= 0 then return false end
+		end
+		return info.PlayerID ~= "" and info.PlayerID == self:LocalUserId()
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean IsMyAliveStructure(Entity e)
+		-- 내 소유의 파괴되지 않은 건물인지.
+		if not isvalid(e) then return false end
+		---@type Structure_Info
+		local s = e:GetComponent("script.Structure_Info")
+		if s == nil or s.IsDestroyed then return false end
+		return s.PlayerID ~= "" and s.PlayerID == self:LocalUserId()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void CancelTargeting()
+		-- 새 단축키 명령 전에 이전 위치 지정 및 힐/채집 대상 지정 대기를 취소한다.
+		_GatherTargetLogic:EndTargeting()
+		_HealTargetLogic:EndTargeting()
+		_CommandCardLogic:ClearPending()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ClearUnitList()
+		-- 이전 선택의 체크 표시를 지우고 SelectedUnits를 비운다(DragComponent의 기존 처리와 동일).
+		if not isvalid(self.Drag) then return end
+		for _, v in pairs(self.Drag.SelectedUnits) do
+			if isvalid(v) then
+				v.IsCheck = false
+			end
+		end
+		table.clear(self.Drag.SelectedUnits)
+	end
+
+	@ExecSpace("ClientOnly")
+	method Entity PickFocus(table units)
+		-- 여러 유닛 중 대표를 고른다: 영웅 > 전투 유닛 > 일꾼 순. (일꾼 카드에는 A 공격이 없어서,
+		-- 섞인 선택에서 일꾼이 대표가 되면 A 단축키가 먹지 않는 문제를 피한다.)
+		for _, u in ipairs(units) do
+			if isvalid(u) and u.Entity:GetComponent("script.HeroUnitSkill") ~= nil then
+				return u.Entity
+			end
+		end
+		for _, u in ipairs(units) do
+			if isvalid(u) then
+				local info = u.Entity.Unit_Info
+				if info ~= nil and info.RoleKey ~= "Worker" then
+					return u.Entity
+				end
+			end
+		end
+		if units[1] ~= nil and isvalid(units[1]) then
+			return units[1].Entity
+		end
+		return nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SelectUnits(table units)
+		-- units(UnitMoveComponent 목록)를 새 선택으로 만든다. 비어 있으면 선택 해제.
+		self:ClearUnitList()
+		for _, u in ipairs(units) do
+			if isvalid(u) then
+				table.insert(self.Drag.SelectedUnits, u)
+			end
+		end
+		self.Focus = self:PickFocus(units)
+		if #units > 0 and isvalid(self.Focus) then
+			_SoundResources:PlayUnitCry(self.Focus)
+		end
+		self:RefreshInfo()
+		_CommandCardLogic:Rebuild()
+		_UnitOverlayLogic:RefreshNow()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SelectSingle(Entity target)
+		-- 좌클릭 단일 선택. 내 유닛이면 명령 대상까지 선택, 그 밖(내 건물/적/중립)은 정보만 보여준다.
+		-- 내 시야 밖이라 VisionLogic이 숨긴 상대 엔티티는 선택할 수 없다(Mouse_Command.PickEntityAt가 먼저 걸러 주지만,
+		-- 부대 지정/다른 경로로 들어오는 경우를 위해 여기서도 빈 선택으로 바꾼다). 내 것은 항상 보이므로 영향 없음.
+		if isvalid(target) and not _VisionLogic:IsShownLocally(target) then
+			target = nil
+		end
+		if self:IsMyAliveUnit(target) then
+			self:SelectUnits({ target.UnitMoveComponent })
+			return
+		end
+		self:ClearUnitList()
+		self.Focus = isvalid(target) and target or nil
+		if isvalid(self.Focus) then
+			-- 상대·중립 유닛을 눌러도 울음을 낸다(건물은 UnitStateComponent가 없어 무음).
+			_SoundResources:PlayUnitCry(self.Focus)
+		end
+		self:RefreshInfo()
+		_CommandCardLogic:Rebuild()
+		_UnitOverlayLogic:RefreshNow()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ClearSelection()
+		-- 선택 전체 해제(빈 땅 좌클릭 등).
+		self:SelectSingle(nil)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshInfo()
+		-- 하단 중앙 정보 패널 갱신. 2기 이상이면 기존 다중 선택 아이콘(SelectedUnits), 1기/단일 대상이면
+		-- 초상화+스탯(UnitSprite / UnitInfoText), 아무것도 없으면 모두 숨긴다. 이벤트 형식은 기존 UnitUIChangeEvent 그대로.
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) then return end
+		local evt = UnitUIChangeEvent()
+		local count = isvalid(self.Drag) and #self.Drag.SelectedUnits or 0
+		if count >= 2 then
+			evt.TargetUIName = "SelectedUnits"
+			for idx = 1, count do
+				local u = self.Drag.SelectedUnits[idx]
+				if isvalid(u) and u.Entity.SpriteRendererComponent ~= nil then
+					table.insert(evt.SelectedUnitTable, u.Entity.SpriteRendererComponent.SpriteRUID)
+					table.insert(evt.SelectedEntities, u.Entity)
+				end
+			end
+		elseif isvalid(self.Focus) then
+			evt.TargetUIName = "UnitSprite"
+			if self.Focus.SpriteRendererComponent ~= nil then
+				table.insert(evt.SelectedUnitTable, self.Focus.SpriteRendererComponent.SpriteRUID)
+			end
+			evt.SelectedUnitEntity = self.Focus
+		else
+			evt:UIClear()
+		end
+		lp:SendEvent(evt)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void AssignGroup(integer n)
+		-- Ctrl+n: 지금 선택을 컨트롤 그룹 n에 저장한다. 유닛이 없으면 단일 선택한 내 건물을 저장한다.
+		local list = {}
+		if isvalid(self.Drag) then
+			for _, u in pairs(self.Drag.SelectedUnits) do
+				if isvalid(u) then table.insert(list, u.Entity) end
+			end
+		end
+		if #list == 0 and self:IsMyAliveStructure(self.Focus) then
+			table.insert(list, self.Focus)
+		end
+		if #list == 0 then
+			_UIToast_:ShowMessage("부대로 지정할 내 유닛/건물을 먼저 선택하세요")
+			return
+		end
+		self.Groups[n] = list
+		_UIToast_:ShowMessage("부대 " .. tostring(n) .. " 지정 (" .. tostring(#list) .. ")")
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RecallGroup(integer n)
+		-- n: 컨트롤 그룹 n을 다시 선택한다. 죽거나 사라진 대상은 빼고, 남은 게 없으면 무시한다.
+		local saved = self.Groups[n]
+		if saved == nil then return end
+		local units = {}
+		local alive = {}
+		local structure = nil
+		for _, e in ipairs(saved) do
+			if self:IsMyAliveUnit(e) then
+				table.insert(units, e.UnitMoveComponent)
+				table.insert(alive, e)
+			elseif self:IsMyAliveStructure(e) then
+				structure = e
+				table.insert(alive, e)
+			end
+		end
+		self.Groups[n] = alive
+		if #units > 0 then
+			self:SelectUnits(units)
+		elseif structure ~= nil then
+			self:SelectSingle(structure)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method string UnitTypeKey(Entity e)
+		-- Tab 순환용 유닛 종류 키: 영웅은 "HERO", 나머지는 Unit_Info.UnitModelKey.
+		if e:GetComponent("script.HeroUnitSkill") ~= nil then return "HERO" end
+		local info = e.Unit_Info
+		if info == nil then return "" end
+		return info.UnitModelKey
+	end
+
+	@ExecSpace("ClientOnly")
+	method void CycleFocus()
+		-- Tab: 여러 종류가 섞인 선택에서 대표 유닛 종류를 다음 종류로 바꾼다(커맨드카드가 그 종류 기준으로 바뀜).
+		if not isvalid(self.Drag) or #self.Drag.SelectedUnits < 2 then return end
+		local order = {}
+		local firstOf = {}
+		for _, u in pairs(self.Drag.SelectedUnits) do
+			if isvalid(u) then
+				local k = self:UnitTypeKey(u.Entity)
+				if firstOf[k] == nil then
+					firstOf[k] = u.Entity
+					table.insert(order, k)
+				end
+			end
+		end
+		if #order < 2 then return end
+		local cur = isvalid(self.Focus) and self:UnitTypeKey(self.Focus) or ""
+		local nextIdx = 1
+		for i, k in ipairs(order) do
+			if k == cur then nextIdx = (i % #order) + 1 end
+		end
+		self.Focus = firstOf[order[nextIdx]]
+		_CommandCardLogic:Rebuild()
+		_UnitOverlayLogic:RefreshNow()
+	end
+
+end

@@ -1,0 +1,75 @@
+@Logic
+script UnitCommandData extends Logic
+
+	property table ProductionKeys = { "Z", "X", "C", "V", "B", "N", "D", "F", "G" }
+
+	method table GetUnitData(string modelKey)
+		-- modelKey("model://uuid" 또는 "uuid")에 해당하는 유닛 단축키 데이터를 돌려준다. 없으면 nil.
+		if modelKey == nil or modelKey == "" then return nil end
+		local key = (string.gsub(modelKey, "^model://", ""))
+		if self._T.units == nil then
+			self._T.units = self:BuildUnitTable()
+		end
+		return self._T.units[string.lower(key)]
+	end
+
+	method table BuildUnitTable()
+		-- 시트에서 자동 생성한 52종 표. Abilities의 Key가 "L"(치유)인 능력만 기존 힐 기능(Heal)과 연결되고,
+		-- 나머지 고유 능력은 아직 게임 로직이 없어 커맨드카드에서 잠금 표시된다(CommandCardLogic 참고).
+		return {
+			["6f90d763-48f8-40e9-ae0d-e2eceed2e27a"] = { Name = "스포아", Faction = "Adv", Role = "일꾼", Worker = true, ReturnLabel = "자원 반환", Abilities = {  } },
+			["7c96cd25-f857-4b7c-90d0-524081b69cb7"] = { Name = "주황버섯", Faction = "Adv", Role = "근접 기본병", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["df0ea036-28a9-4ac4-95fc-8c1036dad19b"] = { Name = "초록버섯", Faction = "Adv", Role = "근접 물량병", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["5789e3a6-b751-4dda-a18f-f6fa981ef88c"] = { Name = "뿔버섯", Faction = "Adv", Role = "원거리 기본", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["fdd566d9-5c67-47d3-b370-7d3486c72a29"] = { Name = "파란버섯", Faction = "Adv", Role = "원거리 힐러", Worker = false, ReturnLabel = "", Abilities = { { Key = "L", Name = "치유", Desc = "아군 대상 치유 지정", Icon = "AbHeal" } } },
+			["13604413-7217-43cf-a18f-f8707a262755"] = { Name = "버섯 샹들리에", Faction = "Adv", Role = "근거리 광역", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["cdf51f75-2a8f-40ba-856e-82e1a52cabc2"] = { Name = "갑옷 버섯", Faction = "Adv", Role = "근접 탱커", Worker = false, ReturnLabel = "", Abilities = { { Key = "D", Name = "도발", Desc = "적 어그로 집중", Icon = "AbTaunt" } } },
+			["2ec68573-04f9-41a1-b44d-9c21a5fbc63d"] = { Name = "와일드 보어", Faction = "Adv", Role = "돌격 기본", Worker = false, ReturnLabel = "", Abilities = { { Key = "C", Name = "돌진", Desc = "전방 돌진 강타", Icon = "AbCharge" } } },
+			["7cc8b114-9a0f-4e05-853a-12b170dac381"] = { Name = "아이언 호그", Faction = "Adv", Role = "정예 돌격", Worker = false, ReturnLabel = "", Abilities = { { Key = "C", Name = "돌진", Desc = "중장갑 돌파 강타", Icon = "AbCharge" } } },
+			["0e69b1af-f693-44a5-9e9e-682037a7cd01"] = { Name = "아이언 보어", Faction = "Adv", Role = "정예 방어", Worker = false, ReturnLabel = "", Abilities = { { Key = "D", Name = "방어", Desc = "방어 자세", Icon = "AbDefense" } } },
+			["5d8fa555-2231-4053-8aec-a4900073720e"] = { Name = "파이어 보어", Faction = "Adv", Role = "화염 돌격", Worker = false, ReturnLabel = "", Abilities = { { Key = "C", Name = "돌진", Desc = "화염 돌진", Icon = "AbCharge" } } },
+			["8bf48368-fc22-46dd-81cd-54fdc1eb6338"] = { Name = "페어리", Faction = "Adv", Role = "원거리 마법", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["3c8daabf-dafe-4ab7-b52a-8e7b86e53f89"] = { Name = "로얄 페어리", Faction = "Adv", Role = "원거리 지원", Worker = false, ReturnLabel = "", Abilities = { { Key = "U", Name = "오라", Desc = "아군 공격력 버프 On/Off", Icon = "AbAuraAttack" } } },
+			["0eadd282-0304-448f-a642-f1da23f8019a"] = { Name = "이블아이", Faction = "Adv", Role = "원거리 독", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "투척", Desc = "독 즉발 투척", Icon = "AbThrowPoison" } } },
+			["98fa5ee9-7f71-4663-a527-885f9ba77682"] = { Name = "콜드아이", Faction = "Adv", Role = "원거리 냉기", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "투척", Desc = "냉기 즉발 투척", Icon = "AbThrowIce" } } },
+			["22ec18a9-f875-42d1-82c0-05d18cc69707"] = { Name = "커즈아이", Faction = "Adv", Role = "원거리 저주", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "투척", Desc = "저주 즉발 투척", Icon = "AbThrowCurse" } } },
+			["69c99465-e47c-481d-ac35-1ea4c1cdb937"] = { Name = "서전아이", Faction = "Adv", Role = "정예 상태이상", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "투척", Desc = "복합 상태이상 투척", Icon = "AbThrowMixed" } } },
+			["3347e77b-cd13-4449-b8a2-73f79dae29c8"] = { Name = "주니어 레이스", Faction = "Adv", Role = "공중 기본", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["36591e1f-44af-4a14-b7dd-022d3ef5f8c0"] = { Name = "스티치", Faction = "Adv", Role = "공중 기동", Worker = false, ReturnLabel = "", Abilities = { { Key = "C", Name = "돌진", Desc = "가속 돌진", Icon = "AbCharge" } } },
+			["70609a37-5341-48d7-99f3-be5f254e4720"] = { Name = "레이스", Faction = "Adv", Role = "공중 상위", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "강타", Desc = "유령 즉발 강타", Icon = "AbStrikeDark" } } },
+			["8661fd62-54fc-469e-8898-ce79b72ae2c6"] = { Name = "셰이드", Faction = "Adv", Role = "공중 은신", Worker = false, ReturnLabel = "", Abilities = { { Key = "K", Name = "은신", Desc = "Cloak은 워크래프트에 쓰여 K로 대체, On/Off", Icon = "AbStealth" } } },
+			["c9d23b6f-6c91-4288-b67b-aa711591957d"] = { Name = "티노", Faction = "Cyg", Role = "일꾼", Worker = true, ReturnLabel = "마력 반환", Abilities = {  } },
+			["41e17daa-b409-4a52-8d4a-32c2fdca39aa"] = { Name = "정식기사E", Faction = "Cyg", Role = "지상 근접", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["9f80e95b-01b6-43e8-bd33-1c56c060789b"] = { Name = "정식기사C", Faction = "Cyg", Role = "지상 근접", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["35ec46db-ae06-4eac-aeef-d92bbc6a29bc"] = { Name = "정식기사D", Faction = "Cyg", Role = "지상&공중 원거리", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["968ab3a9-8219-4b86-9006-a6733ead9b03"] = { Name = "정식기사B", Faction = "Cyg", Role = "지상&공중 원거리", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["a5dbc8a0-8759-4054-ac3b-844d00d4c96b"] = { Name = "정식기사A", Faction = "Cyg", Role = "지상 근접(은신)", Worker = false, ReturnLabel = "", Abilities = { { Key = "K", Name = "은신", Desc = "On/Off", Icon = "AbStealth" } } },
+			["fa4f259b-ba68-43fb-a578-63783cf5fe22"] = { Name = "상급기사E", Faction = "Cyg", Role = "정예 근접", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "강타", Desc = "광역 검격 즉발", Icon = "AbStrikePhysical" } } },
+			["f48cd2a2-0c2c-4c68-91ef-115174138a7f"] = { Name = "상급기사C", Faction = "Cyg", Role = "정예 근접", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "강타", Desc = "넉백 강타 즉발", Icon = "AbStrikePhysical" } } },
+			["cc5e4416-a545-49ca-8410-a3410164fbf9"] = { Name = "상급기사D", Faction = "Cyg", Role = "정예 원거리", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "사격", Desc = "관통 사격 즉발", Icon = "AbStrikePhysical" } } },
+			["1adbc508-a4d9-4a5d-a57f-21a71017dac4"] = { Name = "상급기사B", Faction = "Cyg", Role = "정예 원거리", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "폭발", Desc = "광역 마법 폭발 즉발", Icon = "AbBlastFire" } } },
+			["18da8345-6744-49c2-a3ea-fdcd95034e02"] = { Name = "상급기사A", Faction = "Cyg", Role = "정예 은신", Worker = false, ReturnLabel = "", Abilities = { { Key = "K", Name = "은신", Desc = "On/Off", Icon = "AbStealth" }, { Key = "I", Name = "강타", Desc = "백어택 강타", Icon = "AbStrikePhysical" } } },
+			["f452953d-0dde-4c70-ba29-161671090f31"] = { Name = "에인션트 골렘", Faction = "Cyg", Role = "대형 탱커", Worker = false, ReturnLabel = "", Abilities = { { Key = "D", Name = "방어막", Desc = "방어막 전개 오라", Icon = "AbBarrier" } } },
+			["c88cf424-abe4-4124-9353-1eb42eaa1f15"] = { Name = "에인션트 다크골렘", Faction = "Cyg", Role = "대형 근접", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "강타", Desc = "방어무시 강타 즉발", Icon = "AbStrikePhysical" } } },
+			["05d28f23-6378-4495-849d-a21d910e2f61"] = { Name = "에인션트 믹스골렘", Faction = "Cyg", Role = "대형 광역", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "폭발", Desc = "속성 광역 폭발 즉발", Icon = "AbBlastFire" } } },
+			["c6660784-8468-4dc7-be04-cb7dcf7ba60b"] = { Name = "소울", Faction = "Cyg", Role = "공중 소형", Worker = false, ReturnLabel = "", Abilities = { { Key = "U", Name = "오라", Desc = "아군 시야 공유", Icon = "AbAuraVision" } } },
+			["333aa212-2d27-49bf-ac71-cc09ec91c911"] = { Name = "플레임", Faction = "Cyg", Role = "공중 소형", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "폭발", Desc = "화상 폭발 즉발", Icon = "AbBlastFire" } } },
+			["784376f8-2d55-4a4b-b2b1-1f0fb0c50272"] = { Name = "스톰", Faction = "Cyg", Role = "공중 소형", Worker = false, ReturnLabel = "", Abilities = { { Key = "C", Name = "돌진", Desc = "가속 돌진", Icon = "AbCharge" } } },
+			["39fbec61-5557-4c37-8840-b4e4b2bd1853"] = { Name = "다크니스", Faction = "Cyg", Role = "공중 소형", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "감소", Desc = "적 시야 감소 즉발", Icon = "AbStrikeDark" } } },
+			["9d3ed966-aaf8-4f71-a0cd-20aaf3aaa130"] = { Name = "라이트닝", Faction = "Cyg", Role = "공중 소형", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "전격", Desc = "연쇄 전격 즉발", Icon = "AbStrikeLightning" } } },
+			["8b403ef2-79b7-4324-abf2-09eb033f07df"] = { Name = "이프리트", Faction = "Cyg", Role = "공중 대형", Worker = false, ReturnLabel = "", Abilities = { { Key = "N", Name = "폭격", Desc = "화염 광역 폭격 즉발", Icon = "AbBombard" } } },
+			["745a950a-9e05-41b6-ad92-280ffbb07546"] = { Name = "훈련로봇A", Faction = "Ede", Role = "일꾼", Worker = true, ReturnLabel = "메소 반환", Abilities = { { Key = "F", Name = "수리", Desc = "아군 건물/기계 수리", Icon = "CmdRepair" } } },
+			["cb008318-2d53-4f73-8fe5-2136d83a3b33"] = { Name = "AF형 안드로이드", Faction = "Ede", Role = "원거리 기본", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["da4b3143-e74b-4679-a9f4-679b0cbbd942"] = { Name = "물도둑", Faction = "Ede", Role = "원거리 힐러", Worker = false, ReturnLabel = "", Abilities = { { Key = "L", Name = "치유", Desc = "아군 대상 치유 지정", Icon = "AbHeal" } } },
+			["a0496f39-c3fb-49a9-9f99-ac0705eacc57"] = { Name = "고장난 DF형 안드로이드", Faction = "Ede", Role = "근거리 광역", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["a461fafe-d785-4aed-869b-4cdb866bfecf"] = { Name = "카트베어", Faction = "Ede", Role = "기동 견제", Worker = false, ReturnLabel = "", Abilities = { { Key = "C", Name = "돌진", Desc = "전방 돌진", Icon = "AbCharge" }, { Key = "I", Name = "지뢰", Desc = "지뢰 설치", Icon = "AbMine" } } },
+			["d52b4c12-fcc4-4b3d-8340-f11e63dcf247"] = { Name = "경비로봇", Faction = "Ede", Role = "지상&공중 대응", Worker = false, ReturnLabel = "", Abilities = {  } },
+			["9a4f2b89-3ac1-4003-a2f3-3ed4c2c0367c"] = { Name = "추적자 안드로이드 레드", Faction = "Ede", Role = "은신 저격", Worker = false, ReturnLabel = "", Abilities = { { Key = "K", Name = "은신", Desc = "On/Off", Icon = "AbStealth" } } },
+			["0a73bbfa-555d-4fe4-9296-87c29e5e287b"] = { Name = "방어시스템", Faction = "Ede", Role = "공성 포격", Worker = false, ReturnLabel = "", Abilities = { { Key = "O", Name = "시즈모드", Desc = "배치모드 On/Off", Icon = "AbSiege" } } },
+			["836bb772-3854-43ce-aab3-170d722b86b1"] = { Name = "게오르크", Faction = "Ede", Role = "최종 병기", Worker = false, ReturnLabel = "", Abilities = { { Key = "I", Name = "포격", Desc = "광역 포격 즉발", Icon = "AbBombard" } } },
+			["901bebc6-7395-4a8d-8ae0-e455addf80fc"] = { Name = "순찰로봇", Faction = "Ede", Role = "수송선", Worker = false, ReturnLabel = "", Abilities = { { Key = "L", Name = "탑승", Desc = "유닛 탑승/하차", Icon = "AbMount" } } },
+			["23fc16d0-4517-49c4-9d5f-5f2cd09dcc4d"] = { Name = "훈련로봇0", Faction = "Ede", Role = "공중 전투기", Worker = false, ReturnLabel = "", Abilities = {  } },
+		}
+	end
+
+end

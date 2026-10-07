@@ -1,0 +1,238 @@
+@Logic
+script GameSettingsLogic extends Logic
+
+	property Entity panel = "9ff36edc-e438-47b0-b57f-792d94c688f0"
+
+	property Entity confirmBox = "024f9518-508b-421f-b72a-d80e6d63c73a"
+
+	property ButtonComponent btnOpen = "d8cff28b-411b-4dae-92d1-3f0a7488cc29"
+
+	property ButtonComponent btnClose = "af32c7f4-b043-4b17-9579-33020a63c32c"
+
+	property ButtonComponent btnSurrender = "f54a7f18-94e0-45c1-90ca-dc08424f81a5"
+
+	property ButtonComponent btnSurrenderYes = "8fa4ed62-5fd7-4581-a7e6-1cf096b7303d"
+
+	property ButtonComponent btnSurrenderNo = "b8346ad5-3fed-46b6-834e-3a6d45a8ed8c"
+
+	property SliderComponent sldBgm = "7aa444ac-04fa-49a5-b14c-4155b63ff91d"
+
+	property SliderComponent sldUnit = "c363f862-2681-48b9-b4a3-480294e567c1"
+
+	property SliderComponent sldHero = "6f9395f9-4230-4b5a-a21f-612a4e1fd8a8"
+
+	property SliderComponent sldMouse = "29da2cfa-0efe-4212-8e8d-a9ac16578547"
+
+	property TextGUIRendererComponent txtBgm = "9001ca00-74e8-4ec4-bd6f-c6caf66603e3"
+
+	property TextGUIRendererComponent txtUnit = "9ceae87e-e18a-452b-bdbe-81279fd000b5"
+
+	property TextGUIRendererComponent txtHero = "b300fb81-b52b-4a52-8be7-f9694c3414c5"
+
+	property TextGUIRendererComponent txtMouse = "61ccf04a-a0c2-4064-ac91-61c6386dcdcc"
+
+	@DisplayName("배경음 배율(0~1)")
+	property number BgmMult = 1
+
+	@DisplayName("유닛 소리 배율(0~1)")
+	property number UnitMult = 1
+
+	@DisplayName("영웅 소리 배율(0~1)")
+	property number HeroMult = 1
+
+	@DisplayName("마우스 감도 = 화면 가장자리 스크롤 속도(월드 단위/초, 0=끔)")
+	property number EdgeScrollSpeed = 12
+
+	@DisplayName("마우스 감도 슬라이더 최대값")
+	property number EdgeScrollMax = 30
+
+	@DisplayName("가장자리 판정 폭(px)")
+	property number EdgeMargin = 6
+
+	@DisplayName("화면 끝 스크롤 구석 영역(화면 비율) — 이 안이면 대각선")
+	property number EdgeCornerRatio = 0.12
+
+	property string PlayMapName = "map02"
+
+	@HideFromInspector
+	property table _handlers = {}
+
+	@HideFromInspector
+	property any _hKey = nil
+
+	@HideFromInspector
+	property boolean _surrendered = false
+
+	@HideFromInspector
+	property integer _sceneVersion = -1
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		self._handlers = {}
+		self:Bind(self.btnOpen, function() self:TogglePanel() end)
+		self:Bind(self.btnClose, function() self:SetPanel(false) end)
+		self:Bind(self.btnSurrender, function() self:OnSurrender() end)
+		self:Bind(self.btnSurrenderYes, function() self:OnSurrenderYes() end)
+		self:Bind(self.btnSurrenderNo, function() self:SetConfirm(false) end)
+		self:BindSlider(self.sldBgm, "bgm", self.BgmMult)
+		self:BindSlider(self.sldUnit, "unit", self.UnitMult)
+		self:BindSlider(self.sldHero, "hero", self.HeroMult)
+		if isvalid(self.sldMouse) then self.sldMouse.MaxValue = self.EdgeScrollMax end
+		self:BindSlider(self.sldMouse, "mouse", self.EdgeScrollSpeed)
+		self._hKey = _InputService:ConnectEvent(KeyDownEvent, function(e) self:OnKey(e) end)
+		self:SetPanel(false)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		for _, rec in ipairs(self._handlers) do
+			if isvalid(rec.entity) then rec.entity:DisconnectEvent(rec.evt, rec.hid) end
+		end
+		self._handlers = {}
+		if self._hKey ~= nil then _InputService:DisconnectEvent(KeyDownEvent, self._hKey) end
+		self._hKey = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		-- 로비 복귀/재경기(맵 전환)마다 항복 상태를 풀고 창을 닫는다.
+		if _SceneController.SceneVersion ~= self._sceneVersion then
+			self._sceneVersion = _SceneController.SceneVersion
+			self._surrendered = false
+			self:SetPanel(false)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Bind(ButtonComponent btn, any fn)
+		if not isvalid(btn) then return end
+		local h = btn.Entity:ConnectEvent(ButtonClickEvent, fn)
+		table.insert(self._handlers, { entity = btn.Entity, evt = ButtonClickEvent, hid = h })
+	end
+
+	@ExecSpace("ClientOnly")
+	method void BindSlider(SliderComponent sld, string kind, number initial)
+		if not isvalid(sld) then return end
+		sld.Value = initial
+		self:ApplyValue(kind, initial)
+		local h = sld.Entity:ConnectEvent(SliderValueChangedEvent, function(e) self:ApplyValue(kind, e.Value) end)
+		table.insert(self._handlers, { entity = sld.Entity, evt = SliderValueChangedEvent, hid = h })
+	end
+
+	@ExecSpace("ClientOnly")
+	method string Percent(number v)
+		return tostring(math.floor(v * 100 + 0.5)) .. "%"
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ApplyValue(string kind, number v)
+		-- 슬라이더 값을 설정에 반영하고 옆 숫자를 갱신한다. 배경음은 재생 중인 BGM에 바로 적용.
+		if kind == "bgm" then
+			self.BgmMult = v
+			_SoundService:SetBGMVolume(_SoundResources.BgmVolume * v)
+			if isvalid(self.txtBgm) then self.txtBgm.Text = self:Percent(v) end
+		elseif kind == "unit" then
+			self.UnitMult = v
+			if isvalid(self.txtUnit) then self.txtUnit.Text = self:Percent(v) end
+		elseif kind == "hero" then
+			self.HeroMult = v
+			if isvalid(self.txtHero) then self.txtHero.Text = self:Percent(v) end
+		elseif kind == "mouse" then
+			self.EdgeScrollSpeed = v
+			if isvalid(self.txtMouse) then
+				self.txtMouse.Text = (v < 0.5) and "끔" or tostring(math.floor(v + 0.5))
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean IsOpen()
+		return isvalid(self.panel) and self.panel.Enable
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetPanel(boolean on)
+		if isvalid(self.panel) then self.panel.Enable = on end
+		self:SetConfirm(false)
+		if on then  end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void TogglePanel()
+		self:SetPanel(not self:IsOpen())
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetConfirm(boolean on)
+		if isvalid(self.confirmBox) then self.confirmBox.Enable = on end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnKey(KeyDownEvent e)
+		if e.key == KeyboardKey.F10 then
+			self:TogglePanel()
+		elseif e.key == KeyboardKey.Escape and self:IsOpen() then
+			self:SetPanel(false)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean InGame()
+		local lp = _UserService.LocalPlayer
+		return isvalid(lp) and isvalid(lp.CurrentMap) and lp.CurrentMap.Name == self.PlayMapName
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSurrender()
+		if not self:InGame() then
+			_UIToast_:ShowMessage("항복은 경기 중에만 할 수 있습니다")
+			return
+		end
+		if self._surrendered then
+			_UIToast_:ShowMessage("이미 항복했습니다")
+			return
+		end
+		self:SetConfirm(true)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSurrenderYes()
+		self:SetPanel(false)
+		if not self:InGame() or self._surrendered then return end
+		self._surrendered = true
+		_LobbyController:RequestSurrender()
+	end
+
+	@ExecSpace("ClientOnly")
+	method Vector2 GetEdgeScrollDirection()
+		-- 창 밖에서는 마지막 가장자리 방향을 유지하고, 화면 안으로 돌아오면 현재 위치로 갱신한다.
+		if not self:InGame() or self.EdgeScrollSpeed < 0.5 or self:IsOpen() then
+			self._T.lastEdgeDirection = nil
+			return Vector2(0, 0)
+		end
+		local w = _UILogic.ScreenWidth
+		local h = _UILogic.ScreenHeight
+		if w == nil or h == nil or w <= 0 or h <= 0 then return Vector2(0, 0) end
+		local p = _InputService:GetCursorPosition()
+		local outside = p.x < 0 or p.y < 0 or p.x > w or p.y > h
+		local last = self._T.lastEdgeDirection
+		if outside and last ~= nil and (last.x ~= 0 or last.y ~= 0) then return last end
+		local m = self.EdgeMargin
+		local dx, dy = 0, 0
+		if p.x <= m then dx = -1 elseif p.x >= w - 1 - m then dx = 1 end
+		if p.y <= m then dy = -1 elseif p.y >= h - 1 - m then dy = 1 end
+		-- 구석 영역(2026-10-07 "왼쪽으로 옮기다 위·아래로 가면 대각선이 안 됨"): 한쪽 끝에 붙어 있을 때 다른 축으로
+		-- 화면의 EdgeCornerRatio(12 %) 안이면 스타2처럼 대각선으로 움직인다.
+		local cr = self.EdgeCornerRatio
+		if dx ~= 0 and dy == 0 then
+			if p.y <= h * cr then dy = -1 elseif p.y >= h * (1 - cr) then dy = 1 end
+		elseif dy ~= 0 and dx == 0 then
+			if p.x <= w * cr then dx = -1 elseif p.x >= w * (1 - cr) then dx = 1 end
+		end
+		local dir = Vector2(dx, dy)
+		if dx ~= 0 or dy ~= 0 then dir = dir:Normalize() end
+		self._T.lastEdgeDirection = dir
+		return dir
+	end
+
+end

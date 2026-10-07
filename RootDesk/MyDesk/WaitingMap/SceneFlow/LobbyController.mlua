@@ -1,0 +1,1204 @@
+@Logic
+script LobbyController extends Logic
+
+	property ButtonComponent btnAdv = "0a51d998-2c35-48f9-90f3-bd0a2260f08c"
+
+	property ButtonComponent btnCyg = "30d97e9b-dac6-4c89-8fba-7700a135e96d"
+
+	property ButtonComponent btnEde = "719aaf22-17b3-4190-a0c5-3aa6f10a060e"
+
+	property TextGUIRendererComponent selectedLabel = "4edaa8cb-8724-4b5b-b988-672fa56ae8f0"
+
+	property TextGUIRendererComponent statusLabel = "9fa3216a-8b26-4653-8b91-b2d94879a086"
+
+	property TextGUIRendererComponent countdownLabel = "1e0bf02c-778a-4597-b9c8-5e1e0d4b862f"
+
+	property Entity jobPanel = "60489859-c4de-4001-979d-6edbc3fd662b"
+
+	property TextGUIRendererComponent jobTitleLabel = "bc857d23-1935-4322-9af9-815f77822637"
+
+	property ButtonComponent btnJob1 = "dfeffeea-a2c1-4314-b952-af7b87cf0357"
+
+	property ButtonComponent btnJob2 = "a515c5cd-690d-469e-a442-2e1fbe7bb5a2"
+
+	property ButtonComponent btnJob3 = "8c4e7a65-eada-4197-b688-411fac6ea765"
+
+	property ButtonComponent btnJob4 = "279a5ffd-be33-4cb3-9388-ad931b0a9277"
+
+	property ButtonComponent btnJob5 = "f01662e5-374d-4d28-8a17-b7a81c911bdc"
+
+	property Entity jobHint = "f4520157-c7ae-4821-9ae9-080503c6033b"
+
+	property TextGUIRendererComponent playersTitle = "9c0e4a48-808b-40a6-aed9-a130f3bb3513"
+
+	property Entity row1 = "df79399c-57c3-47e4-bdfa-3eac7ac8a5da"
+
+	property Entity row2 = "fd9fc79d-a599-4364-8a1b-ef21228cc850"
+
+	property Entity row3 = "1c467794-f37c-4654-8119-2d84c32ed48a"
+
+	property Entity row4 = "8b20ef3f-d02e-4bb2-9054-0c4be35cfd5d"
+
+	property ButtonComponent btnReady = "ab7742e5-b328-40c9-bf77-94cc8dfd2151"
+
+	@DisplayName("로비로 나가기 버튼(대기실)")
+	property ButtonComponent btnLeaveRoom = "6b4d8c93-a250-4f83-b239-a9fdf7e7f2c0"
+
+	@HideFromInspector
+	property any hLeaveRoom = nil
+
+	@DisplayName("로비 맵 이름(정적 맵, 경기 후 복귀 위치)")
+	property string LobbyStaticMapName = "lobby"
+
+	@HideFromInspector
+	property any hReady = nil
+
+	@DisplayName("참가자 패널 슬롯 수(표시용 상한)")
+	property integer MaxPlayers = 4
+
+	@HideFromInspector
+	property number rosterTimer = 0
+
+	@HideFromInspector
+	property integer lastCountdownSec = -1
+
+	@HideFromInspector
+	property table jobHandlers = {}
+
+	@HideFromInspector
+	property string localCamp = ""
+
+	@HideFromInspector
+	property string localHeroId = ""
+
+	property string LobbyMapName = "map01"
+
+	property string GameMapName = "map02"
+
+	property integer MinPlayers = 1
+
+	property number CountdownSeconds = 3
+
+	property Vector3 GameSpawnPos = Vector3(3.58, -1.54, 0)
+
+	property Vector3 GameSpawnPos1 = Vector3(3.58, -1.54, 0)
+
+	property Vector3 GameSpawnPos2 = Vector3(-14, -1.54, 0)
+
+	property Vector3 GameSpawnPos3 = Vector3(3.58, 16, 0)
+
+	property Vector3 GameSpawnPos4 = Vector3(-14, 16, 0)
+
+	property Vector3 HqSpawnPos1 = Vector3(1.2, 2.2, 0)
+
+	property Vector3 HqSpawnPos2 = Vector3(-16.4, 2.2, 0)
+
+	property Vector3 HqSpawnPos3 = Vector3(1.2, 19.7, 0)
+
+	property Vector3 HqSpawnPos4 = Vector3(-16.4, 19.7, 0)
+
+	property string HqSpawnGroupName = "SpawnHQ"
+
+	property Vector3 PlayerSpawnOffsetFromHq = Vector3(0, -2.5, 0)
+
+	property string HeroUnitModelId = "model://dba1d209-d8aa-4ecb-ade2-ec92858e4de1"
+
+	property integer StartWorkerCount = 4
+
+	property number StartWorkerSpacing = 0.9
+
+	property boolean counting = false
+
+	property number countdownRemain = 0
+
+	property number evalTimer = 0
+
+	property any hAdv = nil
+
+	property any hCyg = nil
+
+	property any hEde = nil
+
+	@DisplayName("경기 진행 중(서버가 세팅, 클라로 동기화)")
+	property boolean gameStarted = false
+
+	@DisplayName("시작 메소")
+	property integer StartMeso = 50
+
+	@DisplayName("시작 에르다")
+	property integer StartErda = 0
+
+	@DisplayName("경기 종료 후 로비 복귀 대기 시간(초)")
+	property number ResultDelaySeconds = 5
+
+	@DisplayName("승패 판정 주기(초)")
+	property number WinCheckInterval = 1
+
+	@DisplayName("경기 시작 직후 '전원 이탈' 판정을 유예하는 시간(초)")
+	property number LeaveGraceSeconds = 5
+
+	@DisplayName("로비 복귀 위치(map01 SpawnLocation = 원점)")
+	property Vector3 LobbySpawnPos = Vector3(0, 0, 0)
+
+	@HideFromInspector
+	property table participants = {}
+
+	@HideFromInspector
+	property integer eliminatedCount = 0
+
+	@HideFromInspector
+	property boolean endingMatch = false
+
+	@HideFromInspector
+	property number winCheckTimer = 0
+
+	@HideFromInspector
+	property number matchElapsed = 0
+
+	method void OnBeginPlay()
+		-- 클라: 진영 버튼 이벤트 연결. 서버 상태는 OnUpdate 폴링으로 관리.
+		if self:IsClient() then
+			self.hAdv = self.btnAdv.Entity:ConnectEvent(ButtonClickEvent, function() self:OnPickCamp("Adv") end)
+			self.hCyg = self.btnCyg.Entity:ConnectEvent(ButtonClickEvent, function() self:OnPickCamp("Cyg") end)
+			self.hEde = self.btnEde.Entity:ConnectEvent(ButtonClickEvent, function() self:OnPickCamp("Ede") end)
+			if isvalid(self.btnReady) then
+				self.hReady = self.btnReady.Entity:ConnectEvent(ButtonClickEvent, function() self:OnToggleReady() end)
+			end
+			if isvalid(self.btnLeaveRoom) then
+				self.hLeaveRoom = self.btnLeaveRoom.Entity:ConnectEvent(ButtonClickEvent, function() self:RequestLeaveToLobby() end)
+			end
+			self.jobHandlers = {}
+			local buttons = self:GetJobButtons()
+			for i, btn in ipairs(buttons) do
+				local slot = i
+				if isvalid(btn) then
+					local h = btn.Entity:ConnectEvent(ButtonClickEvent, function() self:OnPickJob(slot) end)
+					table.insert(self.jobHandlers, { entity = btn.Entity, eventHandler = h })
+				end
+			end
+			if isvalid(self.jobPanel) then
+				self.jobPanel.Enable = false
+			end
+			if isvalid(self.jobHint) then
+				self.jobHint.Enable = true
+			end
+			self:ApplySelectionVisuals()
+			self:RefreshRoster()
+		end
+	end
+
+	method table GetJobButtons()
+		-- 직업 버튼 5개(슬롯 순서).
+		return { self.btnJob1, self.btnJob2, self.btnJob3, self.btnJob4, self.btnJob5 }
+	end
+
+	method table GetCampJobs(string campKey)
+		-- 진영 키 → 그 진영 계열 5직업 { id, name }. id는 Hero 패키지 HeroSkillComponent:GetHeroCatalog()의 id와 동일하다
+		-- (패키지 HeroSwitchUI의 계열 그룹 정의: 모험가 / 시그너스 / 레지스탕스=에델슈타인).
+		if campKey == "Adv" then
+			return {
+				{ id = "dark_knight", name = "다크나이트" }, { id = "bishop", name = "비숍" }, { id = "bowmaster", name = "보우마스터" },
+				{ id = "night_lord", name = "나이트로드" }, { id = "captain", name = "캡틴" },
+			}
+		end
+		if campKey == "Cyg" then
+			return {
+				{ id = "soul_master", name = "소울마스터" }, { id = "flame_wizard", name = "플레임위자드" }, { id = "night_walker", name = "나이트워커" },
+				{ id = "striker", name = "스트라이커" }, { id = "wind_breaker", name = "윈드브레이커" },
+			}
+		end
+		if campKey == "Ede" then
+			return {
+				{ id = "mechanic", name = "메카닉" }, { id = "wild_hunter", name = "와일드헌터" }, { id = "battle_mage", name = "배틀메이지" },
+				{ id = "xenon", name = "제논" }, { id = "blaster", name = "블래스터" },
+			}
+		end
+		return {}
+	end
+
+	method string HeroDisplayName(string campKey, string heroId)
+		-- 직업 id를 화면 표시용 이름으로 변환한다(진영 계열 밖이면 "-").
+		for _, job in ipairs(self:GetCampJobs(campKey)) do
+			if job.id == heroId then return job.name end
+		end
+		return "-"
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshSelectedLabel()
+		-- "내 선택: 진영 / 직업" 라벨을 로컬 선택 상태로 갱신한다.
+		if not isvalid(self.selectedLabel) then return end
+		if self.localCamp == "" then
+			self.selectedLabel.Text = "내 선택: 진영을 골라 주세요"
+			return
+		end
+		local jobName = (self.localHeroId ~= "") and self:HeroDisplayName(self.localCamp, self.localHeroId) or "직업 미선택"
+		self.selectedLabel.Text = "내 선택: " .. self:CampDisplayName(self.localCamp) .. " / " .. jobName
+	end
+
+	method Color CampColor(string campKey)
+		-- 진영별 강조색(대기실 카드 글로우·강조띠·칩 공용). FactionTheme의 인게임 테마와는 별개로, 서로 구분만 되면 되는 색이다.
+		-- .ui 빌드 스크립트의 CAMP[*].color와 같은 값이어야 한다.
+		if campKey == "Adv" then return Color(0.310, 0.761, 0.431, 1.0) end  -- 모험가: 세계수 초록 #4FC26E
+		if campKey == "Cyg" then return Color(0.361, 0.659, 0.941, 1.0) end  -- 시그너스: 에레브 파랑 #5CA8F0
+		if campKey == "Ede" then return Color(0.941, 0.584, 0.290, 1.0) end  -- 에델슈타인: 기계 주황 #F0954A
+		return Color(0.16, 0.20, 0.30, 1.0)                                  -- 미선택/기본: 어두운 남색
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetChildEnable(Entity parent, string childName, boolean on)
+		if not isvalid(parent) then return end
+		local c = parent:GetChildByName(childName)
+		if isvalid(c) then c.Enable = on end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetChildColor(Entity parent, string childName, Color color)
+		if not isvalid(parent) then return end
+		local c = parent:GetChildByName(childName)
+		if not isvalid(c) then return end
+		local s = c.SpriteGUIRendererComponent
+		if s ~= nil then s.Color = color end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetCardSelected(ButtonComponent btn, boolean selected, Color accent)
+		-- 카드 선택 표시(.ui v3 구조: 카드 버튼 스프라이트 = 테두리, 자식 Fill = 안쪽 면).
+		-- 선택되면 테두리를 진영색으로, 카드 뒤 글로우(형제 "<이름>_Glow")를 반투명 진영색으로 켜고 "선택됨" 칩을 보인다.
+		-- 글로우는 반드시 반투명이어야 한다(불투명으로 칠하면 카드 둘레가 두꺼운 색 띠로 보인다).
+		if not isvalid(btn) then return end
+		local card = btn.Entity
+		self:SetChildEnable(card.Parent, card.Name .. "_Glow", selected)
+		self:SetChildColor(card.Parent, card.Name .. "_Glow", Color(accent.r, accent.g, accent.b, 0.28))
+		local frame = card.SpriteGUIRendererComponent
+		if frame ~= nil then
+			frame.Color = selected and accent or Color(0.200, 0.251, 0.369, 1.0)   -- 미선택 테두리 #33405E
+		end
+		self:SetChildEnable(card, "Check", selected)
+		self:SetChildColor(card, "Check", accent)
+		self:SetChildColor(card, "Accent", accent)
+	end
+
+	method string CampSubtitle(string campKey)
+		-- 진영 카드 아래 한 줄 설명(건물스펙 시트의 "대응" 열 기준).
+		if campKey == "Adv" then return "물량 · 빠른 확장" end
+		if campKey == "Cyg" then return "정예 · 높은 내구" end
+		if campKey == "Ede" then return "기계 · 정석 테크" end
+		return ""
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ApplySelectionVisuals()
+		-- 진영 카드 3개와 직업 카드 5개의 선택 상태를 글로우/선택됨 칩으로 표시한다.
+		-- 진영 카드의 강조띠는 항상 자기 진영색, 직업 카드의 강조띠는 현재 고른 진영색.
+		self:SetCardSelected(self.btnAdv, self.localCamp == "Adv", self:CampColor("Adv"))
+		self:SetCardSelected(self.btnCyg, self.localCamp == "Cyg", self:CampColor("Cyg"))
+		self:SetCardSelected(self.btnEde, self.localCamp == "Ede", self:CampColor("Ede"))
+		local picked = self:CampColor(self.localCamp)
+		local jobs = self:GetCampJobs(self.localCamp)
+		for i, btn in ipairs(self:GetJobButtons()) do
+			local job = jobs[i]
+			local on = job ~= nil and job.id == self.localHeroId
+			self:SetCardSelected(btn, on, picked)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnPickCamp(string campKey)
+		-- 로컬 표시를 즉시 갱신하고 서버에 진영 선택을 요청한다. 진영이 바뀌면 직업 선택은 초기화되고,
+		-- 직업 패널에 그 진영 계열 5직업을 채워 보여준다.
+		if self.localCamp ~= campKey then
+			self.localHeroId = ""
+		end
+		self.localCamp = campKey
+		self:ShowJobPanel(campKey)
+		self:RefreshSelectedLabel()
+		self:RequestSelectCamp(campKey)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ShowJobPanel(string campKey)
+		-- 직업 패널을 켜고 버튼 텍스트를 그 진영 계열 직업 이름으로 채운다(현재 선택 직업은 표시).
+		if not isvalid(self.jobPanel) then return end
+		local jobs = self:GetCampJobs(campKey)
+		self.jobPanel.Enable = #jobs > 0
+		if isvalid(self.jobHint) then
+			self.jobHint.Enable = #jobs == 0
+		end
+		if isvalid(self.jobTitleLabel) then
+			self.jobTitleLabel.Text = "2. 직업 선택 — " .. self:CampDisplayName(campKey)
+		end
+		for i, btn in ipairs(self:GetJobButtons()) do
+			if isvalid(btn) then
+				local job = jobs[i]
+				btn.Entity.Enable = job ~= nil
+				-- 카드 이름은 자식 "Label" 텍스트에 쓴다(버튼 자체 텍스트는 비워 둠).
+				local label = btn.Entity:GetChildByName("Label")
+				if job ~= nil and isvalid(label) and label.TextGUIRendererComponent ~= nil then
+					label.TextGUIRendererComponent.Text = job.name
+				end
+				-- 카드 그림 = 그 직업의 실제 메이플 전직 교관(stand 애니메이션, JobAdvanceLogic.Instructor — 전직관 초상 칸과 같은 표).
+				self:SetJobPortrait(btn.Entity, job ~= nil and job.id or "")
+			end
+		end
+		self:ApplySelectionVisuals()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetJobPortrait(Entity card, string heroId)
+		-- 직업 카드의 자식 "Portrait"에 교관 NPC 애니메이션을 넣는다. 교관을 모르면 숨긴다.
+		if not isvalid(card) then return end
+		local portrait = card:GetChildByName("Portrait")
+		if not isvalid(portrait) or portrait.SpriteGUIRendererComponent == nil then return end
+		local ins = (heroId ~= "") and _JobAdvanceLogic:Instructor(heroId) or nil
+		if ins == nil then
+			portrait.Enable = false
+			return
+		end
+		portrait.SpriteGUIRendererComponent.ImageRUID = DataRef(ins.stand)
+		portrait.Enable = true
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetRowText(Entity row, string childName, string text)
+		-- 참가자 행(row)의 자식 텍스트를 갱신한다. 자식이 없으면 조용히 건너뛴다.
+		if not isvalid(row) then return end
+		local child = row:GetChildByName(childName)
+		if not isvalid(child) then return end
+		local t = child.TextGUIRendererComponent
+		if t ~= nil then t.Text = text end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetRowChip(Entity row, string childName, string text, Color color)
+		-- 참가자 행의 칩(배경 스프라이트 + 텍스트) 색과 글자를 함께 바꾼다.
+		if not isvalid(row) then return end
+		local child = row:GetChildByName(childName)
+		if not isvalid(child) then return end
+		local t = child.TextGUIRendererComponent
+		if t ~= nil then t.Text = text end
+		local s = child.SpriteGUIRendererComponent
+		if s ~= nil then s.Color = color end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshRoster()
+		-- 참가자 패널 갱신. PlayerInfo.SelectedCamp / SelectedHeroId는 @Sync라 모든 클라이언트가 다른 플레이어 값도
+		-- 받으므로 서버 RPC 없이 로컬에서 읽어 그린다. 내 행을 맨 위에 두고 나머지는 닉네임순.
+		local rows = { self.row1, self.row2, self.row3, self.row4 }
+		local lp = _UserService.LocalPlayer
+		local myId = (isvalid(lp) and isvalid(lp.PlayerComponent)) and lp.PlayerComponent.UserId or ""
+		
+		local list = {}
+		local users = _UserService:GetUsersByMapName(self.LobbyMapName)
+		if users ~= nil then
+			for _, p in ipairs(users) do
+				if isvalid(p) and isvalid(p.PlayerComponent) then
+					---@type PlayerInfo
+					local info = p:GetComponent("script.PlayerInfo")
+					if info ~= nil then
+						local nick = p.PlayerComponent.Nickname
+						if nick == nil or nick == "" then nick = p.PlayerComponent.UserId end
+						table.insert(list, {
+							isMe = (p.PlayerComponent.UserId == myId),
+							name = nick,
+							camp = info.SelectedCamp,
+							hero = info.SelectedHeroId,
+							ready = info.IsReady,
+						})
+					end
+				end
+			end
+		end
+		table.sort(list, function(a, b)
+			if a.isMe ~= b.isMe then return a.isMe end
+			return a.name < b.name
+		end)
+		
+		local readyCount = 0
+		for i, row in ipairs(rows) do
+			local e = list[i]
+			if not isvalid(row) then
+				-- 바인딩이 비어 있으면 건너뛴다.
+			elseif e == nil then
+				row.Enable = true
+				self:SetRowText(row, "Name", "빈 자리")
+				self:SetRowText(row, "Job", "입장 대기 중")
+				self:SetRowChip(row, "Camp", "-", self:CampColor(""))
+				self:SetRowChip(row, "Ready", "", Color(0, 0, 0, 0))
+				self:SetChildColor(row, "Stripe", self:CampColor(""))
+			else
+				local picked = e.camp ~= "" and e.hero ~= ""
+				local ready = picked and e.ready
+				if ready then readyCount += 1 end
+				row.Enable = true
+				self:SetRowText(row, "Name", e.isMe and (e.name .. " (나)") or e.name)
+				local jobText = (e.hero ~= "") and self:HeroDisplayName(e.camp, e.hero) or ((e.camp ~= "") and "직업 고르는 중" or "진영 고르는 중")
+				self:SetRowText(row, "Job", jobText)
+				self:SetRowChip(row, "Camp", (e.camp ~= "") and self:CampDisplayName(e.camp) or "미선택", self:CampColor(e.camp))
+				self:SetChildColor(row, "Stripe", self:CampColor(e.camp))
+				if ready then
+					self:SetRowChip(row, "Ready", "준비 완료", Color(0.95, 0.76, 0.18, 1.0))
+				elseif picked then
+					self:SetRowChip(row, "Ready", "선택 완료", Color(0.24, 0.33, 0.50, 1.0))
+				else
+					self:SetRowChip(row, "Ready", "선택 중", Color(0.35, 0.38, 0.45, 1.0))
+				end
+			end
+		end
+		
+		if isvalid(self.playersTitle) then
+			self.playersTitle.Text = "참가자 " .. tostring(#list) .. " / " .. tostring(self.MaxPlayers) .. "  (준비 " .. tostring(readyCount) .. ")"
+		end
+		self:RefreshReadyButton()
+	end
+
+	@ExecSpace("ClientOnly")
+	method PlayerInfo LocalInfo()
+		-- 로컬 플레이어의 PlayerInfo(없으면 nil).
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) then return nil end
+		---@type PlayerInfo
+		local info = lp:GetComponent("script.PlayerInfo")
+		return info
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RefreshReadyButton()
+		-- 준비 버튼 3상태: 선택 전(회색 "직업을 고르세요") / 누를 수 있음(금색 "준비 완료") / 준비됨(초록 "준비 취소").
+		-- 판단은 서버가 동기화한 PlayerInfo 값으로 한다(로컬 클릭 직후 0.5초 안에 반영).
+		if not isvalid(self.btnReady) then return end
+		local info = self:LocalInfo()
+		local picked = info ~= nil and info.SelectedCamp ~= "" and info.SelectedHeroId ~= ""
+		local ready = picked and info.IsReady
+		local e = self.btnReady.Entity
+		local s = e.SpriteGUIRendererComponent
+		local t = e.TextGUIRendererComponent
+		if ready then
+			if s ~= nil then s.Color = Color(0.310, 0.761, 0.431, 1.0) end
+			if t ~= nil then t.Text = "준비 취소" end
+		elseif picked then
+			if s ~= nil then s.Color = Color(1.0, 0.824, 0.247, 1.0) end
+			if t ~= nil then t.Text = "준비 완료" end
+		else
+			if s ~= nil then s.Color = Color(0.243, 0.282, 0.365, 1.0) end
+			if t ~= nil then t.Text = "직업을 고르세요" end
+		end
+		if t ~= nil then
+			t.FontColor = picked and Color(0.063, 0.078, 0.110, 1.0) or Color(0.62, 0.66, 0.74, 1.0)
+		end
+		if ready and isvalid(self.selectedLabel) then
+			self.selectedLabel.Text = "준비 완료 — 다른 플레이어를 기다리는 중"
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnToggleReady()
+		-- 준비 버튼 클릭: 진영·직업을 다 고른 경우에만 서버에 준비/취소를 요청한다.
+		local info = self:LocalInfo()
+		if info == nil then return end
+		if info.SelectedCamp == "" or info.SelectedHeroId == "" then
+			_UIToast_:ShowMessage("진영과 직업을 먼저 고르세요")
+			return
+		end
+		self:RequestSetReady(not info.IsReady)
+	end
+
+	@ExecSpace("Server")
+	method void RequestSetReady(boolean ready)
+		-- 요청자의 준비 상태를 바꾼다. 진영·직업을 다 고르지 않았으면 준비를 거부한다(취소는 항상 허용).
+		local player = _UserService:GetUserEntityByUserId(senderUserId)
+		if not isvalid(player) then return end
+		---@type PlayerInfo
+		local info = player:GetComponent("script.PlayerInfo")
+		if info == nil then return end
+		if ready and (info.SelectedCamp == "" or info.SelectedHeroId == "") then
+			return
+		end
+		info.IsReady = ready
+		self:EvaluateStart()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnPickJob(integer slot)
+		-- 직업 버튼 클릭: 로컬 표시를 갱신하고 서버에 직업 선택을 요청한다.
+		local job = self:GetCampJobs(self.localCamp)[slot]
+		if job == nil then return end
+		self.localHeroId = job.id
+		self:ShowJobPanel(self.localCamp)
+		self:RefreshSelectedLabel()
+		self:RequestSelectHero(job.id)
+	end
+
+	@ExecSpace("Server")
+	method void RequestSelectHero(string heroId)
+		-- 요청자의 진영 계열에 속한 직업만 PlayerInfo.SelectedHeroId에 저장한다(진영 미선택/계열 밖 직업은 거부).
+		local player = _UserService:GetUserEntityByUserId(senderUserId)
+		if not isvalid(player) then return end
+		---@type PlayerInfo
+		local info = player:GetComponent("script.PlayerInfo")
+		if info == nil then return end
+		if self:HeroDisplayName(info.SelectedCamp, heroId) == "-" then
+			return
+		end
+		if info.SelectedHeroId ~= heroId then
+			info.IsReady = false   -- 선택을 바꾸면 준비 완료를 풀고 다시 누르게 한다
+		end
+		info.SelectedHeroId = heroId
+		self:EvaluateStart()
+	end
+
+	method string CampDisplayName(string campKey)
+		-- 진영 키를 화면 표시용 이름으로 변환한다.
+		if campKey == "Adv" then return "모험가" end
+		if campKey == "Cyg" then return "시그너스" end
+		if campKey == "Ede" then return "에델슈타인" end
+		return "-"
+	end
+
+	@ExecSpace("Server")
+	method void RequestSelectCamp(string campKey)
+		-- 요청자를 senderUserId로 식별해 해당 플레이어의 PlayerInfo에 진영을 반영한다.
+		if campKey ~= "Adv" and campKey ~= "Cyg" and campKey ~= "Ede" then
+			return
+		end
+		
+		local player = _UserService:GetUserEntityByUserId(senderUserId)
+		if not isvalid(player) then
+			return
+		end
+		
+		---@type PlayerInfo
+		local info = player:GetComponent("script.PlayerInfo")
+		if info == nil then
+			return
+		end
+		
+		-- 진영이 바뀌면 이전 진영 계열의 직업 선택은 무효이므로 초기화한다(다시 골라야 준비 완료).
+		if info.SelectedCamp ~= campKey then
+			info.SelectedHeroId = ""
+			info.IsReady = false
+		end
+		info.SelectedCamp = campKey
+		info:SetUnitData()
+		self:EvaluateStart()
+	end
+
+	method void OnUpdate(number delta)
+		-- 서버: 0.5초마다 대기 인원/준비 상태를 재평가하고, 카운트다운을 진행한다.
+		-- 클라: 0.5초마다 참가자 패널을 다시 그린다(@Sync 값 폴링).
+		-- 경기 진행(대기실 평가·카운트다운·승패)은 게임 방(인스턴스 룸) 안에서만 한다. 로비(정적 룸)의 이 Logic은 쉰다
+		-- (Logic은 룸마다 따로 존재 — Docs/Room-Lobby-20261005.md).
+		if self:IsServer() and _RoomService:IsInstanceRoom() then
+			self.evalTimer += delta
+			if self.evalTimer >= 0.5 then
+				self.evalTimer = 0
+				self:EvaluateStart()
+			end
+		
+			if self.counting then
+				self.countdownRemain -= delta
+				local sec = math.ceil(math.max(self.countdownRemain, 0))
+				-- 초 단위가 바뀔 때만 Multicast한다(매 프레임 RPC 방지).
+				if sec ~= self.lastCountdownSec then
+					self.lastCountdownSec = sec
+					self:BroadcastCountdownText(tostring(sec) .. "초 후 게임을 시작합니다")
+				end
+				if self.countdownRemain <= 0 then
+					self.counting = false
+					self.lastCountdownSec = -1
+					self:StartGame()
+				end
+			else
+				self.lastCountdownSec = -1
+			end
+		
+			-- 경기 중: WinCheckInterval마다 참가자 본진 생존 여부를 확인해 승패를 판정한다(결과 표시 대기 중에는 멈춤).
+			if self.gameStarted and not self.endingMatch then
+				self.matchElapsed += delta
+				self.winCheckTimer += delta
+				if self.winCheckTimer >= self.WinCheckInterval then
+					self.winCheckTimer = 0
+					self:CheckWinCondition()
+				end
+			end
+		end
+		
+		if self:IsClient() then
+			self.rosterTimer += delta
+			if self.rosterTimer >= 0.5 then
+				self.rosterTimer = 0
+				self:RefreshRoster()
+			end
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EvaluateStart()
+		-- 로비 맵의 전원이 진영을 골랐고 최소 인원을 넘으면 카운트다운을 시작한다.
+		local waiting = _UserService:GetUsersByMapName(self.LobbyMapName)
+		local total = 0
+		local ready = 0
+		
+		if waiting ~= nil then
+			for _, p in ipairs(waiting) do
+				if isvalid(p) then
+					---@type PlayerInfo
+					local info = p:GetComponent("script.PlayerInfo")
+					if info ~= nil then
+						total = total + 1
+						-- 진영과 직업을 고르고 "준비 완료" 버튼까지 누른 플레이어만 준비로 센다.
+						if info.IsReady and info.SelectedCamp ~= "" and info.SelectedHeroId ~= "" then
+							ready = ready + 1
+						end
+					end
+				end
+			end
+		end
+		
+		self:BroadcastStatus(total, ready)
+		
+		-- 경기 진행 중에는 새 카운트다운을 절대 시작하지 않는다(늦게 들어온 1명이 혼자 2차 StartGame을 일으키던 버그 — 리뷰 0-7).
+		-- 대기실에 있는 사람(경기 중 입장한 사람)에게는 안내 문구만 보여 준다.
+		if self.gameStarted then
+			if self.counting then
+			end
+			self.counting = false
+			self.countdownRemain = 0
+			self:BroadcastCountdownText("경기가 진행 중입니다. 종료 후 참가할 수 있습니다")
+			return
+		end
+		
+		if total >= self.MinPlayers and ready == total and ready > 0 then
+			-- 시작 조건 충족: 카운트다운은 OnUpdate가 진행 + 라벨 갱신
+			if not self.counting then
+				self.counting = true
+				self.countdownRemain = self.CountdownSeconds
+			end
+		else
+			-- 아직 시작 못 함: 왜 못 하는지 안내 문구를 띄운다
+			if self.counting then
+			end
+			self.counting = false
+			self.countdownRemain = 0
+		
+			local sec = tostring(math.floor(self.CountdownSeconds))
+			local hint = ""
+			if total < self.MinPlayers then
+				hint = "플레이어가 " .. tostring(self.MinPlayers) .. "명 이상 모이면 " .. sec .. "초 후 게임이 시작됩니다"
+			elseif ready < total then
+				hint = "모든 플레이어가 준비 완료를 누르면 " .. sec .. "초 후 게임이 시작됩니다"
+			end
+			self:BroadcastCountdownText(hint)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method table GetHqSpawnPoints()
+		-- 게임 맵의 HqSpawnGroupName 그룹 자식들의 월드 위치 목록(본진 후보 지점). 없으면 빈 테이블.
+		local points = {}
+		local group = _EntityService:GetEntityByPath("/maps/" .. self.GameMapName .. "/" .. self.HqSpawnGroupName)
+		if not isvalid(group) then
+			return points
+		end
+		-- 이미 본진(HQ_*)이 서 있는 지점(1 유닛 이내)은 후보에서 뺀다(방어적 — 이전 경기 잔존물이 남아 있을 때 겹쳐 스폰하지 않게).
+		local occupied = {}
+		local map = _EntityService:GetEntityByPath("/maps/" .. self.GameMapName)
+		if isvalid(map) then
+			for _, child in ipairs(map.Children:ToTable()) do
+				if isvalid(child) and string.sub(child.Name, 1, 3) == "HQ_" and child.TransformComponent ~= nil then
+					table.insert(occupied, child.TransformComponent.WorldPosition)
+				end
+			end
+		end
+		for _, child in ipairs(group.Children:ToTable()) do
+			if isvalid(child) and child.Enable then
+				local wp = child.TransformComponent.WorldPosition
+				local taken = false
+				for _, hp in ipairs(occupied) do
+					local dx = hp.x - wp.x
+					local dy = hp.y - wp.y
+					if dx * dx + dy * dy <= 1 then
+						taken = true
+						break
+					end
+				end
+				if taken then
+				else
+					table.insert(points, { name = child.Name, pos = Vector3(wp.x, wp.y, 0) })
+				end
+			end
+		end
+		return points
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ShuffleInPlace(table list)
+		-- Fisher-Yates 셔플: 목록 순서를 무작위로 섞는다.
+		for i = #list, 2, -1 do
+			local j = _UtilLogic:RandomIntegerRange(1, i)
+			list[i], list[j] = list[j], list[i]
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void StartGame()
+		-- 로비 맵의 전원을 게임 맵으로 텔레포트하고, 플레이어마다 SpawnHQ 그룹의 지점 중 하나를 "랜덤으로" 배정해
+		-- 그 자리에 선택한 진영의 본진을 즉시 지어준다. 지점은 한 번 섞은 뒤 순서대로 나눠 주므로 서로 겹치지 않는다.
+		-- 플레이어(카메라 시작 위치)는 자기 본진 + PlayerSpawnOffsetFromHq 위치로 보낸다.
+		-- SpawnHQ 그룹이 없으면 예전 고정 슬롯(GameSpawnPos1..4 / HqSpawnPos1..4)을 쓴다.
+		local waiting = _UserService:GetUsersByMapName(self.LobbyMapName)
+		if waiting == nil then
+			return
+		end
+		
+		-- 경기 상태 진입: 이 시점부터 EvaluateStart는 새 카운트다운을 시작하지 않고, OnUpdate가 승패 판정을 돈다.
+		self.gameStarted = true
+		self.endingMatch = false
+		self.participants = {}
+		self.eliminatedCount = 0
+		self.winCheckTimer = 0
+		self.matchElapsed = 0
+		
+		local spawnPos = { self.GameSpawnPos1, self.GameSpawnPos2, self.GameSpawnPos3, self.GameSpawnPos4 }
+		local hqPos = { self.HqSpawnPos1, self.HqSpawnPos2, self.HqSpawnPos3, self.HqSpawnPos4 }
+		
+		local points = self:GetHqSpawnPoints()
+		if #points > 0 then
+			self:ShuffleInPlace(points)
+			spawnPos = {}
+			hqPos = {}
+			for i, pt in ipairs(points) do
+				hqPos[i] = pt.pos
+				spawnPos[i] = pt.pos + self.PlayerSpawnOffsetFromHq
+			end
+		end
+		local maxSlots = #hqPos
+		
+		local slotIndex = 0
+		for _, p in ipairs(waiting) do
+			if isvalid(p) then
+				---@type PlayerInfo
+				local info = p:GetComponent("script.PlayerInfo")
+				if info ~= nil and info.SelectedCamp ~= "" then
+					slotIndex = slotIndex + 1
+					if slotIndex > maxSlots then
+						-- 슬롯(4개)을 초과하는 인원은 마지막 슬롯에 겹쳐 스폰한다(경고만 남기고 계속 진행).
+						slotIndex = maxSlots
+					end
+		
+					-- 참가자 등록(userId → 진영/직업/닉네임). 승패 판정과 결과 토스트가 이 표를 기준으로 돈다.
+					local uid = p.PlayerComponent.UserId
+					local nick = p.PlayerComponent.Nickname
+					if nick == nil or nick == "" then nick = uid end
+					self.participants[uid] = { camp = info.SelectedCamp, heroId = info.SelectedHeroId, nick = nick, eliminated = false }
+		
+					-- 시작 재화. 지금까지는 어디서도 지급하지 않아 0에서 채집부터 해야 했다(첫 일꾼 50·첫 생산 건물 140~150).
+					-- Meso/Erda는 @Sync라 재화 HUD가 바로 갱신된다. 경기 종료 시 ResetPlayerInfo가 0으로 되돌린다.
+					info.Meso = self.StartMeso
+					info.Erda = self.StartErda
+					-- 플레이어 고유 색(1~4) = 본진 슬롯 번호. 유닛 링·체력바 색으로 모든 클라이언트에 같은 색이 보인다.
+					info.ColorIndex = slotIndex
+		
+					_TeleportService:TeleportToMapPosition(p, spawnPos[slotIndex], self.GameMapName)
+					self:SpawnPlayerHQ(p, info, hqPos[slotIndex])
+				end
+			end
+		end
+		-- 결과표 집계 시작(본진·시작 일꾼 스폰이 끝난 뒤 — 시작 일꾼은 "생산"에 넣지 않는다).
+		_MatchStatsLogic:BeginMatch()
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean IsParticipantAlive(string userId, Entity map)
+		-- 참가자가 아직 살아 있는지: 접속 중이고, 게임 맵 바로 아래의 "HQ_<userId>" 엔티티가 유효하며 파괴되지 않았어야 한다.
+		-- (파괴된 건물은 다른 작업에서 Entity:Destroy()로 지워지므로 "엔티티 없음"과 "IsDestroyed" 둘 다 탈락으로 본다.)
+		local rec = self.participants[userId]
+		if rec ~= nil and rec.surrendered then return false end   -- 항복(설정 창)
+		local user = _UserService:GetUserEntityByUserId(userId)
+		if not isvalid(user) then return false end
+		if not isvalid(map) then return false end
+		local hq = map:GetChildByName("HQ_" .. userId)
+		if not isvalid(hq) then return false end
+		local si = hq.Structure_Info
+		if si ~= nil and si.IsDestroyed then return false end
+		return true
+	end
+
+	@ExecSpace("Server")
+	method void RequestSurrender()
+		-- 설정 창 "항복": 요청자를 탈락 처리하고 전원에게 알린 뒤 바로 승패를 다시 판정한다. 1:1이면 상대가 즉시 승리한다.
+		-- 항복한 플레이어는 1.5초 뒤 대기실로 보낸다(남은 유닛에 계속 명령하지 못하게). 유닛·건물은 맵에 남아 다른 플레이어가 부술 수 있다.
+		-- 대기실에서는 경기 중이라 새 카운트다운이 시작되지 않고, 경기가 끝나면 ReturnToLobby가 선택·재화를 초기화한다.
+		local userId = senderUserId
+		if not self.gameStarted or self.endingMatch then return end
+		local rec = self.participants[userId]
+		if rec == nil or rec.eliminated or rec.surrendered then return end
+		rec.surrendered = true
+		local inGame = _UserService:GetUsersByMapName(self.GameMapName)
+		if inGame ~= nil then
+			for _, p in ipairs(inGame) do
+				if isvalid(p) and isvalid(p.PlayerComponent) then
+					local uid = p.PlayerComponent.UserId
+					local msg = (uid == userId) and "항복했습니다 — 대기실로 돌아갑니다" or (tostring(rec.nick) .. "님이 항복했습니다")
+					_UIToast_:ShowMessage(msg, uid)
+				end
+			end
+		end
+		self:CheckWinCondition()
+		local player = _UserService:GetUserEntityByUserId(userId)
+		_TimerService:SetTimerOnce(function()
+			-- 그사이 경기가 끝나 전원이 로비로 갔다면(ReturnToLobby) 다시 보낼 필요 없다.
+			-- 항복으로 경기가 끝났으면(결과 화면 표시 중) 항복한 사람도 결과표를 보고 같이 돌아간다.
+			if self.endingMatch then return end
+			if isvalid(player) and isvalid(player.CurrentMap) and player.CurrentMap.Name == self.GameMapName then
+				_RoomService:MoveUsersToStaticRoom({ userId }, self.LobbyStaticMapName)
+			end
+		end, 1.5)
+	end
+
+	@ExecSpace("Server")
+	method void RequestLeaveResult()
+		-- 결과 화면의 "로비로 돌아가기": 경기가 끝난 뒤(결과 표시 중)에만 요청자를 먼저 로비로 보낸다.
+		-- 나머지 사람은 결과 화면 시간이 끝나면 ReturnToLobby가 함께 보내고 정리한다.
+		local userId = senderUserId
+		if not _RoomService:IsInstanceRoom() or not self.endingMatch then return end
+		local player = _UserService:GetUserEntityByUserId(userId)
+		if isvalid(player) then
+			---@type PlayerInfo
+			local info = player:GetComponent("script.PlayerInfo")
+			if info ~= nil then self:ResetPlayerInfo(info) end
+		end
+		_RoomService:MoveUsersToStaticRoom({ userId }, self.LobbyStaticMapName)
+	end
+
+	@ExecSpace("Server")
+	method void RequestLeaveToLobby()
+		-- 대기실(진영 선택)에서 "로비로 나가기": 경기 시작 전에만 요청자를 로비(정적 룸)로 돌려보낸다.
+		-- 경기 중에는 설정 창의 "항복"을 쓴다. 게임 방이 아닌 곳(로비)에서는 무시.
+		local userId = senderUserId
+		if not _RoomService:IsInstanceRoom() then return end
+		local player = _UserService:GetUserEntityByUserId(userId)
+		if not isvalid(player) or not isvalid(player.CurrentMap) or player.CurrentMap.Name ~= self.LobbyMapName then return end
+		if self.gameStarted or self.counting then
+			_UIToast_:ShowMessage("게임 시작 직전에는 나갈 수 없습니다", userId)
+			return
+		end
+		_RoomService:MoveUsersToStaticRoom({ userId }, self.LobbyStaticMapName)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CheckWinCondition()
+		-- 참가자별 본진 생존을 확인해 탈락을 기록하고, 생존자가 1명 이하가 되면(탈락자가 1명 이상 생긴 뒤) 경기를 끝낸다.
+		-- 접속이 끊긴 참가자도 탈락. 경기 시작 유예 시간이 지난 뒤 게임 맵에 아무도 없으면(전원 이탈) 승자 없이 끝낸다.
+		local map = _EntityService:GetEntityByPath("/maps/" .. self.GameMapName)
+		local alive = {}
+		local newlyOut = {}
+		local total = 0
+		for userId, rec in pairs(self.participants) do
+			total += 1
+			if not rec.eliminated then
+				if self:IsParticipantAlive(userId, map) then
+					table.insert(alive, userId)
+				else
+					rec.eliminated = true
+					self.eliminatedCount += 1
+					table.insert(newlyOut, userId)
+				end
+			end
+		end
+		if total == 0 then
+			-- 참가자 표가 비었는데 경기 상태라면(비정상) 그냥 로비 상태로 되돌린다.
+			self:EndMatch("")
+			return
+		end
+		
+		local inGame = _UserService:GetUsersByMapName(self.GameMapName)
+		local inGameCount = (inGame ~= nil) and #inGame or 0
+		if self.matchElapsed >= self.LeaveGraceSeconds and inGameCount == 0 then
+			self:EndMatch("")
+			return
+		end
+		
+		if #alive <= 1 and self.eliminatedCount > 0 then
+			self:EndMatch(alive[1] or "")
+			return
+		end
+		-- 경기가 계속되는 중에 탈락한 유저에게는 Defeat 화면을 바로 띄운다(끝나는 경우는 결과표가 승패를 보여 준다).
+		for _, uid in ipairs(newlyOut) do
+			_BattleResultUI:ShowResult(false, -1, uid)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void EndMatch(string winnerUserId)
+		-- 결과 토스트를 전원에게 보낸 뒤 ResultDelaySeconds 후 로비로 되돌린다. 한 번만 실행된다.
+		if self.endingMatch then return end
+		self.endingMatch = true
+		
+		local winnerNick = ""
+		local rec = self.participants[winnerUserId]
+		if rec ~= nil then winnerNick = rec.nick end
+		if winnerNick == "" and winnerUserId ~= "" then winnerNick = winnerUserId end
+		
+		-- UserEntities.Values는 인덱스 → 엔티티 목록이므로 userId는 PlayerComponent에서 읽는다.
+		for _, user in pairs(_UserService.UserEntities.Values) do
+			if isvalid(user) and isvalid(user.PlayerComponent) then
+				local userId = user.PlayerComponent.UserId
+				-- 결과 BGM(승리/패배, 비어 있으면 인게임 BGM 정지). 관전자(참가자가 아닌 접속자)는 패배곡 쪽.
+				_BgmController:PlayResult(userId == winnerUserId, userId)
+			end
+		end
+		
+		-- 결과 화면(스타1식 결과표): 승패 배너 + 플레이어별 통계 + 총점. 모두 게임 방에 머문 채로 보고,
+		-- "로비로 돌아가기"를 누르면 그 사람만(RequestLeaveResult), 시간이 다 되면 남은 전원이 로비로 간다.
+		-- 먼저 탈락해 떠 있던 Defeat 화면은 결과표로 교체한다.
+		for _, user in pairs(_UserService.UserEntities.Values) do
+			if isvalid(user) and isvalid(user.PlayerComponent) then _BattleResultUI:DismissResult(user.PlayerComponent.UserId) end
+		end
+		local result = _MatchStatsLogic:BuildResult(self.participants, winnerUserId)
+		_MatchStatsLogic:ShowResult(result)
+		local wait = math.max(self.ResultDelaySeconds, _MatchStatsLogic.ResultScreenSeconds)
+		_TimerService:SetTimerOnce(function() self:ReturnToLobby() end, wait)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ReturnToLobby()
+		-- 이 게임 방(인스턴스 룸)에 있는 전원을 로비(정적 룸)로 돌려보낸다 → 게임 맵 정리 → PlayerInfo 초기화 → 대기 상태로.
+		-- (예전엔 같은 룸의 대기실 map01로 텔레포트했다. 이제 방은 한 판용이라 끝나면 모두 로비 방 목록으로 간다.)
+		local inGame = _UserService:GetUsersByMapName(self.GameMapName)
+		local everyone = {}
+		for _, user in pairs(_UserService.UserEntities.Values) do
+			if isvalid(user) and isvalid(user.PlayerComponent) then table.insert(everyone, user.PlayerComponent.UserId) end
+		end
+		if #everyone > 0 then
+			local moved = _RoomService:MoveUsersToStaticRoom(everyone, self.LobbyStaticMapName)
+		end
+		
+		self:CleanupGameMap()
+		
+		-- 참가자 + 게임 맵에 있던 사람 전부의 선택/재화를 초기화한다(접속이 끊긴 참가자는 건너뜀).
+		local reset = {}
+		for userId, _ in pairs(self.participants) do reset[userId] = true end
+		if inGame ~= nil then
+			for _, p in ipairs(inGame) do
+				if isvalid(p) and isvalid(p.PlayerComponent) then reset[p.PlayerComponent.UserId] = true end
+			end
+		end
+		for userId, _ in pairs(reset) do
+			local user = _UserService:GetUserEntityByUserId(userId)
+			if isvalid(user) then
+				---@type PlayerInfo
+				local info = user:GetComponent("script.PlayerInfo")
+				if info ~= nil then self:ResetPlayerInfo(info) end
+			end
+		end
+		
+		self.participants = {}
+		self.eliminatedCount = 0
+		self.endingMatch = false
+		self.counting = false
+		self.countdownRemain = 0
+		self.lastCountdownSec = -1
+		self.gameStarted = false
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ResetPlayerInfo(PlayerInfo info)
+		-- PlayerInfo를 첫 접속 상태(진영/직업 미선택, 메소/에르다 0 — PlayerInfo property 기본값)로 되돌린다.
+		info.SelectedCamp = ""
+		info.SelectedHeroId = ""
+		info.IsReady = false
+		info.Meso = 0
+		info.Erda = 0
+		info.ColorIndex = 0
+		info.MyUnitData = {}
+		_JobAdvanceLogic:ResetPlayer(info)
+		_UpgradeLogic:ResetPlayer(info)
+	end
+
+	@ExecSpace("ServerOnly")
+	method boolean IsGameplayEntity(Entity e)
+		-- 경기 중 생긴 플레이 엔티티인지(본진/영웅/유닛/건물/소환수/투사체). 맵 기반 시설(SpawnHQ, Meso_Resource, Arda_Spawner, Wall, 타일맵,
+		-- MyUnits/MyStructures 컨테이너 등)은 false. 이름 접두어와 전투 컴포넌트 보유 여부로 판정한다.
+		if not isvalid(e) then return false end
+		local name = e.Name or ""
+		local prefixes = { "HQ_", "Hero_", "Unit", "Structure", "Jaguar_", "JaguarRampage", "Mechanic", "NightWalker", "Fly_", "TrainingDummy", "Dummy_" }
+		for _, pf in ipairs(prefixes) do
+			if string.sub(name, 1, #pf) == pf then return true end
+		end
+		if e:GetComponent("script.Unit_Info") ~= nil then return true end
+		if e:GetComponent("script.Structure_Info") ~= nil then return true end
+		if e:GetComponent("script.UnitHitComponent") ~= nil then return true end
+		if e:GetComponent("script.ProjectileComponent") ~= nil then return true end
+		return false
+	end
+
+	@ExecSpace("ServerOnly")
+	method void CleanupGameMap()
+		-- 게임 맵의 플레이 엔티티를 전부 제거한다: MyUnits/MyStructures 컨테이너의 자식 전부 + 맵 바로 아래의 플레이 엔티티.
+		-- 컨테이너 자체와 맵 시설은 남긴다. 순회 중 Destroy하지 않도록 먼저 모아서 지운다.
+		local map = _EntityService:GetEntityByPath("/maps/" .. self.GameMapName)
+		if not isvalid(map) then
+			return
+		end
+		local victims = {}
+		for _, child in ipairs(map.Children:ToTable()) do
+			if isvalid(child) then
+				if child.Name == "MyUnits" or child.Name == "MyStructures" then
+					for _, u in ipairs(child.Children:ToTable()) do
+						if isvalid(u) then table.insert(victims, u) end
+					end
+				elseif self:IsGameplayEntity(child) then
+					table.insert(victims, child)
+				end
+			end
+		end
+		for _, v in ipairs(victims) do
+			if isvalid(v) then v:Destroy() end
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SpawnPlayerHQ(Entity player, PlayerInfo info, Vector3 pos)
+		-- 플레이어가 고른 진영(SelectedCamp)에 맞는 본진 모델을 그 플레이어의 슬롯 위치에 즉시 스폰하고
+		-- 소유자(Structure_Info.PlayerID)로 지정한 뒤, 건물 스탯을 해당 진영 Structure_Stat_DataSet에서
+		-- 주입한다(SpawnUnit.ApplyStructureData — 일꾼이 짓는 건물과 동일한 데이터 경로를 그대로 재사용).
+		-- BuildStructureNow와 달리 건설 대기/애니메이션 없이 "게임 시작과 동시에 이미 완공된 상태"로 둔다.
+		local hqModelId = self:GetHqModelId(info.SelectedCamp)
+		if hqModelId == "" then
+			return
+		end
+		
+		local map = _EntityService:GetEntityByPath("/maps/" .. self.GameMapName)
+		if not isvalid(map) then
+			return
+		end
+		
+		local userId = player.PlayerComponent.UserId
+		local hq = _SpawnService:SpawnByModelId(hqModelId, "HQ_" .. userId, pos, map)
+		if hq == nil then
+			return
+		end
+		
+		if hq.Structure_Info ~= nil then
+			hq.Structure_Info:SetOwner(userId)
+		end
+		-- 일꾼/영웅을 본진 박스 아래에 놓기 전에 자동 크기(StructureSizeLogic)를 확정한다. 스프라이트 로드가
+		-- 스크립트를 잠깐 멈추면 OnBeginPlay 쪽 적용이 끝나기 전에 아래 코드가 돌 수 있어 여기서 한 번 더 부른다(중복 적용 무해).
+		_StructureSizeLogic:ApplyServer(hq, nil)
+		
+		---@type SpawnUnit
+		local spawnUnit = player:GetComponent("script.SpawnUnit")
+		if spawnUnit ~= nil then
+			spawnUnit:ApplyStructureData(hq, hqModelId, userId)
+			self:SpawnStartingWorkers(spawnUnit, info.SelectedCamp, userId, hq, map)
+		end
+		self:SpawnHeroUnit(info, userId, hq, map)
+		
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SpawnStartingWorkers(SpawnUnit spawnUnit, string campKey, string userId, Entity hq, Entity map)
+		-- 게임 시작과 동시에 본진 주변(아래쪽)에 그 진영의 일꾼을 StartWorkerCount명 가로로 나란히 스폰한다.
+		local workerModelId = self:GetWorkerModelId(campKey)
+		if workerModelId == "" then
+			return
+		end
+		
+		local hp = hq.TransformComponent.WorldPosition
+		-- 본진 박스(Trigger)의 아래쪽 가장자리 바로 밑에 놓아, 스폰 직후 건물에 겹치지 않게 한다.
+		local bottom = 1.0
+		local trigger = hq.TriggerComponent
+		if trigger ~= nil then
+			local sy = math.abs(hq.TransformComponent.Scale.y)
+			bottom = math.abs(trigger.BoxSize.y * sy) / 2 - trigger.ColliderOffset.y * sy
+		end
+		local baseY = hp.y - bottom - 0.6
+		
+		for i = 1, self.StartWorkerCount do
+			local offsetX = (i - (self.StartWorkerCount + 1) / 2) * self.StartWorkerSpacing
+			spawnUnit:SpawnStartingUnit(workerModelId, userId, Vector3(hp.x + offsetX, baseY, hp.z), map)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SpawnHeroUnit(PlayerInfo info, string userId, Entity hq, Entity map)
+		-- 대기실에서 고른 직업(SelectedHeroId)의 영웅 유닛을 본진 아래(일꾼 줄보다 한 칸 더 아래)에 스폰한다.
+		-- MyUnits 자식 + Unit_Info.PlayerID 소유라 일반 유닛처럼 드래그 선택·우클릭 명령 대상이 된다.
+		local heroId = info.SelectedHeroId
+		if heroId == "" then
+			return
+		end
+		local parent = map:GetChildByName("MyUnits")
+		if not isvalid(parent) then parent = map end
+		
+		local hp = hq.TransformComponent.WorldPosition
+		local bottom = 1.0
+		local trigger = hq.TriggerComponent
+		if trigger ~= nil then
+			local sy = math.abs(hq.TransformComponent.Scale.y)
+			bottom = math.abs(trigger.BoxSize.y * sy) / 2 - trigger.ColliderOffset.y * sy
+		end
+		local worldPos = Vector3(hp.x, hp.y - bottom - 1.5, hp.z)
+		-- SpawnByModelId의 pos는 parent 기준 로컬 좌표(SpawnUnit.SpawnStartingUnit과 동일한 변환).
+		local pp = parent.TransformComponent.WorldPosition
+		local hero = _SpawnService:SpawnByModelId(self.HeroUnitModelId, "Hero_" .. userId, Vector3(worldPos.x - pp.x, worldPos.y - pp.y, worldPos.z - pp.z), parent)
+		if hero == nil then
+			return
+		end
+		---@type HeroUnit
+		local heroComp = hero:GetComponent("script.HeroUnit")
+		if heroComp ~= nil then
+			heroComp:ApplyHero(heroId, self:HeroDisplayName(info.SelectedCamp, heroId), userId)
+		end
+	end
+
+	method string GetWorkerModelId(string campKey)
+		-- 진영 키 → 그 진영의 일꾼 .model EntryKey. 각 진영 Unit_Stat_DataSet의 RoleKey="Worker" 행과 동일한 모델이다.
+		if campKey == "Adv" then return "model://6f90d763-48f8-40e9-ae0d-e2eceed2e27a" end -- 스포아
+		if campKey == "Cyg" then return "model://c9d23b6f-6c91-4288-b67b-aa711591957d" end -- 티노
+		if campKey == "Ede" then return "model://745a950a-9e05-41b6-ad92-280ffbb07546" end -- 훈련로봇A
+		return ""
+	end
+
+	method string GetHqModelId(string campKey)
+		-- 진영 키 → 그 진영의 본진(HQ) .model EntryKey. 각 진영 Structure_Stat_DataSet의 BuildingKey="HQ" 행과 동일한 모델이다.
+		if campKey == "Adv" then return "model://67bf821f-159c-4593-a52a-c00766b69b94" end -- 세계수
+		if campKey == "Cyg" then return "model://8f99463d-f726-4def-89d1-034013d3e002" end -- 신수(에레브 본진)
+		if campKey == "Ede" then return "model://518d2a8f-546d-45cf-aedf-296c563dda49" end -- 넥서스
+		return ""
+	end
+
+	@ExecSpace("Multicast")
+	method void BroadcastStatus(integer total, integer readyCount)
+		-- 모든 클라의 대기/준비 인원 라벨을 갱신한다.
+		if isvalid(self.statusLabel) then
+			self.statusLabel.Text = "대기 " .. tostring(total) .. "명 / 준비 " .. tostring(readyCount) .. "명"
+		end
+	end
+
+	@ExecSpace("Multicast")
+	method void BroadcastCountdownText(string txt)
+		-- 모든 클라의 안내/카운트다운 라벨을 갱신한다. (대기 안내 문구 또는 "N초 후 시작")
+		if isvalid(self.countdownLabel) then
+			self.countdownLabel.Text = txt
+		end
+	end
+
+	method void OnEndPlay()
+		-- 클라 이벤트 핸들러 해제.
+		if self:IsClient() then
+			if self.hAdv ~= nil then self.btnAdv.Entity:DisconnectEvent(ButtonClickEvent, self.hAdv) end
+			if self.hCyg ~= nil then self.btnCyg.Entity:DisconnectEvent(ButtonClickEvent, self.hCyg) end
+			if self.hEde ~= nil then self.btnEde.Entity:DisconnectEvent(ButtonClickEvent, self.hEde) end
+			if self.hReady ~= nil and isvalid(self.btnReady) then self.btnReady.Entity:DisconnectEvent(ButtonClickEvent, self.hReady) end
+			if self.hLeaveRoom ~= nil and isvalid(self.btnLeaveRoom) then self.btnLeaveRoom.Entity:DisconnectEvent(ButtonClickEvent, self.hLeaveRoom) end
+			for _, rec in ipairs(self.jobHandlers or {}) do
+				if isvalid(rec.entity) then rec.entity:DisconnectEvent(ButtonClickEvent, rec.eventHandler) end
+			end
+			self.jobHandlers = {}
+		end
+	end
+
+end

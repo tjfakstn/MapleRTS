@@ -1,0 +1,359 @@
+@Component
+script BuildGhostComponent extends Component
+
+	property Entity worker = nil
+
+	property string buildingModelId = ""
+
+	property string ruid = ""
+
+	property number sizeX = 1
+
+	property number sizeY = 1
+
+	@DisplayName("겹침 검사 박스 중심 오프셋(월드, 피벗 기준)")
+	property Vector2 sizeOffset = Vector2(0, 0)
+
+	property number spriteScaleX = 1
+
+	property number spriteScaleY = 1
+
+	property number buildTime = 5
+
+	property string buildingKey = ""
+
+	property string zoneProviders = ""
+
+	property string zoneCamp = ""
+
+	property string zoneOwnerId = ""
+
+	@HideFromInspector
+	property boolean _outOfZone = false
+
+	@HideFromInspector
+	property boolean _unreachable = false
+
+	@HideFromInspector
+	property boolean _unexplored = false
+
+	@HideFromInspector
+	property string _reachKey = ""
+
+	@HideFromInspector
+	property boolean _reachOk = true
+
+	@HideFromInspector
+	property number _reachAt = -999
+
+	@HideFromInspector
+	property boolean _confirmed = false
+
+	@HideFromInspector
+	property Vector2 _targetPos = Vector2(0, 0)
+
+	@HideFromInspector
+	property boolean _isValid = false
+
+	@HideFromInspector
+	property boolean _prevMouse0 = false
+
+	@HideFromInspector
+	property boolean _prevMouse1 = false
+
+	@HideFromInspector
+	property boolean _spriteApplied = false
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		if not isvalid(self.Entity) then return end
+		
+		local mouse0 = _InputService:IsKeyPressed(KeyboardKey.Mouse0)
+		local mouse1 = _InputService:IsKeyPressed(KeyboardKey.Mouse1)
+		
+		if not self._confirmed then
+			self:FollowMouse()
+		
+			if mouse1 and not self._prevMouse1 then
+				self:Cancel()
+				return
+			end
+		
+			if mouse0 and not self._prevMouse0 and not _InputService:IsPointerOverUI() then
+				if self._isValid then
+					self:Confirm()
+				elseif self._unexplored then
+					_UIToast_:ShowMessage("탐사하지 않은 지역에는 지을 수 없습니다")
+				elseif self._outOfZone then
+					_UIToast_:ShowMessage(_BuildZoneLogic:RestrictMessage(self.zoneCamp, self.zoneProviders))
+				elseif self._unreachable then
+					_UIToast_:ShowMessage("일꾼이 이동할 수 없는 지역에는 지을 수 없습니다")
+				elseif _ArdaBuildLogic:IsArdaStructureModel(self.buildingModelId) then
+					_UIToast_:ShowMessage("Arda 채집 건물은 Arda 몬스터 스포너 영역 안에만 지을 수 있습니다")
+				end
+			end
+		else
+			self:WaitForWorkerArrival()
+		end
+		
+		self._prevMouse0 = mouse0
+		self._prevMouse1 = mouse1
+	end
+
+	method void FollowMouse()
+		-- 마우스 커서를 따라다니며, 이 위치에 건물을 놓을 수 있는지(기존 유닛/건물과 겹치는지) 매 프레임 확인한다.
+		self:ApplyBuildingSprite()
+		
+		local screenPos = _InputService:GetCursorPosition()
+		local worldPos = _DragLogic:ScreenToWorld(screenPos)
+		
+		local transform = self.Entity.TransformComponent
+		transform.WorldPosition = Vector3(worldPos.x, worldPos.y, transform.WorldPosition.z)
+		
+		self._isValid = self:CheckPlacementValid(worldPos)
+		
+		local renderer = self.Entity.SpriteRendererComponent
+		if isvalid(renderer) then
+			if self._isValid then
+				renderer.Color = Color(0.5, 1.0, 0.5, 0.65)
+			else
+				renderer.Color = Color(1.0, 0.4, 0.4, 0.65)
+			end
+		end
+	end
+
+	method boolean CanBuildUnexplored()
+		-- 탐사하지 않은(검은) 곳에도 지을 수 있는지: 로컬 플레이어가 에델슈타인(테란 역할 — 어디든 짓는 진영)이거나,
+		-- 시그너스의 영역 확장 건물(BuildingKey "Territory" = 신수의 가호 — 파일런처럼 앞으로 뻗는 건물)이면 true.
+		-- 모험가 세계수의 뿌리(같은 Territory)은 제외 — 원래 내 영역 반경 안에만 짓는 건물이다.
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) then return false end
+		---@type PlayerInfo
+		local info = lp:GetComponent("script.PlayerInfo")
+		if info == nil then return false end
+		if info.SelectedCamp == "Ede" then return true end
+		return info.SelectedCamp == "Cyg" and self.buildingKey == "Territory"
+	end
+
+	method boolean CheckPlacementValid(Vector2 worldPos)
+		-- 이 위치에 건물을 놓을 수 있는지 확인한다. 단순히 "겹치는 게 하나라도 있으면 무효"가 아니라,
+		-- 실제 유닛/건물의 "본체" 콜라이더와 겹칠 때만 무효로 본다.
+		-- ⚠ 유닛의 자식 Attack_(공격 사거리 판정용, "Weapon" 태그)은 원거리 유닛일수록 매우 커서
+		-- (사거리 최대 300유닛) 화면에 아무것도 없어 보이는 위치까지 뒤덮는다. OverlapBox(단일 히트)로
+		-- 하나만 보면 하필 이 Attack_가 잡혀 "공간이 있어도 배치 불가"로 보이는 문제가 있었다
+		-- (실측 확인: 사거리 180 유닛에서 100유닛 떨어진 완전히 빈 자리도 Attack_에 걸림).
+		-- OverlapBoxAll로 겹치는 모든 후보를 모아 Attack_(Weapon 태그) 자식은 걸러내고, 실제 본체
+		-- 콜라이더가 하나라도 남으면 그때만 무효로 처리한다.
+		-- Arda 채집 건물은 반드시 Arda_MonsterSpawner의 스폰 영역 안에만 지을 수 있다.
+		-- 한 번도 밝혀 본 적 없는(검은) 곳에는 지을 수 없다 — 건물 박스 전체가 탐사된 곳이어야 한다(FogOfWarLogic, 클라 기준).
+		-- 예외(CanBuildUnexplored): 에델슈타인(테란처럼 어디든 짓는 진영)과 시그너스 신수의 가호(파일런처럼 앞으로 뻗는 건물). 스포아 군락은 제외.
+		self._unexplored = false
+		if not self:CanBuildUnexplored() and not _FogOfWarLogic:IsAreaExplored(worldPos + self.sizeOffset, self.sizeX, self.sizeY) then
+			self._unexplored = true
+			return false
+		end
+		
+		self._outOfZone = false
+		if self.zoneProviders ~= "" and not _BuildZoneLogic:IsInZone(self.Entity.CurrentMap, self.zoneOwnerId, worldPos, self.zoneProviders) then
+			self._outOfZone = true
+			return false
+		end
+		
+		-- 일꾼이 갈 수 없는 곳(이동 불가 타일, 벽에 막혀 도달 불가한 구역)에는 영역 안이라도 놓을 수 없다.
+		self._unreachable = false
+		if not self:IsReachable(worldPos, false) then
+			self._unreachable = true
+			return false
+		end
+		
+		local isArda = _ArdaBuildLogic:IsArdaStructureModel(self.buildingModelId)
+		if isArda and not isvalid(_ArdaBuildLogic:FindSpawnerContaining(self.Entity.CurrentMap, worldPos)) then
+			return false
+		end
+		
+		local collisionService = _CollisionService:GetSimulator(self.Entity)
+		if collisionService == nil then return true end
+		
+		local candidateGroups = { "Unit", "Structure", "Monster" }
+		local hits = _CollisionQueryLogic:OverlapBoxAllGroups(collisionService, candidateGroups, worldPos + self.sizeOffset, Vector2(self.sizeX, self.sizeY), 0)
+		if hits == nil then return true end
+		
+		for i = 1, #hits do
+			local hc = hits[i]
+			if hc ~= nil and hc.Entity ~= nil and not self:IsWeaponChild(hc.Entity) then
+				-- 영역 안을 돌아다니는 Arda 몬스터는 Arda 채집 건물 설치를 막지 않는다.
+				if not (isArda and hc.Entity:GetComponent("script.ArdaMonster") ~= nil) then
+					return false
+				end
+			end
+		end
+		return true
+	end
+
+	method boolean IsReachable(Vector2 pos, boolean force)
+		-- pos에 건설 일꾼이 실제로 갈 수 있는지. 이동 불가 타일이면 false, 벽 정보가 있는 맵이면 일꾼 위치에서
+		-- WallTileBlocker.FindPath(벽 우회 A*)로 경로가 있는지 확인한다. 경로 탐색은 무거우므로 0.5 격자 칸 단위로
+		-- 캐시하고 0.15초 안에는 재탐색하지 않는다(force=true면 즉시 다시 계산 — 확정 클릭 시).
+		local map = self.Entity.CurrentMap
+		if not _BuildZoneLogic:IsWalkable(map, pos) then return false end
+		
+		---@type WallTileBlocker
+		local blocker = map:GetFirstChildComponentByTypeName("script.WallTileBlocker", true)
+		if blocker == nil then return true end
+		
+		local key = tostring(math.floor(pos.x * 2)) .. "," .. tostring(math.floor(pos.y * 2))
+		local now = _UtilLogic.ElapsedSeconds
+		if not force and self._reachKey ~= "" and (key == self._reachKey or now - self._reachAt < 0.15) then
+			return self._reachOk
+		end
+		
+		-- 건설 일꾼: 일꾼이 직접 시작했으면 그 일꾼, 영역 건물에서 시작했으면 가장 가까운 유휴 일꾼.
+		local builder = self.worker
+		if not isvalid(builder) or builder:GetComponent("script.WorkerBuildState") == nil then
+			builder = _BuildModeLogic:ResolveBuilder(self.worker, pos)
+		end
+		
+		local ok = true
+		if isvalid(builder) then
+			local bp = builder.TransformComponent.WorldPosition
+			ok = blocker:FindPath(Vector2(bp.x, bp.y), pos) ~= nil
+		end
+		self._reachKey = key
+		self._reachOk = ok
+		self._reachAt = now
+		return ok
+	end
+
+	method boolean IsWeaponChild(Entity entity)
+		-- Mouse_Command.IsWeaponChild와 동일한 판정(공격 사거리 판정용 자식인지, TagComponent "Weapon" 태그).
+		local tagComp = entity.TagComponent
+		if tagComp == nil then return false end
+		for _, tag in pairs(tagComp.Tags) do
+			if tag == "Weapon" then return true end
+		end
+		return false
+	end
+
+	method void ApplyBuildingSprite()
+		-- 고스트는 하나의 공용 모델(BuildGhost.model, 기본 스프라이트가 박혀 있음)을 재사용하므로,
+		-- 실제로 선택한 건물(ruid)의 스프라이트로 바꿔 씌우고, 그 건물 모델의 실제 TransformComponent.Scale
+		-- (spriteScaleX/Y)까지 그대로 적용해야 "model에 저장된 크기"로 보인다. 건물마다 스프라이트 원본
+		-- 대비 축소 비율이 달라(예: Elinia/Perion은 0.2, WorldTree는 기본 1) RUID만으로는 크기가 맞지 않는다.
+		if self._spriteApplied or self.ruid == "" then return end
+		self._spriteApplied = true
+		
+		local renderer = self.Entity.SpriteRendererComponent
+		if isvalid(renderer) then
+			renderer.SpriteRUID = self.ruid
+			-- 안개(FogCell: MapLayer0 / 1000)보다 위에 그린다 — 아니면 검은(미탐사) 곳에 지을 수 있는 경우(에델슈타인,
+			-- 시그너스 신수의 가호)에도 배치 미리보기가 안개에 가려 "못 짓는 것처럼" 보였다.
+			renderer.SortingLayer = "MapLayer0"
+			renderer.OrderInLayer = 1100
+		end
+		
+		local transform = self.Entity.TransformComponent
+		transform.Scale = Vector3(self.spriteScaleX, self.spriteScaleY, 1)
+	end
+
+	method void Confirm()
+		-- 초록(유효) 상태에서만 FindTarget/좌클릭으로 확정될 수 있다(OnUpdate에서 이미 _isValid를 확인함).
+		local transform = self.Entity.TransformComponent
+		local targetPos = Vector2(transform.WorldPosition.x, transform.WorldPosition.y)
+		
+		-- 확정 직전에 도달 가능성을 캐시 없이 다시 확인한다.
+		if not self:IsReachable(targetPos, true) then
+			_UIToast_:ShowMessage("일꾼이 이동할 수 없는 지역에는 지을 수 없습니다")
+			return
+		end
+		
+		-- self.worker는 배치를 시작한 주체(일꾼 또는 영역 건물)다. 영역 건물에서 시작했다면 그 위치로 가서
+		-- 지을 실제 일꾼(가장 가까운 유휴 스포아)을 여기서 확정한다.
+		local builder = _BuildModeLogic:ResolveBuilder(self.worker, targetPos)
+		if not isvalid(builder) or not isvalid(builder.UnitMoveComponent) then
+			-- 지을 수 있는 일꾼이 없으면 배치를 취소한다.
+			_UIToast_:ShowMessage("건설 가능한 일꾼이 없습니다")
+			self:Cancel()
+			return
+		end
+		
+		self.worker = builder
+		self._targetPos = targetPos
+		self._confirmed = true
+		-- 위치를 정했으면 배치 모드는 끝낸다. 고스트는 일꾼이 도착할 때까지 표시만 남는다 — 예전엔 도착할 때까지
+		-- 배치 모드(IsPlacing)가 켜져 있어 드래그 선택·우클릭·단축키·미니맵·다음 건설이 전부 막혔다.
+		_BuildModeLogic:EndPlacing()
+		
+		local renderer = self.Entity.SpriteRendererComponent
+		if isvalid(renderer) then
+			renderer.Color = Color(0.6, 0.8, 1.0, 0.45)
+		end
+		
+		-- 이동은 서버 권위다: 서버가 "건설에 묶임" 표시(BuildOrdered)를 켜고 목표 위치로 이동시킨다
+		-- (이 표시가 켜진 동안은 A/S/이동 명령이 무시된다). Cleanup에서 끈다.
+		---@type WorkerBuildState
+		local state = builder:GetComponent("script.WorkerBuildState")
+		if state ~= nil then
+			-- 이 고스트가 낸 명령 번호(현재 번호 + 1). 동기화로 이 번호가 보인 뒤 예약이 꺼지거나 더 큰 번호가 오면
+			-- 다른 명령으로 취소된 것으로 보고 고스트를 지운다(WaitForWorkerArrival).
+			self._T.orderId = state.BuildOrderId + 1
+			self._T.orderSeen = false
+			state:RequestBuildOrder(self._targetPos)
+		else
+			builder.UnitMoveComponent:RequestMove(self._targetPos)
+		end
+	end
+
+	method void WaitForWorkerArrival()
+		-- 일꾼이 목표 위치에 도착했는지 매 프레임 확인하고, 도착하면 서버에 건설을 요청한다.
+		if not isvalid(self.worker) then
+			self:Cancel()
+			return
+		end
+		
+		-- 가는 도중 다른 명령(이동·정지·공격·채집)이나 다른 건설 명령을 받으면 이 건설은 취소한다(스타 방식, 비용 없음).
+		---@type WorkerBuildState
+		local state = self.worker:GetComponent("script.WorkerBuildState")
+		if state ~= nil and self._T.orderId ~= nil then
+			if state.BuildOrderId > self._T.orderId then
+				-- 새 명령의 예약까지 풀지 않도록 Cleanup의 RequestClearBuildOrder를 건너뛴다.
+				self._confirmed = false
+				self:Cancel()
+				return
+			end
+			if state.BuildOrderId == self._T.orderId and state.BuildOrdered then self._T.orderSeen = true end
+			if self._T.orderSeen and not state.BuildOrdered then
+				self._confirmed = false
+				self:Cancel()
+				return
+			end
+		end
+		
+		local wp = self.worker.TransformComponent.WorldPosition
+		local dist = Vector2.Distance(Vector2(wp.x, wp.y), self._targetPos)
+		if dist <= 0.15 then
+			_UserService.LocalPlayer.SpawnUnit:RequestBuildStructure(self.buildingModelId, self._targetPos, self.buildTime, self.worker, self.ruid)
+			self:Cleanup()
+		end
+	end
+
+	method void Cancel()
+		self:Cleanup()
+	end
+
+	method void Cleanup()
+		-- 위치를 확정한 뒤(=self.worker가 실제 건설 일꾼)라면 "건설에 묶임" 표시를 푼다. 건설 요청이 서버로 가면
+		-- 이후엔 서버 동기화 값(WorkerBuildState.IsBuilding)이 같은 역할을 한다.
+		if self._confirmed and isvalid(self.worker) then
+			---@type WorkerBuildState
+			local state = self.worker:GetComponent("script.WorkerBuildState")
+			if state ~= nil then state:RequestClearBuildOrder() end
+		end
+		-- 배치 중인 고스트(아직 위치 미확정)일 때만 배치 모드를 끈다. 확정 후 도착을 기다리던 고스트가 지워질 때
+		-- 새로 배치 중인 다른 고스트의 배치 모드까지 꺼버리지 않게 한다.
+		if _BuildModeLogic.ActiveGhost == self.Entity then
+			_BuildModeLogic:EndPlacing()
+		end
+		_EntityService:Destroy(self.Entity)
+	end
+
+end

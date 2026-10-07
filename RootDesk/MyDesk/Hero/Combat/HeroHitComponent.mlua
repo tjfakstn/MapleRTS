@@ -1,0 +1,125 @@
+@Component
+script HeroHitComponent extends HitComponent
+
+	property number immuneCooldown = 0.5
+
+	property number hitColliderWidth = 0.66
+
+	property number hitColliderHeight = 0.7
+
+	property number hitColliderOffsetY = 0.35
+
+	property string teamKey = ""
+
+	@Sync
+	property string lastHitFeedback = ""
+
+	@ExecSpace("ServerOnly")
+	method void OnBeginPlay()
+		    -- 콜라이더 크기는 DefaultPlayer.model의 triggerBodyBoxSize/Offset과 같은 값으로 맞춰
+		    -- 눈에 보이는 몸통과 판정이 어긋나지 않게 한다.
+		    self.ColliderType = ColliderType.Box
+		    self.BoxSize = Vector2(self.hitColliderWidth, self.hitColliderHeight)
+		    self.ColliderOffset = Vector2(0, self.hitColliderOffsetY)
+		    self.CollisionGroup = CollisionGroups.HitBox
+		
+		    self._T.receivedHitCount = 0
+		    self._T.immuneUntil = 0
+		
+		    if self.teamKey ~= "" then
+		        _CombatTeamLogic:RegisterEntity(self.Entity, self.teamKey)
+		    else
+		    end
+		
+		    local player = self.Entity.PlayerComponent
+		    if player == nil then
+		    else
+		    end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnEndPlay()
+		    _CombatTeamLogic:UnregisterEntity(self.Entity)
+	end
+
+	method boolean IsHitTarget(string attackInfo)
+		    -- 부모에 @ExecSpace가 없으므로 여기에도 붙이지 않는다(LEA-3014).
+		    if __base:IsHitTarget(attackInfo) ~= true then
+		        return false
+		    end
+		
+		    local player = self.Entity.PlayerComponent
+		    if player ~= nil and player:IsDead() then
+		        return false
+		    end
+		    if _UtilLogic.ElapsedSeconds < (self._T.immuneUntil or 0) then
+		        return false
+		    end
+		    return true
+	end
+
+	method void OnHit(Entity attacker, integer damage, boolean isCritical, string attackInfo, int32 hitCount)
+		    -- super를 먼저 불러야 HitEvent가 발생한다. 이게 이벤트 파이프라인의 시작점이다.
+		    __base:OnHit(attacker, damage, isCritical, attackInfo, hitCount)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ProcessHeroDeath(Entity killer)
+		    -- 영웅은 커스텀 사망 처리 대신 PlayerComponent의 네이티브 사망/부활 파이프라인을 쓴다.
+		    -- Respawn()이 DeadEvent/ReviveEvent를 자동으로 띄우므로, 경험치 손실/부활 대기 같은
+		    -- 기획 항목은 나중에 DeadEvent 리스너에서 붙이면 된다.
+		    local player = self.Entity.PlayerComponent
+		    if player == nil then
+		        return
+		    end
+		
+		    local killerName = "unknown"
+		    if isvalid(killer) then killerName = tostring(killer.Name) end
+		
+		    player:Respawn()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSyncProperty(string name, any value)
+		    -- 서버 이벤트 -> 클라 연출의 표준 경로(@Sync 변경 -> OnSyncProperty).
+		    if name ~= "lastHitFeedback" then return end
+		    if value == nil or value == "" then return end
+	end
+
+	@EventSender("Self")
+	handler HandleHitEvent(HitEvent event)
+		    if not self:IsServer() then
+		        return
+		    end
+		
+		    local player = self.Entity.PlayerComponent
+		    if player == nil then
+		        return
+		    end
+		    if player:IsDead() then
+		        return
+		    end
+		
+		    local damage = event.TotalDamage or 0
+		    if damage <= 0 then
+		    end
+		
+		    self._T.receivedHitCount = (self._T.receivedHitCount or 0) + 1
+		    self._T.immuneUntil = _UtilLogic.ElapsedSeconds + self.immuneCooldown
+		
+		    local beforeHp = player.Hp
+		    player.Hp = math.max(0, beforeHp - damage)
+		    self.lastHitFeedback = tostring(self._T.receivedHitCount)
+		        .. ":" .. tostring(damage)
+		        .. ":" .. tostring(event.IsCritical and 1 or 0)
+		        .. ":" .. tostring(_UtilLogic.ElapsedSeconds)
+		
+		    local attackerName = "unknown"
+		    if isvalid(event.AttackerEntity) then attackerName = tostring(event.AttackerEntity.Name) end
+		
+		    if player.Hp <= 0 then
+		        self:ProcessHeroDeath(event.AttackerEntity)
+		    end
+	end
+
+end

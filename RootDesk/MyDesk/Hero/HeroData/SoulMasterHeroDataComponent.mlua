@@ -1,0 +1,359 @@
+@Component
+script SoulMasterHeroDataComponent extends Component
+
+	method table BuildKit()
+		    return {
+		    
+		                name = "소울마스터",
+		    
+		                Q = {
+		                 name = "트리플 슬래시",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "few",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 4.6,
+		                 width = 2.1,
+		                 telegraphShape = "front",
+		                 telegraphLength = 4.6,
+		                 telegraphWidth = 2.1,
+		                 hitShape = "front",
+		                 hitLength = 4.6,
+		                 hitWidth = 2.1,
+		                 visualVsHitDelta = 0,
+		                 damage = 165,
+		                 cooldown = 1,
+		                 castWindup = 0.12,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 5,
+		                 maxImpactFxCount = 5,
+		                 effectForwardOffset = 0.64,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectScaleMultiplier = 0.94,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                W = {
+		                 name = "섀도우 번 / 트레이스 컷",
+		                 shape = "front",
+		                 length = 3.8,
+		                 width = 1.6,
+		                 damage = 180,
+		                 cooldown = 1,
+		                 tickCount = 1,
+		                 castWindup = 0.5
+		            },
+		    
+		                WB = {
+		                 name = "섀도우 번",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "few",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 3.8,
+		                 width = 1.7,
+		                 telegraphShape = "front",
+		                 telegraphLength = 3.8,
+		                 telegraphWidth = 1.7,
+		                 hitShape = "front",
+		                 hitLength = 3.8,
+		                 hitWidth = 1.7,
+		                 visualVsHitDelta = 0,
+		                 damage = 180,
+		                 cooldown = 1,
+		                 castWindup = 0.5,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 5,
+		                 maxImpactFxCount = 5,
+		                 effectForwardOffset = 0.58,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectScaleMultiplier = 0.94,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                WC = {
+		                 name = "트레이스 컷",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "few",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 4.4,
+		                 width = 2.0,
+		                 telegraphShape = "front",
+		                 telegraphLength = 4.4,
+		                 telegraphWidth = 2.0,
+		                 hitShape = "front",
+		                 hitLength = 4.4,
+		                 hitWidth = 2.0,
+		                 visualVsHitDelta = 0,
+		                 damage = 205,
+		                 cooldown = 1,
+		                 castWindup = 0.5,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 6,
+		                 maxImpactFxCount = 6,
+		                 effectForwardOffset = 0.74,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectScaleMultiplier = 0.96,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                E = {
+		                 name = "라이트 플럭스 / 문 섀도우",
+		                 shape = "front",
+		                 length = 4.1,
+		                 width = 1.8,
+		                 damage = 190,
+		                 cooldown = 1,
+		                 tickCount = 1,
+		                 castWindup = 0.5
+		            },
+		    
+		                EB = {
+		                 name = "라이트 플럭스",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "few",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 4.1,
+		                 width = 1.8,
+		                 telegraphShape = "front",
+		                 telegraphLength = 4.1,
+		                 telegraphWidth = 1.8,
+		                 hitShape = "front",
+		                 hitLength = 4.1,
+		                 hitWidth = 1.8,
+		                 visualVsHitDelta = 0,
+		                 damage = 190,
+		                 cooldown = 1,
+		                 castWindup = 0.5,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 5,
+		                 maxImpactFxCount = 5,
+		                 effectForwardOffset = 0.62,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectScaleMultiplier = 0.95,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                EC = {
+		                 name = "문 섀도우",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "few",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 4.8,
+		                 width = 2.2,
+		                 telegraphShape = "front",
+		                 telegraphLength = 4.8,
+		                 telegraphWidth = 2.2,
+		                 hitShape = "front",
+		                 hitLength = 4.8,
+		                 hitWidth = 2.2,
+		                 visualVsHitDelta = 0,
+		                 damage = 220,
+		                 cooldown = 1,
+		                 castWindup = 0.5,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 6,
+		                 maxImpactFxCount = 6,
+		                 effectForwardOffset = 0.78,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectScaleMultiplier = 0.97,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                R = {
+		                 name = "솔라 피어스 / 크레센트 디바이드",
+		                 shape = "front",
+		                 length = 5.2,
+		                 width = 2.2,
+		                 damage = 240,
+		                 cooldown = 1,
+		                 tickCount = 1,
+		                 castWindup = 0.5
+		            },
+		    
+		                RB = {
+		                 name = "솔라 피어스",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "few",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 5.2,
+		                 width = 2.0,
+		                 telegraphShape = "front",
+		                 telegraphLength = 5.2,
+		                 telegraphWidth = 2.0,
+		                 hitShape = "front",
+		                 hitLength = 5.2,
+		                 hitWidth = 2.0,
+		                 visualVsHitDelta = 0,
+		                 damage = 240,
+		                 cooldown = 1,
+		                 castWindup = 0.5,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 6,
+		                 maxImpactFxCount = 6,
+		                 effectForwardOffset = 0.78,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectScaleMultiplier = 0.96,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                RC = {
+		                 name = "크레센트 디바이드",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "many",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 5.8,
+		                 width = 2.8,
+		                 telegraphShape = "front",
+		                 telegraphLength = 5.8,
+		                 telegraphWidth = 2.8,
+		                 hitShape = "front",
+		                 hitLength = 5.8,
+		                 hitWidth = 2.8,
+		                 visualVsHitDelta = 0,
+		                 damage = 280,
+		                 cooldown = 1,
+		                 castWindup = 0.5,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 7,
+		                 maxImpactFxCount = 7,
+		                 effectForwardOffset = 0.82,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectScaleMultiplier = 0.98,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                T = {
+		                 name = "크로스 더 스틱스",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "many",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 6.2,
+		                 width = 3.2,
+		                 telegraphShape = "front",
+		                 telegraphLength = 6.2,
+		                 telegraphWidth = 3.2,
+		                 hitShape = "front",
+		                 hitLength = 6.2,
+		                 hitWidth = 3.2,
+		                 visualVsHitDelta = 0,
+		                 damage = 320,
+		                 cooldown = 20,
+		                 castWindup = 0.35,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 8,
+		                 maxImpactFxCount = 8,
+		                 effectForwardOffset = 0.82,
+		                 telegraph = false,
+		                 telegraphTime = 0.12,
+		                 effectBaseLength = 3.1,
+		                 effectBaseWidth = 1.6,
+		                 effectScaleMultiplier = 1.0,
+		                 impactScaleMultiplier = 0.94
+		            },
+		    
+		    
+		        }
+	end
+
+	method table BuildVfx()
+		    return {
+		    
+		                Q = {
+		                 effect = "df8c25d9c2514d9c881a1b90c6bda1ec",
+		                 impact = "9b2d1e78982144b8ba6a212a6a952039",
+		                 multiImpactEffect = "9b2d1e78982144b8ba6a212a6a952039",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                WB = {
+		                 effect = "6b6f3a5e8c8046c1b4fe814c239632a3",
+		                 impact = "5e7ef7ece6204260893a46bb39fb5613",
+		                 multiImpactEffect = "5e7ef7ece6204260893a46bb39fb5613",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                WC = {
+		                 effect = "5c6a3eb4a2ad4097ba87968f2ec34b5a",
+		                 impact = "34f4394432c2471cbc91e963e9fc820e",
+		                 multiImpactEffect = "34f4394432c2471cbc91e963e9fc820e",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                EB = {
+		                 effect = "d905c0a222c7451eb2e220c54dcf469d",
+		                 impact = "8516b55253994c5db70289964194a569",
+		                 multiImpactEffect = "8516b55253994c5db70289964194a569",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                EC = {
+		                 effect = "609c70e9763641f28cc6739cbee4e311",
+		                 impact = "43df3537ff894722ba05dc0530c6bb41",
+		                 multiImpactEffect = "43df3537ff894722ba05dc0530c6bb41",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                RB = {
+		                 effect = "d16084b8fa9e4cce8d04a8ce9517554a",
+		                 impact = "ba1f6e17aa0a492fae78da1f550d1172",
+		                 multiImpactEffect = "ba1f6e17aa0a492fae78da1f550d1172",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                RC = {
+		                 effect = "734fea508167453f97182b570a32fbe9",
+		                 impact = "a41b5db3c69549348bfa85dd3530e21e",
+		                 multiImpactEffect = "a41b5db3c69549348bfa85dd3530e21e",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		                T = {
+		                 effect = "bba68b80d0374a55b14220a400144124",
+		                 impact = "302bc4f98ed94896965aa6dffbf2fdf1",
+		                 multiImpactEffect = "302bc4f98ed94896965aa6dffbf2fdf1",
+		                 playCastEffectOnInput = true
+		            },
+		    
+		    
+		        }
+	end
+
+end

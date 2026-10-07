@@ -1,0 +1,332 @@
+@Component
+script StrikerHeroDataComponent extends Component
+
+	method table BuildKit()
+		    return {
+		    
+		                -- Q는 공식 1차 연계인 섬광 -> 충아를 구현한다.
+		                        name = "스트라이커",
+		    
+		                QB = {
+		                 name = "회축",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "many",
+		                 shape = "self",
+		                 length = 2.2,
+		                 width = 2.2,
+		                 hitShape = "self",
+		                 hitRadius = 2.2,
+		                 damage = 140,
+		                 cooldown = 4.5,
+		                 tickCount = 1,
+		                 castWindup = 0.08,
+		                 maxTargets = 4,
+		                 maxImpactFxCount = 4,
+		                 impactFollowupDelay = 0.04,
+		                 telegraph = false,
+		                 telegraphTime = 0.08,
+		                 effectScaleMultiplier = 0.92,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                QC = {
+		                 name = "충아",
+		                 skillClass = "front_strike",
+		                 targetIntent = "single",
+		                 shape = "front",
+		                 length = 2.4,
+		                 width = 1.8,
+		                 hitShape = "front",
+		                 hitLength = 2.4,
+		                 hitWidth = 1.8,
+		                 damage = 165,
+		                 cooldown = 4.5,
+		                 tickCount = 1,
+		                 castWindup = 0.04,
+		                 maxTargets = 1,
+		                 maxImpactFxCount = 1,
+		                 impactFollowupDelay = 0.03,
+		                 sharedCooldown = 4.5,
+		                 telegraph = false,
+		                 telegraphTime = 0.08,
+		                 effectScaleMultiplier = 0.9,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                W = {
+		                 name = "파도",
+		                 skillClass = "striker_wave",
+		                 targetIntent = "many",
+		                 shape = "front",
+		                 length = 4.6,
+		                 width = 2.0,
+		                 hitShape = "front",
+		                 hitLength = 4.6,
+		                 hitWidth = 2.0,
+		                 damage = 150,
+		                 cooldown = 6.5,
+		                 tickCount = 1,
+		                 castWindup = 0.07,
+		                 waveTravelDistance = 3.6,
+		                 waveStopDistance = 0.15,
+		                 wavePullDistance = 0.6,
+		                 waveResetStrikerCombo = true,
+		                 useCurrentFacing = true,
+		                 maxTargets = 6,
+		                 maxImpactFxCount = 6,
+		                 impactFollowupDelay = 0.04,
+		                 telegraph = false,
+		                 telegraphTime = 0.08,
+		                 effectScaleMultiplier = 0.94,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                EB = {
+		                 name = "승천",
+		                 skillClass = "striker_ascend",
+		                 targetIntent = "many",
+		                 shape = "self",
+		                 length = 2.3,
+		                 damage = 145,
+		                 cooldown = 8.5,
+		                 tickCount = 1,
+		                 castWindup = 0.06,
+		                 ascendHeight = 1.9,
+		                 ascendHorizontalDrift = 0.18,
+		                 ascendTravelDuration = 0.11,
+		                 descendTravelDuration = 0.12,
+		                 returnDelay = 0.02,
+		                 chainFollowupWindow = 1.0,
+		                 chainCastUnlockDelay = 0.08,
+		                 sharedCooldown = 8.5,
+		                 maxTargets = 6,
+		                 maxImpactFxCount = 6,
+		                 impactFollowupDelay = 0.04,
+		                 telegraph = false,
+		                 telegraphTime = 0.08,
+		                 effectScaleMultiplier = 0.94,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                EC = {
+		                 name = "뇌성",
+		                 skillClass = "striker_thunder",
+		                 targetIntent = "many",
+		                 shape = "front",
+		                 length = 4.6,
+		                 width = 1.9,
+		                 hitShape = "front",
+		                 hitLength = 4.6,
+		                 hitWidth = 1.9,
+		                 damage = 180,
+		                 cooldown = 8.5,
+		                 tickCount = 1,
+		                 castWindup = 0.03,
+		                 thunderDashDistance = 3.8,
+		                 thunderStartHeight = 1.15,
+		                 thunderDescendDelay = 0.03,
+		                 thunderTravelDuration = 0.14,
+		                 sharedCooldown = 8.5,
+		                 allowEffectRotation = true,
+		                 maxTargets = 6,
+		                 maxImpactFxCount = 6,
+		                 impactFollowupDelay = 0.04,
+		                 telegraph = false,
+		                 telegraphTime = 0.08,
+		                 effectScaleMultiplier = 0.94,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                RB = {
+		                 name = "섬멸",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "few",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 3.1,
+		                 width = 2.1,
+		                 telegraphShape = "front",
+		                 telegraphLength = 3.1,
+		                 telegraphWidth = 2.1,
+		                 hitShape = "front",
+		                 hitLength = 3.1,
+		                 hitWidth = 2.1,
+		                 visualVsHitDelta = 0,
+		                 damage = 215,
+		                 cooldown = 10.5,
+		                 castWindup = 0.07,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 5,
+		                 maxImpactFxCount = 5,
+		                 chainFollowupWindow = 1.0,
+		                 chainCastUnlockDelay = 0.08,
+		                 sharedCooldown = 10.5,
+		                 effectForwardOffset = 0.68,
+		                 telegraph = false,
+		                 telegraphTime = 0.08,
+		                 effectScaleMultiplier = 0.94,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                RC = {
+		                 name = "벽력",
+		                 skillClass = "heavy_line",
+		                 targetIntent = "many",
+		                 projectileCount = 0,
+		                 hitCount = 1,
+		                 burstCount = 0,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 5.4,
+		                 width = 2.6,
+		                 telegraphShape = "front",
+		                 telegraphLength = 5.4,
+		                 telegraphWidth = 2.6,
+		                 hitShape = "front",
+		                 hitLength = 5.4,
+		                 hitWidth = 2.6,
+		                 visualVsHitDelta = 0,
+		                 damage = 255,
+		                 cooldown = 10.5,
+		                 castWindup = 0.06,
+		                 emitImpactPerTarget = true,
+		                 maxTargets = 8,
+		                 maxImpactFxCount = 8,
+		                 sharedCooldown = 10.5,
+		                 effectForwardOffset = 0.82,
+		                 telegraph = false,
+		                 telegraphTime = 0.08,
+		                 effectScaleMultiplier = 0.98,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                T = {
+		                 name = "교아탄",
+		                 skillClass = "projectile_line",
+		                 targetIntent = "many",
+		                 projectileCount = 1,
+		                 hitCount = 1,
+		                 burstCount = 1,
+		                 tickCount = 0,
+		                 shape = "front",
+		                 length = 18.8,
+		                 width = 2.8,
+		                 telegraphShape = "front",
+		                 telegraphLength = 18.8,
+		                 telegraphWidth = 2.8,
+		                 hitShape = "front",
+		                 hitLength = 18.8,
+		                 hitWidth = 2.8,
+		                 visualVsHitDelta = 0,
+		                 damage = 330,
+		                 cooldown = 110,
+		                 projectile = true,
+		                 forceHorizontalAim = true,
+		                 castWindup = 0.04,
+		                 projectileFireDelay = 0.62,
+		                 projectileSpeed = 15.8,
+		                 projectileStartForwardOffset = 0.78,
+		                 projectileVerticalOffset = 0.32,
+		                 projectileLateralStep = 0,
+		                 maxTargets = 8,
+		                 maxImpactFxCount = 8,
+		                 impactFollowupDelay = 0.05,
+		                 castLeadHitCount = 3,
+		                 castLeadTickInterval = 0.08,
+		                 castLeadLength = 2.6,
+		                 castLeadWidth = 2.8,
+		                 projectileHitCount = 5,
+		                 projectileHitInterval = 0.08,
+		                 telegraph = false,
+		                 telegraphTime = 0.08,
+		                 effectBaseLength = 9.792,
+		                 effectBaseWidth = 1.458,
+		                 effectScaleMultiplier = 0.96,
+		                 projectileScaleMultiplier = 0.96,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		    
+		        }
+	end
+
+	method table BuildVfx()
+		    return {
+		    
+		                QB = {
+		                 effect = "a519495c707a4151ac0c0803be82a203",
+		                 impact = "1dfde21ca5154076add1f903ab44eb3f",
+		                 multiImpactEffect = "1dfde21ca5154076add1f903ab44eb3f",
+		                 playCastEffectOnInput = true,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                QC = {
+		                 effect = "381b5c230115401791cd3596eefab4c7",
+		                 impact = "c13b857385f946b5809f7d5d61b80aa2",
+		                 multiImpactEffect = "c13b857385f946b5809f7d5d61b80aa2",
+		                 playCastEffectOnInput = true,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                W = {
+		                 effect = "fc17c89463fb449089385902335872a5",
+		                 impact = "c13b857385f946b5809f7d5d61b80aa2",
+		                 multiImpactEffect = "c13b857385f946b5809f7d5d61b80aa2",
+		                 playCastEffectOnInput = true,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                EB = {
+		                 effect = "16327064d87447deafedb444bd66ce93",
+		                 impact = "22cd69e0ed234803b44c88af2d7db6dd",
+		                 multiImpactEffect = "22cd69e0ed234803b44c88af2d7db6dd",
+		                 playCastEffectOnInput = true,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                EC = {
+		                 effect = "7f92f0276b494eea94ed60d8c30ee75a",
+		                 impact = "22cd69e0ed234803b44c88af2d7db6dd",
+		                 multiImpactEffect = "22cd69e0ed234803b44c88af2d7db6dd",
+		                 playCastEffectOnInput = true,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                RB = {
+		                 effect = "8a455d60979b45dfbf3130acf11acb81",
+		                 impact = "64470077476f4f6f9ffd4ae8772aabf7",
+		                 multiImpactEffect = "64470077476f4f6f9ffd4ae8772aabf7",
+		                 playCastEffectOnInput = true,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                RC = {
+		                 effect = "660bac466ea147d193987e787c96c472",
+		                 impact = "64470077476f4f6f9ffd4ae8772aabf7",
+		                 multiImpactEffect = "64470077476f4f6f9ffd4ae8772aabf7",
+		                 playCastEffectOnInput = true,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		                T = {
+		                 effect = "1a925a094cb14011bf7eaf59c0b935e8",
+		                 effect0 = "c799c5b21ad7447db663ae23f4c74949",
+		                 ball = "c799c5b21ad7447db663ae23f4c74949",
+		                 impact = "f587a0500c2543e790d8175b704ff4c9",
+		                 multiImpactEffect = "f587a0500c2543e790d8175b704ff4c9",
+		                 playCastEffectOnInput = true,
+		                 effectForwardOffset = 0.78,
+		                 effectVerticalOffset = -0.22,
+		                 projectileScaleMultiplier = 0.96,
+		                 impactScaleMultiplier = 0.92
+		            },
+		    
+		    
+		        }
+	end
+
+end

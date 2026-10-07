@@ -1,0 +1,146 @@
+@Component
+script XenonSkillComponent extends Component
+
+	@Sync
+	property boolean casting = false
+
+	@ExecSpace("ClientOnly")
+	method boolean IsMovementLocked()
+		    -- 서버 승인 시전과 로컬 연출의 잠금을 함께 확인한다.
+		    return self.casting or self._T.clientLocked == true
+	end
+
+	@ExecSpace("ServerOnly")
+	method void BeginCast(string skillKey, table skill, Vector2 aimDir, Vector2 aimWorldPos)
+		    -- 제논 R/T만 소유한다. T의 damage는 틱당 값이 아니라 전체 합계이다.
+		    if self.casting then return end
+		    local duration = skillKey == "T" and skill.duration or (3.51 / 1.1)
+		    if skillKey == "T" then
+		        local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		        core:BindVisualHitBounds(skillKey, skill)
+		        skill.projectile = false
+		    end
+		    local now = _UtilLogic.ElapsedSeconds
+		    if skillKey == "T" and math.abs(aimDir.x) > 0.01 then
+		        local transform = self.Entity.TransformComponent
+		        local scale = transform.Scale
+		        transform.Scale = Vector3(math.abs(scale.x) * (aimDir.x >= 0 and -1 or 1), scale.y, scale.z)
+		    end
+		    local hit = _CombatTeamLogic:GetReceiver(self.Entity)
+		    local oldImmune = hit ~= nil and (hit._T.immuneUntil or 0) or 0
+		    self._T.cast = { key = skillKey, skill = skill, direction = aimDir, aim = aimWorldPos,
+		        started = now, duration = duration, fired = 0, dealt = 0,
+		        map = self.Entity.CurrentMap, oldImmune = oldImmune,
+		        immuneDeadline = math.max(oldImmune, now + duration + 0.1) }
+		    if hit ~= nil then hit._T.immuneUntil = self._T.cast.immuneDeadline end
+		    self.casting = true
+		    self:BeginPresentation(skillKey)
+	end
+
+	method void OnUpdate(number delta)
+		    -- 서버의 절대 경과 시간으로 틱 수를 정해 타이머 누적 오차를 피한다.
+		    if self:IsClient() then
+		        if self._T.clientLocked and self.Entity == _UserService.LocalPlayer then
+		            local movement = self.Entity.MovementComponent
+		            if movement ~= nil then movement:Stop() end
+		        end
+		        return
+		    end
+		    local state = self._T.cast
+		    if state == nil then return end
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if core == nil or core:GetSelectedHeroId() ~= "xenon"
+		        or self.Entity.CurrentMap ~= state.map or _CombatTeamLogic:IsDead(self.Entity) then
+		        self:FinishCast(false)
+		        return
+		    end
+		    local elapsed = _UtilLogic.ElapsedSeconds - state.started
+		    if state.key == "T" then
+		        local count = state.skill.tickCount
+		        local total = state.skill.damage
+		        local due = math.min(count, math.floor(math.min(elapsed, state.duration) / state.duration * count + 0.000001))
+		        while state.fired < due do
+		            local index = state.fired + 1
+		            local damage = math.floor(index * total / count) - math.floor((index - 1) * total / count)
+		            local context = core:BuildRuntimeHitContext(state.skill, state.aim, state.direction)
+		            core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		            local info = "T:" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(damage)
+		            core:BeginAttackTargetFilter(info, state.skill.maxTargets or 0)
+		            local hits = core:PerformAttack(context.shape, info)
+		            core:EndAttackTargetFilter(info)
+		            if #hits > 0 then core:EmitImpactBatchSync("T", hits, #hits) end
+		            state.fired = index
+		            state.dealt = state.dealt + damage
+		        end
+		    end
+		    if elapsed >= state.duration then self:FinishCast(true) end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void FinishCast(boolean completed)
+		    -- 자신이 설정한 무적만 돌려놓고 기존 피격 무적은 보존한다.
+		    local state = self._T.cast
+		    if state == nil then return end
+		    local hit = _CombatTeamLogic:GetReceiver(self.Entity)
+		    if hit ~= nil and hit._T.immuneUntil == state.immuneDeadline then
+		        hit._T.immuneUntil = state.oldImmune
+		    end
+		    self._T.cast = nil
+		    self.casting = false
+		    self:EndPresentation(completed)
+	end
+
+	@ExecSpace("Client")
+	method void BeginPresentation(string skillKey)
+		    -- T 빔은 한 번만 생성한다. 공통 EffectComponent의 단발/투사체 예약과 분리한다.
+		    self._T.clientLocked = true
+		    self._T.visualKey = skillKey
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    if self.Entity == _UserService.LocalPlayer then
+		        local move = self.Entity:GetComponent("script.ClickToMoveComponent")
+		        if move ~= nil then move:StopMovement() end
+		    end
+		    if skillKey ~= "T" or core == nil then return end
+		    local vfx = core:BuildHeroVfx(14).T
+		    local scale = vfx.castVisualScaleMultiplier or 1
+		    self._T.beam = _FogOfWarLogic:PlayEffectAttachedSeen(vfx.effect, self.Entity,
+		        Vector3(0, 0, 0), 0, Vector3(scale, scale, 1), true, { SyncFlip = true })
+	end
+
+	@ExecSpace("Client")
+	method void EndPresentation(boolean completed)
+		    -- 정상 종료만 종료 이펙트를 표시하며 취소/맵 이탈은 잔여 빔만 제거한다.
+		    self:ClearBeam()
+		    if completed and self._T.visualKey == "T" then
+		        local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		        local vfx = core:BuildHeroVfx(14).T
+		        local scale = vfx.castVisualScaleMultiplier or 1
+		        _FogOfWarLogic:PlayEffectAttachedSeen(vfx.effect2, self.Entity,
+		            Vector3(0, 0, 0), 0, Vector3(scale, scale, 1), false, { SyncFlip = true })
+		    end
+		    self._T.clientLocked = false
+		    self._T.visualKey = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ClearBeam()
+		    -- 맵 이동/종료 시에도 동일한 serial을 정확히 한 번 제거한다.
+		    if self._T.beam ~= nil then
+		        _EffectService:RemoveEffect(self._T.beam)
+		        self._T.beam = nil
+		    end
+	end
+
+	method void OnMapLeave(Entity map)
+		    -- 영웅이 맵을 떠나면 남은 공격과 시전 잠금을 취소한다.
+		    if self:IsServer() then self:FinishCast(false)
+		    else self:ClearBeam() self._T.clientLocked = false end
+	end
+
+	method void OnEndPlay()
+		    -- 엔티티 수명 종료 시 타격 상태와 클라이언트 리소스를 정리한다.
+		    if self:IsServer() then self:FinishCast(false)
+		    else self:ClearBeam() self._T.clientLocked = false end
+	end
+
+end

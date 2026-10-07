@@ -1,0 +1,419 @@
+@Component
+script WallTileBlocker extends Component
+
+	property RectTileMapComponent WallTileMap = "4a91bc11-d974-4354-9341-a5048964fce0"
+
+	property boolean TilesAreWalkable = false
+
+	property number CheckRadius = 0.1
+
+	property integer PushOutSearchRange = 40
+
+	property integer PathMaxNodes = 6000
+
+	property integer PathBoundsMargin = 3
+
+	method void OnBeginPlay()
+		-- map02는 바닥 타일 방식이다. 파일 프로퍼티의 오래된 벽 참조보다 현재 맵을 우선한다.
+		local map = self.Entity.CurrentMap
+		if isvalid(map) and map.Name == _LobbyController.GameMapName then
+			local floor = map:GetChildByName("RectTileMap")
+			if isvalid(floor) and isvalid(floor.RectTileMapComponent) then
+				self.WallTileMap = floor.RectTileMapComponent
+				self.TilesAreWalkable = true
+			end
+		end
+		-- 벽 칸 캐시를 만든다(서버/클라이언트 양쪽 모두 — 서버는 이동 보정, 클라이언트는 필요 시 조회용).
+		self:RebuildCache()
+	end
+
+	method void RebuildCache()
+		-- WallTileMap 에 칠해진 모든 칸을 숫자 키(CellKey) 집합으로 캐시한다(문자열 키보다 조회가 훨씬 싸다).
+		local cells = {}
+		local count = 0
+		local bounds = nil
+		self._T.walkCache = {}
+		local tm = self.WallTileMap
+		if isvalid(tm) then
+			for _, pos in ipairs(tm:GetAllTilePositions():ToTable()) do
+				cells[self:CellKey(pos.x, pos.y)] = true
+				count = count + 1
+				if bounds == nil then
+					bounds = { minX = pos.x, maxX = pos.x, minY = pos.y, maxY = pos.y }
+				else
+					bounds.minX = math.min(bounds.minX, pos.x)
+					bounds.maxX = math.max(bounds.maxX, pos.x)
+					bounds.minY = math.min(bounds.minY, pos.y)
+					bounds.maxY = math.max(bounds.maxY, pos.y)
+				end
+			end
+		else
+		end
+		
+		-- 바닥 모드에서는 이 집합만 통행 가능하다. 기존 벽 모드는 다른 맵과의 호환을 위해 유지한다.
+		self._T.cells = cells
+		self._T.bounds = bounds
+		self:ComputeCellCenterOffset()
+	end
+
+	method integer NowMs()
+		-- 실제 시계(ms, 1시간 주기) — 경로 탐색 소요 시간 로그용.
+		local t = DateTime.UtcNow
+		return (t.Minute * 60 + t.Second) * 1000 + t.Millisecond
+	end
+
+	method integer CellKey(integer cx, integer cy)
+		-- 칸 좌표 → 정수 키(양쪽 ±32768 범위).
+		return (cx + 32768) * 65536 + (cy + 32768)
+	end
+
+	method void ComputeCellCenterOffset()
+		-- ToWorldPosition(칸)이 칸의 중심인지 모서리인지 축별로 판별해, 칸 중심 = ToWorldPosition + offset 이 되게 한다.
+		self._T.centerOffset = Vector2(0, 0)
+		local tm = self.WallTileMap
+		if not isvalid(tm) then return end
+		local gs = tm.GridSize
+		local p = tm:ToWorldPosition(0, 0)
+		local ox = 0
+		local oy = 0
+		local qx = gs.x * 0.25
+		local qy = gs.y * 0.25
+		local minusX = tm:ToCellPosition(p.x - qx, p.y + qy).x == 0 and tm:ToCellPosition(p.x - qx, p.y - qy).x == 0
+		local plusX = tm:ToCellPosition(p.x + qx, p.y + qy).x == 0 and tm:ToCellPosition(p.x + qx, p.y - qy).x == 0
+		if minusX and plusX then ox = 0 elseif plusX then ox = gs.x * 0.5 else ox = -gs.x * 0.5 end
+		local minusY = tm:ToCellPosition(p.x + qx, p.y - qy).y == 0 and tm:ToCellPosition(p.x - qx, p.y - qy).y == 0
+		local plusY = tm:ToCellPosition(p.x + qx, p.y + qy).y == 0 and tm:ToCellPosition(p.x - qx, p.y + qy).y == 0
+		if minusY and plusY then oy = 0 elseif plusY then oy = gs.y * 0.5 else oy = -gs.y * 0.5 end
+		self._T.centerOffset = Vector2(ox, oy)
+		self._T.stepLen = math.max(0.02, math.min(gs.x, gs.y) * 0.25)
+		
+		-- 빠른 좌표 변환: 칸(0,0) 중심과 칸 간격을 한 번 재 두고 Lua 산술로 변환한다(엔진 함수 호출이 매우 느려
+		-- 경로 탐색/직선 검사에서 수만 번 부르면 서버가 멈춘다). 엔진 결과와 표본 비교해 전부 같을 때만 사용한다.
+		local p10 = tm:ToWorldPosition(1, 0)
+		local p01 = tm:ToWorldPosition(0, 1)
+		local f = { cx0 = p.x + ox, cy0 = p.y + oy, sx = p10.x - p.x, sy = p01.y - p.y }
+		local ok = math.abs(f.sx) > 0.0001 and math.abs(f.sy) > 0.0001
+		if ok then
+			local b = self._T.bounds or { minX = -10, maxX = 10, minY = -10, maxY = 10 }
+			for i = 0, 24 do
+				local wx = (b.minX + (b.maxX - b.minX) * (i % 5) / 4) * math.abs(f.sx) + (i * 0.137 % 1) * f.sx
+				local wy = (b.minY + (b.maxY - b.minY) * (i // 5) / 4) * math.abs(f.sy) + (i * 0.291 % 1) * f.sy
+				local native = tm:ToCellPosition(wx, wy)
+				local fx = math.floor((wx - f.cx0) / f.sx + 0.5)
+				local fy = math.floor((wy - f.cy0) / f.sy + 0.5)
+				if native.x ~= fx or native.y ~= fy then
+					ok = false
+					break
+				end
+			end
+		end
+		if ok then self._T.fast = f else self._T.fast = nil end
+	end
+
+	method Vector2 CellCenter(integer cx, integer cy)
+		-- 칸 (cx, cy)의 월드 중심 좌표.
+		local f = self._T.fast
+		if f ~= nil then return Vector2(f.cx0 + cx * f.sx, f.cy0 + cy * f.sy) end
+		local p = self.WallTileMap:ToWorldPosition(cx, cy)
+		local o = self._T.centerOffset or Vector2(0, 0)
+		return Vector2(p.x + o.x, p.y + o.y)
+	end
+
+	method boolean IsCellWalkable(integer cx, integer cy)
+		-- 칸 중심에 유닛이 설 수 있으면 true. 벽 칸 범위(+여유) 밖은 탐색하지 않는다.
+		local b = self._T.bounds
+		if b ~= nil then
+			local m = self.PathBoundsMargin
+			if cx < b.minX - m or cx > b.maxX + m or cy < b.minY - m or cy > b.maxY + m then return false end
+		end
+		local c = self:CellCenter(cx, cy)
+		return not self:IsBlocked(c.x, c.y)
+	end
+
+	method boolean HasLineOfSight(Vector2 a, Vector2 b)
+		-- a → b 직선 위를 칸 크기의 1/4 간격으로 검사해 벽에 걸리지 않으면 true(곧장 걸어가도 되는지).
+		if self._T.cells == nil then return not self.TilesAreWalkable end
+		local stepLen = self._T.stepLen or 0.25
+		local dist = Vector2.Distance(a, b)
+		local steps = math.max(1, math.ceil(dist / stepLen))
+		for i = 1, steps do
+			local t = i / steps
+			local x = a.x + (b.x - a.x) * t
+			local y = a.y + (b.y - a.y) * t
+			if self:IsBlocked(x, y) then return false end
+		end
+		return true
+	end
+
+	method table FindPath(Vector2 startPos, Vector2 goalPos)
+		if self:IsBlocked(goalPos.x, goalPos.y) then return nil end
+		-- 벽을 우회하는 경로(경유지 목록, 마지막 = goalPos)를 돌려준다. 곧장 갈 수 있으면 { goalPos }.
+		-- 칸 격자 A*(8방향, 벽 모서리 대각선 통과 금지) → 직선으로 보이는 경유지는 건너뛰어(스무딩) 꺾이는 점만 남긴다.
+		-- 도달할 수 없거나 탐색 한도(PathMaxNodes)를 넘으면 nil.
+		if self:HasLineOfSight(startPos, goalPos) then return { goalPos } end
+		local startMs = self:NowMs()
+		local tm = self.WallTileMap
+		if not isvalid(tm) then return nil end
+		
+		local sx, sy, gx, gy
+		local f = self._T.fast
+		if f ~= nil then
+			sx = math.floor((startPos.x - f.cx0) / f.sx + 0.5)
+			sy = math.floor((startPos.y - f.cy0) / f.sy + 0.5)
+			gx = math.floor((goalPos.x - f.cx0) / f.sx + 0.5)
+			gy = math.floor((goalPos.y - f.cy0) / f.sy + 0.5)
+		else
+			local sc = tm:ToCellPosition(startPos.x, startPos.y)
+			local gc = tm:ToCellPosition(goalPos.x, goalPos.y)
+			sx = sc.x
+			sy = sc.y
+			gx = gc.x
+			gy = gc.y
+		end
+		local startKey = (sx + 32768) * 65536 + (sy + 32768)
+		local goalKey = (gx + 32768) * 65536 + (gy + 32768)
+		
+		-- 칸 통과 가능 여부는 벽이 바뀌기 전까지 변하지 않으므로 탐색 사이에도 캐시를 유지한다(RebuildCache에서 초기화).
+		if self._T.walkCache == nil then self._T.walkCache = {} end
+		local walkCache = self._T.walkCache
+		local walkable = function(x, y)
+			local k = (x + 32768) * 65536 + (y + 32768)
+			if k == startKey then return true end
+			local v = walkCache[k]
+			if v == nil then
+				v = self:IsCellWalkable(x, y)
+				walkCache[k] = v
+			end
+			return v
+		end
+		local heuristic = function(x, y)
+			local dx = math.abs(x - gx)
+			local dy = math.abs(y - gy)
+			return math.max(dx, dy) + 0.41421356 * math.min(dx, dy)
+		end
+		
+		-- 최소 힙(open list): 원소 = { f, key }
+		local heap = {}
+		local push = function(f, key)
+			table.insert(heap, { f, key })
+			local i = #heap
+			while i > 1 do
+				local parent = i // 2
+				if heap[parent][1] <= heap[i][1] then break end
+				heap[parent], heap[i] = heap[i], heap[parent]
+				i = parent
+			end
+		end
+		local pop = function()
+			local top = heap[1]
+			local last = table.remove(heap)
+			if #heap > 0 then
+				heap[1] = last
+				local i = 1
+				local n = #heap
+				while true do
+					local l = i * 2
+					local r = l + 1
+					local s = i
+					if l <= n and heap[l][1] < heap[s][1] then s = l end
+					if r <= n and heap[r][1] < heap[s][1] then s = r end
+					if s == i then break end
+					heap[s], heap[i] = heap[i], heap[s]
+					i = s
+				end
+			end
+			return top
+		end
+		
+		local nodes = {}
+		local gScore = {}
+		local cameFrom = {}
+		local closed = {}
+		nodes[startKey] = { x = sx, y = sy }
+		gScore[startKey] = 0
+		push(heuristic(sx, sy), startKey)
+		
+		local dirs = { {1,0,1}, {-1,0,1}, {0,1,1}, {0,-1,1}, {1,1,1.41421356}, {1,-1,1.41421356}, {-1,1,1.41421356}, {-1,-1,1.41421356} }
+		local expanded = 0
+		local found = false
+		while #heap > 0 do
+			local cur = pop()
+			local ck = cur[2]
+			if closed[ck] ~= true then
+				closed[ck] = true
+				if ck == goalKey then
+					found = true
+					break
+				end
+				expanded = expanded + 1
+				if expanded > self.PathMaxNodes then break end
+				local cn = nodes[ck]
+				for _, d in ipairs(dirs) do
+					local nx = cn.x + d[1]
+					local ny = cn.y + d[2]
+					local diagonalOk = true
+					if d[1] ~= 0 and d[2] ~= 0 then
+						diagonalOk = walkable(cn.x + d[1], cn.y) and walkable(cn.x, cn.y + d[2])
+					end
+					if diagonalOk and walkable(nx, ny) then
+						local nk = (nx + 32768) * 65536 + (ny + 32768)
+						if closed[nk] ~= true then
+							local ng = gScore[ck] + d[3]
+							if gScore[nk] == nil or ng < gScore[nk] then
+								gScore[nk] = ng
+								cameFrom[nk] = ck
+								nodes[nk] = { x = nx, y = ny }
+								push(ng + heuristic(nx, ny), nk)
+							end
+						end
+					end
+				end
+			end
+		end
+		
+		if not found then
+			return nil
+		end
+		
+		-- 목표 → 출발 역추적 후 뒤집어 칸 중심 경유지 목록을 만든다(출발 칸 제외, 마지막은 정확한 목표 좌표).
+		local cellKeys = {}
+		local k = goalKey
+		while k ~= nil and k ~= startKey do
+			table.insert(cellKeys, 1, k)
+			k = cameFrom[k]
+		end
+		local points = {}
+		for i, key in ipairs(cellKeys) do
+			if i == #cellKeys then
+				table.insert(points, goalPos)
+			else
+				local n = nodes[key]
+				table.insert(points, self:CellCenter(n.x, n.y))
+			end
+		end
+		if #points == 0 then table.insert(points, goalPos) end
+		
+		-- 스무딩: 현재 기준점에서 직선으로 보이는 가장 먼 경유지까지 건너뛴다.
+		local result = {}
+		local anchor = startPos
+		local i = 1
+		while i <= #points do
+			local j = i
+			while j + 1 <= #points and self:HasLineOfSight(anchor, points[j + 1]) do
+				j = j + 1
+			end
+			table.insert(result, points[j])
+			anchor = points[j]
+			i = j + 1
+		end
+		return result
+	end
+
+	method boolean IsWallCell(number x, number y)
+		-- 월드 좌표 (x, y)가 속한 칸이 벽 칸이거나, 벽 칸 전체가 차지하는 사각 범위의 테두리 줄(그 바깥 포함)이면 true.
+		local cells = self._T.cells
+		if cells == nil then return self.TilesAreWalkable end
+		local f = self._T.fast
+		local cx, cy
+		if f ~= nil then
+			cx = math.floor((x - f.cx0) / f.sx + 0.5)
+			cy = math.floor((y - f.cy0) / f.sy + 0.5)
+		else
+			local tm = self.WallTileMap
+			if not isvalid(tm) then return self.TilesAreWalkable end
+			local c = tm:ToCellPosition(x, y)
+			cx = c.x
+			cy = c.y
+		end
+		if self.TilesAreWalkable then
+			return cells[self:CellKey(cx, cy)] ~= true
+		end
+		if cells[self:CellKey(cx, cy)] == true then return true end
+		-- 경계 벽 줄 자체에 칠하지 않은 틈이 있어도 맵 밖으로 새지 않도록, 벽 칸 범위의 가장 바깥 줄(테두리)과
+		-- 그 바깥은 항상 막는다. 내부 칸은 바닥 타일 유무와 무관하게(자원 지점 주변처럼 안 칠해진 곳도) 그대로 통행 가능.
+		local b = self._T.bounds
+		if b ~= nil and (cx <= b.minX or cx >= b.maxX or cy <= b.minY or cy >= b.maxY) then
+			return true
+		end
+		return false
+	end
+
+	method boolean IsBlocked(number x, number y)
+		-- 유닛 중심 (x, y)와 CheckRadius 만큼 떨어진 네 모서리 중 하나라도 벽 칸이면 true.
+		local r = self.CheckRadius
+		if self:IsWallCell(x, y) then return true end
+		if r <= 0 then return false end
+		return self:IsWallCell(x - r, y - r) or self:IsWallCell(x + r, y - r)
+			or self:IsWallCell(x - r, y + r) or self:IsWallCell(x + r, y + r)
+	end
+
+	method Vector2 ResolveStep(Vector2 cur, Vector2 nextPos)
+		-- 전체 이동 구간을 검사해 프레임 지연/빠른 이동으로 빈 칸을 뛰어넘지 못하게 한다.
+		if self:IsBlocked(cur.x, cur.y) then return self:PushOut(cur) end
+		local count = math.max(1, math.ceil(Vector2.Distance(cur, nextPos) / (self._T.stepLen or 0.25)))
+		local pos = cur
+		for i = 1, count do
+			local t = i / count
+			local step = Vector2(cur.x + (nextPos.x - cur.x) * t, cur.y + (nextPos.y - cur.y) * t)
+			pos = self:ResolveSingleStep(pos, step)
+			if Vector2.Distance(pos, step) > 0.0001 then return pos end
+		end
+		return pos
+	end
+
+	method Vector2 ResolveSingleStep(Vector2 cur, Vector2 nextPos)
+		-- cur → nextPos 한 걸음이 벽에 들어가면 보정한 위치를 돌려준다.
+		--  1) 막히지 않으면 그대로
+		--  2) 잘못된 시작 위치의 복구는 ResolveStep에서 처리한다
+		--  3) 한 축만 움직여서 되면 벽을 따라 미끄러진다(더 많이 가는 축 우선)
+		--  4) 둘 다 막히면 제자리(cur)
+		if not self:IsBlocked(nextPos.x, nextPos.y) then return nextPos end
+		if self:IsBlocked(cur.x, cur.y) then return cur end
+		
+		local best = nil
+		local bestLen = 0
+		if not self:IsBlocked(nextPos.x, cur.y) then
+			best = Vector2(nextPos.x, cur.y)
+			bestLen = math.abs(nextPos.x - cur.x)
+		end
+		if not self:IsBlocked(cur.x, nextPos.y) then
+			local l = math.abs(nextPos.y - cur.y)
+			if best == nil or l > bestLen then
+				best = Vector2(cur.x, nextPos.y)
+				bestLen = l
+			end
+		end
+		if best ~= nil and bestLen > 0.0001 then return best end
+		return cur
+	end
+
+	method Vector2 PushOut(Vector2 p)
+		-- 목표 지점 p 가 벽 안이면 가장 가까운 빈 칸의 중심으로 옮긴다(벽 위를 찍었을 때 벽 앞에서 영원히 걷지 않도록).
+		if not self:IsBlocked(p.x, p.y) then return p end
+		local tm = self.WallTileMap
+		if not isvalid(tm) then return p end
+		
+		local c = tm:ToCellPosition(p.x, p.y)
+		local best = nil
+		local bestDist = math.huge
+		for ring = 1, self.PushOutSearchRange do
+			for dx = -ring, ring do
+				for dy = -ring, ring do
+					if math.max(math.abs(dx), math.abs(dy)) == ring then
+						local wp = self:CellCenter(c.x + dx, c.y + dy)
+						if not self:IsBlocked(wp.x, wp.y) then
+							local d = (wp.x - p.x) ^ 2 + (wp.y - p.y) ^ 2
+							if d < bestDist then
+								bestDist = d
+								best = Vector2(wp.x, wp.y)
+							end
+						end
+					end
+				end
+			end
+			if best ~= nil then return best end
+		end
+		return p
+	end
+
+end

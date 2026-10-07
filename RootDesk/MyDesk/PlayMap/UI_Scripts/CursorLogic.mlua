@@ -1,0 +1,201 @@
+@Logic
+script CursorLogic extends Logic
+
+	@DisplayName("판정 주기(초)")
+	property number TickInterval = 0.08
+
+	@DisplayName("게임 맵 이름")
+	property string PlayMapName = "map02"
+
+	@DisplayName("기본(메이플 장갑)")
+	property string CurNormal = "3930c5d2e85b4bff8467aada64fda7f5"
+
+	property Vector2 OffNormal = Vector2(0, 0)
+
+	@DisplayName("대상 확인(돋보기+손)")
+	property string CurInspect = "8d2c3cb4d7214aa8b68c4371216ca304"
+
+	property Vector2 OffInspect = Vector2(0, 0)
+
+	@DisplayName("공격/조준(활+손)")
+	property string CurAttack = "09e307cb7cf540079cd3f19d0aea3355"
+
+	property Vector2 OffAttack = Vector2(0, 0)
+
+	@DisplayName("이동 위치 지정(조준 괄호+손)")
+	property string CurMove = "2ced21a6a96548b8bae1ceda67673e7a"
+
+	property Vector2 OffMove = Vector2(0, 0)
+
+	@DisplayName("건설 배치(망치+손)")
+	property string CurBuild = "db257741ab1e41f7b77d90c1d35e6a78"
+
+	property Vector2 OffBuild = Vector2(0, 0)
+
+	@DisplayName("채집(곡괭이)")
+	property string CurGather = "c87ce25c77d942d7bd170768fbc7b46f"
+
+	property Vector2 OffGather = Vector2(20, 5)
+
+	@DisplayName("곡괭이 클릭점(이미지 비율, 왼쪽 아래 0,0)")
+	property Vector2 GatherHotspot = Vector2(0.5, 0.8)
+
+	@DisplayName("치유 대상 지정(아이템 사용+손)")
+	property string CurHeal = "b2c3b07d2b144f7da6562de3a1782cc0"
+
+	property Vector2 OffHeal = Vector2(0, 0)
+
+	@HideFromInspector
+	property string _lastLogged = ""
+
+	@HideFromInspector
+	property number _tick = 0
+
+	@HideFromInspector
+	property string _current = ""
+
+	@DisplayName("같은 모양이어도 다시 적용하는 간격(초) — 맵 이동 등으로 엔진이 커서를 되돌린 경우 복구")
+	property number ReapplySeconds = 1.0
+
+	@HideFromInspector
+	property number _sinceApply = 0
+
+	@HideFromInspector
+	property integer _sceneVersion = -1
+
+	@HideFromInspector
+	property string _lastMapName = ""
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		self._sinceApply = self._sinceApply + delta
+		-- 맵 전환(로비 → 게임 맵 등)은 바로 감지해 즉시 커서를 다시 적용한다(판정 주기를 기다리지 않는다).
+		local lp = _UserService.LocalPlayer
+		local mapName = ""
+		if isvalid(lp) and isvalid(lp.CurrentMap) then mapName = lp.CurrentMap.Name end
+		if mapName ~= self._lastMapName or _SceneController.SceneVersion ~= self._sceneVersion then
+			self._lastMapName = mapName
+			self._sceneVersion = _SceneController.SceneVersion
+			self._current = ""
+			self._tick = self.TickInterval
+		end
+		self._tick = self._tick + delta
+		if self._tick < self.TickInterval then return end
+		self._tick = 0
+		self:Apply(self:DecideKind())
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		_InputService:ResetCursor()
+		self._current = ""
+	end
+
+	@ExecSpace("ClientOnly")
+	method void Apply(string kind)
+		-- 같은 모양이면 다시 설정하지 않는다(매 틱 SetCursor 호출 방지).
+		if kind == self._current and self._sinceApply < self.ReapplySeconds then return end
+		self._sinceApply = 0
+		self._current = kind
+		if kind ~= self._lastLogged then
+			self._lastLogged = kind
+		end
+		local ruid, off = self.CurNormal, self.OffNormal
+		if kind == "default" then ruid = ""
+		elseif kind == "inspect" then ruid, off = self.CurInspect, self.OffInspect
+		elseif kind == "attack" then ruid, off = self.CurAttack, self.OffAttack
+		elseif kind == "move" then ruid, off = self.CurMove, self.OffMove
+		elseif kind == "build" then ruid, off = self.CurBuild, self.OffBuild
+		elseif kind == "gather" then ruid, off = self.CurGather, self.OffGather
+		elseif kind == "heal" then ruid, off = self.CurHeal, self.OffHeal
+		end
+		if ruid == nil or ruid == "" then
+			_InputService:ResetCursor()
+		else
+			if kind == "gather" then
+				-- 원본 피벗 대신 곡괭이 머리를 클릭점에 맞춘다. OffGather는 추가 미세 조정(px).
+				if self._T.gatherSpriteRuid ~= ruid then
+					self._T.gatherSprite = _ResourceService:LoadSpriteAndWait(ruid)
+					self._T.gatherSpriteRuid = ruid
+				end
+				local sprite = self._T.gatherSprite
+				if sprite ~= nil then
+					off = Vector2((sprite.Pivot.x - self.GatherHotspot.x) * sprite.Width + off.x, (sprite.Pivot.y - self.GatherHotspot.y) * sprite.Height + off.y)
+				end
+			end
+			_InputService:SetCursor(ruid, off)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method string DecideKind()
+		local lp = _UserService.LocalPlayer
+		if not isvalid(lp) then return "default" end
+		local map = lp.CurrentMap
+		-- 게임 맵(map02)이 아니면(로비 등) 엔진 기본 커서. 게임 맵에 들어가면 바로 장갑 커서부터 시작한다.
+		if not isvalid(map) or map.Name ~= self.PlayMapName then return "default" end
+		
+		-- 1) 명령 대기 상태(커맨드카드/단축키로 들어간 모드)가 최우선
+		if _BuildModeLogic.IsPlacing then return "build" end
+		if _HealTargetLogic.IsTargeting then return "heal" end
+		if _GatherTargetLogic.IsTargeting then return "gather" end
+		local pending = _CommandCardLogic.PendingCommand
+		if pending == "Move" then return "move" end
+		if pending == "HeroSkill" or pending == "AttackMove" or pending == "Ability" then return "attack" end
+		
+		-- 2) UI 위에서는 기본 커서
+		if _InputService:IsPointerOverUI() then return "normal" end
+		
+		-- 3) 마우스 아래 대상(우클릭과 같은 판정 PickEntityAt — 시야 밖·사망 대상은 이미 제외됨)
+		---@type Mouse_Command
+		local mouse = map:GetComponent("script.Mouse_Command")
+		if mouse == nil then return "normal" end
+		local worldPos = _DragLogic:ScreenToWorld(_InputService:GetCursorPosition())
+		mouse.QuietPick = true
+		local target = mouse:PickEntityAt(worldPos)
+		mouse.QuietPick = false
+		if not isvalid(target) then return "normal" end
+		
+		local sel = self:SelectionSummary()
+		local hasUnits, hasWorker = sel[1], sel[2]
+		if target:GetComponent("script.MesoStructure") ~= nil then
+			return hasWorker and "gather" or "inspect"
+		end
+		local myId = isvalid(lp.PlayerComponent) and lp.PlayerComponent.UserId or ""
+		local owner = _VisionLogic:OwnerOf(target)
+		if owner ~= "" and owner == myId then return "inspect" end
+		-- 상대 또는 중립(몬스터): 내 유닛(일꾼 포함 — 2026-10-06부터 일꾼도 공격)을 고른 상태면 우클릭 = 공격이므로 활, 아니면 돋보기
+		if hasUnits or hasWorker then return "attack" end
+		return "inspect"
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean AnySelectedCanAttack(Entity target)
+		-- 선택한 내 전투 유닛(일꾼 제외) 중 서버와 같은 조건(Unit_Info.CanTargetForCombat)으로 target을 칠 수 있는 유닛이 있는가.
+		local drag = _SelectionLogic.Drag
+		if not isvalid(drag) then return false end
+		for _, u in pairs(drag.SelectedUnits) do
+			if isvalid(u) and _SelectionLogic:IsMyAliveUnit(u.Entity) then
+				local info = u.Entity.Unit_Info
+				if info ~= nil and info.RoleKey ~= "Worker" and info:CanTargetForCombat(target) then return true end
+			end
+		end
+		return false
+	end
+
+	@ExecSpace("ClientOnly")
+	method table SelectionSummary()
+		-- 현재 선택에 내 전투 유닛(일꾼 제외)과 내 일꾼이 있는지. 반환 { 전투 유닛 있음, 일꾼 있음 }.
+		local hasUnits, hasWorker = false, false
+		local drag = _SelectionLogic.Drag
+		if not isvalid(drag) then return { false, false } end
+		for _, u in pairs(drag.SelectedUnits) do
+			if isvalid(u) and _SelectionLogic:IsMyAliveUnit(u.Entity) then
+				local info = u.Entity.Unit_Info
+				if info ~= nil and info.RoleKey == "Worker" then hasWorker = true else hasUnits = true end
+			end
+		end
+		return { hasUnits, hasWorker }
+	end
+
+end

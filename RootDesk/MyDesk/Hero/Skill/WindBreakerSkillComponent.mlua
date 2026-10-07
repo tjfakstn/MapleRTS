@@ -1,0 +1,212 @@
+@Component
+script WindBreakerSkillComponent extends Component
+
+	@ExecSpace("ServerOnly")
+	method void CastWindGale(string heroName, string skillKey, table skill, Vector2 aimDir, Vector2 aimWorldPos, boolean isLarge)
+		local castMap = self.Entity.CurrentMap
+		    -- 하울링 게일: 누른 시간에 따라 작은/큰 회오리를 소환하고, 회오리가 지속시간 동안
+		    -- 시전 방향으로 앞뒤 왕복하며 주기적으로 타격한다.
+		    local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		    local casterPos3 = self.Entity.TransformComponent.WorldPosition
+		    local startPos = Vector2(casterPos3.x, casterPos3.y)
+		    local dirX = aimDir.x >= 0 and 1 or -1
+		
+		    local radius = (isLarge and (skill.galeLargeRadius or 3.6) or (skill.galeSmallRadius or 2.2)) * core.rangeScale
+		    local damage = isLarge and (skill.galeLargeDamage or 260) or (skill.galeSmallDamage or 150)
+		    local tickInterval = isLarge and (skill.galeLargeTickInterval or 0.35) or (skill.galeSmallTickInterval or 0.4)
+		    local travelDistance = (isLarge and (skill.galeLargeTravelDistance or 7.5) or (skill.galeSmallTravelDistance or 5.0)) * core.rangeScale
+		    local travelSpeed = (isLarge and (skill.galeLargeTravelSpeed or 2.4) or (skill.galeSmallTravelSpeed or 3.2)) * core.rangeScale
+		    local maxTargets = isLarge and (skill.galeLargeMaxTargets or 10) or (skill.galeSmallMaxTargets or 6)
+		    local duration = skill.galeDuration or 5.0
+		    -- 키를 뗀 뒤 시전 모션이 나온 다음에 회오리가 나가게 한다.
+		    local windup = core:ResolveCastMotionDelay(skill)
+		
+		    local aimAngle = math.atan(aimDir.y, aimDir.x)
+		    core.lastCast = skillKey .. ":" .. tostring(aimAngle) .. ":" .. tostring(aimWorldPos.x) .. ":" .. tostring(aimWorldPos.y) .. ":" .. tostring(_UtilLogic.ElapsedSeconds)
+		
+		
+		    _TimerService:SetTimerOnce(function()
+		        if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then
+		            return
+		        end
+		
+		        core:EmitGaleTravelSync(isLarge, {
+		            duration = duration,
+		            startPos = startPos,
+		            dirX = dirX,
+		            travelDistance = travelDistance,
+		            travelSpeed = travelSpeed,
+		        })
+		
+		        local startedAt = _UtilLogic.ElapsedSeconds
+		        local timerId = nil
+		        local tick = function()
+		            if _CombatTeamLogic:IsDead(self.Entity) or self.Entity.CurrentMap ~= castMap then
+		                if timerId ~= nil then _TimerService:ClearTimer(timerId) end
+		                return
+		            end
+		
+		            local elapsed = _UtilLogic.ElapsedSeconds - startedAt
+		            if elapsed >= duration then
+		                if timerId ~= nil then _TimerService:ClearTimer(timerId) end
+		                return
+		            end
+		
+		            local galePos = core:GetGalePosition(startPos, dirX, travelDistance, travelSpeed, elapsed)
+		            local galeShape = CircleShape(galePos, radius)
+		            local galeVfx = core:BuildHeroVfx(10).T
+		            local galeRuid = isLarge and galeVfx.galeLargeEffect or galeVfx.galeSmallEffect
+		            local galeScale = isLarge and (galeVfx.galeLargeScaleMultiplier or 1.35) or (galeVfx.galeSmallScaleMultiplier or 0.95)
+		            local measuredGale = core:GetAttackLogicComponent():BuildMeasuredEffectBox(galeRuid, galePos, Vector2(-1, 0), galeScale)
+		            if measuredGale ~= nil then galeShape = measuredGale end
+		            core._T.attackSerialCounter = (core._T.attackSerialCounter or 0) + 1
+		            local attackInfo = skillKey .. ":" .. tostring(core._T.attackSerialCounter) .. ":" .. tostring(damage)
+		
+		            core:BeginAttackTargetFilter(attackInfo, maxTargets)
+		            local hitComponents = core:PerformAttack(galeShape, attackInfo)
+		            core:EndAttackTargetFilter(attackInfo)
+		
+		            if #hitComponents > 0 then
+		                core:EmitImpactBatchSync(skillKey, hitComponents, skill.maxImpactFxCount or #hitComponents)
+		            end
+		        end
+		
+		        tick()
+		        timerId = _TimerService:SetTimerRepeat(tick, tickInterval, tickInterval)
+		    end, windup)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void HandleGaleTravelSync(string value)
+		    -- "<크기>#<지속시간>#<타임스탬프>#<시작X>,<시작Y>#<방향X>#<이동거리>#<이동속도>"
+		    local galeTokens = {}
+		    for token in string.gmatch(value, "[^#]+") do
+		        table.insert(galeTokens, token)
+		    end
+		    if #galeTokens < 7 then
+		        return
+		    end
+		
+		    local startX, startY = string.match(galeTokens[4], "^(-?[%d%.]+),(-?[%d%.]+)$")
+		    if startX == nil then
+		        return
+		    end
+		
+		    self:StartGaleVisual(
+		        galeTokens[1] == "L",
+		        tonumber(galeTokens[2]) or 5,
+		        Vector2(tonumber(startX) or 0, tonumber(startY) or 0),
+		        tonumber(galeTokens[5]) or 1,
+		        tonumber(galeTokens[6]) or 0,
+		        tonumber(galeTokens[7]) or 0)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ClearGaleVisual()
+		    -- 회오리 연출을 정리한다. 붙인 루프 이펙트를 먼저 지우고 운반용 엔티티를 파괴한다.
+		    local state = self._T.galeVisual
+		    if state == nil then return end
+		    if state.serial ~= nil and state.serial ~= 0 then
+		        _EffectService:RemoveEffect(state.serial)
+		    else
+		    end
+		    if state.carrier ~= nil and isvalid(state.carrier) then
+		        state.carrier:Destroy()
+		    end
+		    self._T.galeVisual = nil
+	end
+
+	@ExecSpace("ClientOnly")
+	method void StartGaleVisual(boolean isLarge, number duration, Vector2 startPos, number dirX, number travelDistance, number travelSpeed)
+		    ---@type HeroSkillComponent
+		    local skillComp = self.Entity:GetComponent("script.HeroSkillComponent")
+		    -- 회오리는 움직이면서 계속 보여야 해서, 매 틱 이펙트를 새로 띄우면 끊기고 잔상이 남는다.
+		    -- 그래서 보이지 않는 운반용 엔티티를 하나 띄우고 거기에 루프 이펙트를 붙인 뒤,
+		    -- OnUpdate에서 엔티티만 옮긴다. 운반 엔티티는 Body가 없어서 Transform 직접 조작이 안전하다.
+		    self:ClearGaleVisual()
+		
+		    local skillVfx = skillComp:BuildHeroVfx(skillComp:GetSelectedHeroIndex())
+		    local galeVfx = skillVfx ~= nil and skillVfx.T or nil
+		    if galeVfx == nil then
+		        return
+		    end
+		
+		    local ruid = isLarge and galeVfx.galeLargeEffect or galeVfx.galeSmallEffect
+		    if ruid == nil then
+		        return
+		    end
+		    if not isvalid(self.Entity) or not isvalid(self.Entity.CurrentMap) then
+		        return
+		    end
+		
+		    local carrier = _SpawnService:SpawnByModelId(
+		        "projectile",
+		        "GaleFx_" .. tostring(math.floor((_UtilLogic.ElapsedSeconds or 0) * 1000)),
+		        Vector3(startPos.x, startPos.y, 0),
+		        self.Entity.CurrentMap
+		    )
+		    if carrier == nil then
+		        return
+		    end
+		    -- 운반 엔티티 자체는 안 보이게 하고, 붙인 이펙트만 보이게 한다.
+		    if carrier.SpriteRendererComponent ~= nil then
+		        carrier.SpriteRendererComponent.SpriteRUID = ""
+		    end
+		
+		    local scale = isLarge and (galeVfx.galeLargeScaleMultiplier or 1.35) or (galeVfx.galeSmallScaleMultiplier or 0.95)
+		    local serial = _FogOfWarLogic:PlayEffectAttachedSeen(ruid, carrier, Vector3(0, 0, 0), 0, Vector3(scale, scale, 1), true, nil)
+		    if serial == nil or serial == 0 then
+		        carrier:Destroy()
+		        return
+		    end
+		
+		    self._T.galeVisual = {
+		        carrier = carrier,
+		        serial = serial,
+		        startedAt = _UtilLogic.ElapsedSeconds or 0,
+		        duration = duration,
+		        startPos = startPos,
+		        dirX = dirX,
+		        travelDistance = travelDistance,
+		        travelSpeed = travelSpeed,
+		    }
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateGaleVisual(number delta)
+		if _CombatTeamLogic:IsDead(self.Entity) then self:ClearGaleVisual() return end
+		    ---@type HeroSkillComponent
+		    local skillComp = self.Entity:GetComponent("script.HeroSkillComponent")
+		    -- 서버 판정과 같은 GetGalePosition 식을 써서 위치를 재현한다. 그래야 보이는 회오리와
+		    -- 실제 판정 위치가 어긋나지 않는다.
+		    local state = self._T.galeVisual
+		    if state == nil then return end
+		
+		    if not isvalid(state.carrier) then
+		        self:ClearGaleVisual()
+		        return
+		    end
+		
+		    local elapsed = (_UtilLogic.ElapsedSeconds or 0) - state.startedAt
+		    if elapsed >= state.duration then
+		        self:ClearGaleVisual()
+		        return
+		    end
+		
+		    local pos = skillComp:GetGalePosition(state.startPos, state.dirX, state.travelDistance, state.travelSpeed, elapsed)
+		    state.carrier.TransformComponent.Position = Vector3(pos.x, pos.y, state.carrier.TransformComponent.Position.z)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		    -- 기존 HeroSkillEffectComponent.OnUpdate와 동일하게 로컬 플레이어 자신의 회오리만 매 프레임 위치를 갱신한다.
+		    if self.Entity ~= _UserService.LocalPlayer and self.Entity:GetComponent("script.HeroUnit") == nil then return end
+		    self:UpdateGaleVisual(delta)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		    self:ClearGaleVisual()
+	end
+
+end

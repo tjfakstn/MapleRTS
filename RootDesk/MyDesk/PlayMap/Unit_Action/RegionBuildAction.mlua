@@ -1,0 +1,191 @@
+@Component
+script RegionBuildAction extends ActionBase
+
+	@DisplayName("건물 생성 버튼 아이콘 RUID")
+	property string BuildButtonRuid = ""
+
+	@DisplayName("목록 건물로 이 건물을 변환(제자리 변환)")
+	property boolean ConvertInPlace = false
+
+	@DisplayName("건설 가능 건물 1 - Model")
+	property string BuildModel1 = ""
+
+	@DisplayName("건설 가능 건물 1 - 아이콘 RUID")
+	property string BuildRuid1 = ""
+
+	@DisplayName("건설 가능 건물 1 - 가로 크기(footprint)")
+	property number BuildSizeX1 = 1
+
+	@DisplayName("건설 가능 건물 1 - 세로 크기(footprint)")
+	property number BuildSizeY1 = 1
+
+	@DisplayName("건설 가능 건물 1 - 스프라이트 ScaleX")
+	property number BuildScaleX1 = 1
+
+	@DisplayName("건설 가능 건물 1 - 스프라이트 ScaleY")
+	property number BuildScaleY1 = 1
+
+	@DisplayName("건설 가능 건물 1 - 건설 시간(초)")
+	property number BuildTime1 = 5
+
+	@DisplayName("건설 가능 건물 1 - 선행 건물 이름(없으면 빈 칸)")
+	property string BuildCondition1 = ""
+
+	@DisplayName("건설 가능 건물 2 - Model")
+	property string BuildModel2 = ""
+
+	@DisplayName("건설 가능 건물 2 - 아이콘 RUID")
+	property string BuildRuid2 = ""
+
+	@DisplayName("건설 가능 건물 2 - 가로 크기(footprint)")
+	property number BuildSizeX2 = 1
+
+	@DisplayName("건설 가능 건물 2 - 세로 크기(footprint)")
+	property number BuildSizeY2 = 1
+
+	@DisplayName("건설 가능 건물 2 - 스프라이트 ScaleX")
+	property number BuildScaleX2 = 1
+
+	@DisplayName("건설 가능 건물 2 - 스프라이트 ScaleY")
+	property number BuildScaleY2 = 1
+
+	@DisplayName("건설 가능 건물 2 - 건설 시간(초)")
+	property number BuildTime2 = 5
+
+	@DisplayName("건설 가능 건물 2 - 선행 건물 이름(없으면 빈 칸)")
+	property string BuildCondition2 = ""
+
+	@DisplayName("건설 가능 건물 3 - Model")
+	property string BuildModel3 = ""
+
+	@DisplayName("건설 가능 건물 3 - 아이콘 RUID")
+	property string BuildRuid3 = ""
+
+	@DisplayName("건설 가능 건물 3 - 가로 크기(footprint)")
+	property number BuildSizeX3 = 1
+
+	@DisplayName("건설 가능 건물 3 - 세로 크기(footprint)")
+	property number BuildSizeY3 = 1
+
+	@DisplayName("건설 가능 건물 3 - 스프라이트 ScaleX")
+	property number BuildScaleX3 = 1
+
+	@DisplayName("건설 가능 건물 3 - 스프라이트 ScaleY")
+	property number BuildScaleY3 = 1
+
+	@DisplayName("건설 가능 건물 3 - 건설 시간(초)")
+	property number BuildTime3 = 5
+
+	@DisplayName("건설 가능 건물 3 - 선행 건물 이름(없으면 빈 칸)")
+	property string BuildCondition3 = ""
+
+	@DisplayName("건설 가능 건물 4 - Model")
+	property string BuildModel4 = ""
+
+	@DisplayName("건설 가능 건물 4 - 아이콘 RUID")
+	property string BuildRuid4 = ""
+
+	@DisplayName("건설 가능 건물 4 - 가로 크기(footprint)")
+	property number BuildSizeX4 = 1
+
+	@DisplayName("건설 가능 건물 4 - 세로 크기(footprint)")
+	property number BuildSizeY4 = 1
+
+	@DisplayName("건설 가능 건물 4 - 스프라이트 ScaleX")
+	property number BuildScaleX4 = 1
+
+	@DisplayName("건설 가능 건물 4 - 스프라이트 ScaleY")
+	property number BuildScaleY4 = 1
+
+	@DisplayName("건설 가능 건물 4 - 건설 시간(초)")
+	property number BuildTime4 = 5
+
+	@DisplayName("건설 가능 건물 4 - 선행 건물 이름(없으면 빈 칸)")
+	property string BuildCondition4 = ""
+
+	method table ChangeActionUI()
+		-- 내 소유의, 파괴되지 않은 영역 건물을 선택했을 때만 "건물 생성" 버튼을 노출한다.
+		---@type Structure_Info
+		local info = self.Entity:GetComponent("script.Structure_Info")
+		if info == nil or info.IsDestroyed or info.IsUnderConstruction then
+			-- 건설 중인 영역 건물은 건설이 끝나야 "건물 생성" 기능을 쓸 수 있다.
+			return {}
+		end
+		
+		local localPlayer = _UserService.LocalPlayer
+		if not isvalid(localPlayer) or info.PlayerID ~= localPlayer.PlayerComponent.UserId then
+			return {}
+		end
+		-- 건설 목록이 비어 있으면(모험가: 2026-10-06부터 건물은 일꾼 스포아가 짓는다) 버튼을 내지 않는다.
+		if self.BuildModel1 == "" and self.BuildModel2 == "" and self.BuildModel3 == "" and self.BuildModel4 == "" then
+			return {}
+		end
+		
+		return {
+			{
+				ActionID = "OpenBuildList",
+				UnitModel = "",
+				Ruid = self.BuildButtonRuid,
+				-- 어느 건물의 건설 목록(GetBuildList)을 읽을지 알아야 하므로 건물 자신을 담아 보낸다.
+				Building = self.Entity,
+			},
+		}
+	end
+
+	method table GetBuildList()
+		-- 버튼 클릭 시(UIButtonAction) 호출되어, 이 영역 건물에서 지을 수 있는 건물 목록을 반환한다.
+		-- BuildCondition이 있는 슬롯은 그 이름의 건물을 소유자가 이미 지어뒀을 때만 목록에 포함한다.
+		local slots = {
+			{ self.BuildModel1, self.BuildRuid1, self.BuildSizeX1, self.BuildSizeY1, self.BuildScaleX1, self.BuildScaleY1, self.BuildTime1, self.BuildCondition1 },
+			{ self.BuildModel2, self.BuildRuid2, self.BuildSizeX2, self.BuildSizeY2, self.BuildScaleX2, self.BuildScaleY2, self.BuildTime2, self.BuildCondition2 },
+			{ self.BuildModel3, self.BuildRuid3, self.BuildSizeX3, self.BuildSizeY3, self.BuildScaleX3, self.BuildScaleY3, self.BuildTime3, self.BuildCondition3 },
+			{ self.BuildModel4, self.BuildRuid4, self.BuildSizeX4, self.BuildSizeY4, self.BuildScaleX4, self.BuildScaleY4, self.BuildTime4, self.BuildCondition4 },
+		}
+		
+		local map = self.Entity.CurrentMap
+		---@type Structure_Info
+		local info = self.Entity:GetComponent("script.Structure_Info")
+		local playerId = (info ~= nil) and info.PlayerID or ""
+		
+		local list = {}
+		-- 이미 열려 있던 목록이라도 건설 중인 영역 건물에서는 건물을 지을 수 없다.
+		if info ~= nil and info.IsUnderConstruction then
+			return list
+		end
+		for _, slot in ipairs(slots) do
+			if slot[1] ~= "" then
+				-- 선행 건물이 없으면 숨기지 않고 잠금으로 넣는다(커맨드카드가 회색 + 필요한 건물 이름으로 표시).
+				local unlocked = _BuildRequirementLogic:HasAliveStructure(map, playerId, slot[8])
+				local lockReason = ""
+				if not unlocked then lockReason = _BuildRequirementLogic:GetRequirementText(slot[8]) end
+				table.insert(list, {
+					Model = slot[1],
+					Ruid = slot[2],
+					SizeX = slot[3],
+					SizeY = slot[4],
+					ScaleX = slot[5],
+					ScaleY = slot[6],
+					BuildTime = slot[7],
+					Locked = not unlocked,
+					LockReason = lockReason,
+				})
+			end
+		end
+		return list
+	end
+
+	method any GetConditionForModel(string modelId)
+		-- 서버 재검증용: 건설 슬롯 중 modelId의 선행 건물 조건 문자열. 슬롯에 없는 모델이면 nil.
+		local slots = {
+			{ self.BuildModel1, self.BuildCondition1 },
+			{ self.BuildModel2, self.BuildCondition2 },
+			{ self.BuildModel3, self.BuildCondition3 },
+			{ self.BuildModel4, self.BuildCondition4 },
+		}
+		for _, slot in ipairs(slots) do
+			if slot[1] ~= "" and slot[1] == modelId then return slot[2] or "" end
+		end
+		return nil
+	end
+
+end

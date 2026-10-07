@@ -1,0 +1,12 @@
+﻿id,Line,Model,역할,메소,에르다,인구,생산(초),HP,defense,damage,Cooltime,MoveSpeed,Target,AttackRange,vision,RoleKey,AbilityValue,AbilityDuration,IsAerial,Ruid,IsStealth
+1,일꾼,model://745a950a-9e05-41b6-ad92-280ffbb07546,일꾼,50,0,1,13,60,0,5,1.5,3.333,0,40,220,Worker,2,0,0,6291462c56d54adebb517cfdefee4437,0
+2,일반,model://cb008318-2d53-4f73-8fe5-2136d83a3b33,원거리 기본,100,0,1,15,100,0,10,1,3.333,2,190,240,RangedBasic,0,0,0,b2e0bb788379476b9064149f957c8f91,0
+3,일반,model://da4b3143-e74b-4679-a9f4-679b0cbbd942,원거리 힐러,90,2,1,15,80,0,0,0.8,3.5,1,150,240,RangedHealer,8,0,0,192e654d2f6f49a493e40c91e26f00aa,0
+4,일반,model://a0496f39-c3fb-49a9-9f99-ac0705eacc57,근거리 광역,110,2,1,17,120,1,12,1.2,3.667,1,60,220,MeleeAoe,0,0,0,f83f4bd9944a448e87dc91767f7d2e77,0
+5,정예,model://a461fafe-d785-4aed-869b-4cdb866bfecf,기동 견제,120,0,2,18,110,0,14,1.25,5,1,80,260,AssaultBasic,1.5,0,0,f1df6ddd0deb41d48797e2ddf6ae8e2e,0
+6,정예,model://d52b4c12-fcc4-4b3d-8340-f11e63dcf247,지상&공중 대응,150,4,2,21,140,1,15,0.9,3.167,2,210,260,RangedBasic,0,0,0,34650c6d4e0c4f56a3c337f5ebfdff22,0
+7,정예,model://9a4f2b89-3ac1-4003-a2f3-3ed4c2c0367c,은신 저격,170,6,2,24,110,1,20,0.7,3.167,1,260,300,RangedBasic,0,0,0,74f902332fc142a489fc61ab0c38afbd,1
+8,정예,model://0a73bbfa-555d-4fe4-9296-87c29e5e287b,공성 포격,250,8,3,30,180,1,40,0.35,2.333,1,300,300,RangedBasic,0,0,0,c608d2e9de1f4e66b5b601a4c338af79,0
+9,정예,model://836bb772-3854-43ce-aab3-170d722b86b1,최종 병기,380,23,6,44,550,3,38,0.7,2.5,2,230,300,FireAssault,0.4,0,0,fe7866dbddce4f5a87657567f5dbba80,0
+10,공중,model://901bebc6-7395-4a8d-8ae0-e455addf80fc,수송선,130,8,2,20,140,1,0,0,4.667,-1,0,280,,0,0,1,2a9ee095be10461a84da20f3dc0f2b9c,0
+11,공중,model://23fc16d0-4517-49c4-9d5f-5f2cd09dcc4d,공중 전투기,150,8,2,21,120,0,16,1,5.167,2,180,280,AerialBasic,0,0,1,0932d322947743929e39f9d531354bea,0

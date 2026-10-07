@@ -1,0 +1,130 @@
+@Component
+script UnitHitComponent extends HitComponent
+
+	property integer maxHp = 100
+
+	property number hitColliderWidth = 1.0
+
+	property number hitColliderHeight = 1.0
+
+	property number hitColliderOffsetY = 0
+
+	@Sync
+	property string teamKey = ""
+
+	property number immuneCooldown = 0
+
+	@Sync
+	property integer hp = 100
+
+	@Sync
+	property boolean isDead = false
+
+	@Sync
+	property string lastHitFeedback = ""
+
+	@ExecSpace("ServerOnly")
+	method void OnBeginPlay()
+		    -- ColliderType/ColliderOffset은 IsLegacy=false일 때만 유효하다(msw-combat-system §1-4).
+		    self.ColliderType = ColliderType.Box
+		    self.BoxSize = Vector2(self.hitColliderWidth, self.hitColliderHeight)
+		    self.ColliderOffset = Vector2(0, self.hitColliderOffsetY)
+		    self.CollisionGroup = CollisionGroups.HitBox
+		
+		    self.hp = self.maxHp
+		    self.isDead = false
+		    self._T.receivedHitCount = 0
+		    self._T.immuneUntil = 0
+		
+		    _CombatTeamLogic:RegisterEntity(self.Entity, self.teamKey)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnEndPlay()
+		    _CombatTeamLogic:UnregisterEntity(self.Entity)
+	end
+
+	method boolean IsHitTarget(string attackInfo)
+		    -- 부모 판정 -> 사망 여부 -> 무적 프레임 순으로 거른다.
+		    -- 주의: 부모에 @ExecSpace가 없으므로 여기에도 붙이면 안 된다(LEA-3014 SignatureMismatch).
+		    if __base:IsHitTarget(attackInfo) ~= true then
+		        return false
+		    end
+		    if self.isDead then
+		        return false
+		    end
+		    if self.immuneCooldown > 0 and _UtilLogic.ElapsedSeconds < (self._T.immuneUntil or 0) then
+		        return false
+		    end
+		    return true
+	end
+
+	method void OnHit(Entity attacker, integer damage, boolean isCritical, string attackInfo, int32 hitCount)
+		    -- ★ 여기가 이번 수정의 핵심. super를 먼저 불러야 HitEvent가 발생한다.
+		    -- 이 한 줄이 없으면 아래 HandleHitEvent도, HitEffectSpawnerComponent도 절대 안 돈다.
+		    __base:OnHit(attacker, damage, isCritical, attackInfo, hitCount)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ProcessDeath(Entity killer)
+		    -- StateComponent가 있으면 ChangeState("DEAD")가 DeadEvent를 자동으로 띄운다.
+		    -- 없으면(단순 오브젝트/건물) 최소한 플래그와 로그만 남기고, 처리는 나중에 GameDirector가 가져간다.
+		    if self.isDead then return end
+		    self.isDead = true
+		
+		    local killerName = "unknown"
+		    if isvalid(killer) then killerName = tostring(killer.Name) end
+		
+		    local state = self.Entity.StateComponent
+		    if state ~= nil then
+		        state:ChangeState("DEAD")
+		    else
+		    end
+		
+		    _CombatTeamLogic:UnregisterEntity(self.Entity)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SetTeamKey(string newTeamKey)
+		    -- 스폰 직후 소속을 바꿔줄 때 사용. 등록도 같이 갱신한다.
+		    self.teamKey = newTeamKey
+		    _CombatTeamLogic:RegisterEntity(self.Entity, newTeamKey)
+	end
+
+	@EventSender("Self")
+	handler HandleHitEvent(HitEvent event)
+		    -- 피해 반영/사망은 전부 이 한 곳에서만 한다. 클라이언트에서도 이벤트가 올라올 수 있으므로
+		    -- 상태 변경은 서버에서만 처리하고, 클라이언트는 로그만 남긴다.
+		    if not self:IsServer() then
+		        return
+		    end
+		    if self.isDead then
+		        return
+		    end
+		
+		    local damage = event.TotalDamage or 0
+		    if damage <= 0 then return end
+		    if damage <= 0 then
+		    end
+		
+		    self._T.receivedHitCount = (self._T.receivedHitCount or 0) + 1
+		    if self.immuneCooldown > 0 then
+		        self._T.immuneUntil = _UtilLogic.ElapsedSeconds + self.immuneCooldown
+		    end
+		
+		    local beforeHp = self.hp
+		    self.hp = math.max(0, beforeHp - damage)
+		    self.lastHitFeedback = tostring(self._T.receivedHitCount)
+		        .. ":" .. tostring(damage)
+		        .. ":" .. tostring(event.IsCritical and 1 or 0)
+		        .. ":" .. tostring(_UtilLogic.ElapsedSeconds)
+		
+		    local attackerName = "unknown"
+		    if isvalid(event.AttackerEntity) then attackerName = tostring(event.AttackerEntity.Name) end
+		
+		    if self.hp <= 0 then
+		        self:ProcessDeath(event.AttackerEntity)
+		    end
+	end
+
+end

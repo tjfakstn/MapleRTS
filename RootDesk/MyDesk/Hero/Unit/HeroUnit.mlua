@@ -1,0 +1,237 @@
+@Component
+script HeroUnit extends Component
+
+	@Sync
+	property string HeroId = ""
+
+	@Sync
+	property string HeroName = ""
+
+	@Sync
+	property string OwnerUserId = ""
+
+	property number MeleeHp = 600
+
+	property number MeleeDamage = 14
+
+	property number MeleeDefense = 3
+
+	property number MeleeCooltime = 0.9
+
+	property number MeleeAttackRange = 0.55
+
+	property number RangedHp = 450
+
+	property number RangedDamage = 12
+
+	property number RangedDefense = 2
+
+	property number RangedCooltime = 0.8
+
+	property number RangedAttackRange = 2.4
+
+	property number HeroMoveSpeed = 4.5
+
+	property number ReviveDelay = 30
+
+	@Sync
+	property number ReviveAt = 0
+
+	method boolean IsRangedHero(string heroId)
+		-- 근접 전투 직업(전사/격투가 계열)이 아니면 원거리로 본다.
+		local melee = { dark_knight = true, soul_master = true, striker = true, blaster = true }
+		return melee[heroId] ~= true
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ApplyHero(string heroId, string heroName, string ownerUserId)
+		-- 스폰 직후 서버에서 호출: 소유자·직업·스탯·전투 스타일·외형(소유자 아바타)을 주입한다.
+		self.HeroId = heroId
+		self.HeroName = heroName
+		self.OwnerUserId = ownerUserId
+		
+		---@type Unit_Info
+		local info = self.Entity:GetComponent("script.Unit_Info")
+		if info == nil then
+			return
+		end
+		local ranged = self:IsRangedHero(heroId)
+		info.PlayerID = ownerUserId
+		info.Line = "영웅"
+		info.Meso = 0
+		info.Erda = 0
+		info.Hp = ranged and self.RangedHp or self.MeleeHp
+		info.MaxHp = info.Hp
+		info.defense = ranged and self.RangedDefense or self.MeleeDefense
+		info.baseDefense = info.defense
+		info.damage = ranged and self.RangedDamage or self.MeleeDamage
+		info.AttackCoolTime = ranged and self.RangedCooltime or self.MeleeCooltime
+		info.MoveSpeed = self.HeroMoveSpeed
+		info.TargetRange = ranged and 2 or 0
+		-- 현재 직업 중 공중 유닛은 없다 — 전부 지상 유닛으로 취급한다(원거리 직업은 대공은 가능하지만 자신은 지상).
+		info.IsAerial = false
+		info.AttackRange = ranged and self.RangedAttackRange or self.MeleeAttackRange
+		info.RoleKey = ranged and "RangedBasic" or "MeleeBasic"
+		info.AbilityValue = 0
+		info.AbilityDuration = 0
+		-- 시야/탐지(Vision-Spec-20261004.md §7): 영웅 15종은 유닛 최대값 6.0 고정 + 은신 탐지기. HeroData는 건드리지 않는다.
+		info.Vision = 6.0
+		info.IsDetector = true
+		info.IsStealth = false
+		
+		-- 공격 스타일/이펙트는 일반 유닛과 동일하게 CombatConfig가 해석(SpawnUnit.SetUnitdata와 같은 규칙).
+		local cfg = _CombatConfig:Resolve(info.RoleKey, ranged and "지상&공중 원거리" or "지상 근접", ranged)
+		info.AttackStyle = cfg.attackType
+		info.AoeRadius = cfg.aoeRadius
+		info.ProjectileSpeed = cfg.projectileSpeed
+		if info.HitEffectRUID == "" then info.HitEffectRUID = cfg.hitEffectRUID end
+		if info.ProjectileRUID == "" then info.ProjectileRUID = cfg.projectileRUID end
+		
+		-- 외형: 소유 플레이어의 현재 코디를 그대로 입힌다(오프라인 유저도 가능, 이후 코디를 바꾸면 따라 바뀜).
+		local costume = self.Entity.CostumeManagerComponent
+		if costume ~= nil then
+			costume.DefaultEquipUserId = ownerUserId
+		end
+		
+	end
+
+	@ExecSpace("ServerOnly")
+	method void OnUpdate(number delta)
+		-- 영웅 부활(고정 ReviveDelay초). 사망(Unit_Info.IsDead)을 감지하면 부활 시각을 기록하고 몸을 숨긴 뒤,
+		-- 시각이 되면 내 본진(HQ_<소유자>) 아래에 전체 HP로 되살린다. 본진이 없으면 1초마다 다시 확인만 하고 부활하지 않는다.
+		-- 모델의 UnitStateComponent.DestroyOnDead=false라 시체 엔티티는 제거되지 않고 그대로 재사용된다.
+		if self.HeroId == "" then return end
+		---@type Unit_Info
+		local info = self.Entity:GetComponent("script.Unit_Info")
+		if info == nil then return end
+		if not info.IsDead then return end
+		local now = _UtilLogic.ServerElapsedSeconds
+		if self.ReviveAt == 0 then
+			self:BeginReviveWait(info, now)
+			return
+		end
+		if now < self.ReviveAt then return end
+		if now < (self._T.nextHqCheck or 0) then return end
+		local hq = self:FindOwnHQ()
+		if hq == nil then
+			self._T.nextHqCheck = now + 1
+			if not self._T.hqMissingLogged then
+				self._T.hqMissingLogged = true
+				if self.OwnerUserId ~= "" then _UIToast_:ShowMessage("본진이 없어 영웅이 다시 태어나지 못합니다", self.OwnerUserId) end
+			end
+			return
+		end
+		self:Revive(info, hq)
+	end
+
+	@ExecSpace("ServerOnly")
+	method void BeginReviveWait(Unit_Info info, number now)
+		-- 사망 직후 1회: 부활 시각 기록 + 몸/충돌 숨김. 공격·이동 정지와 스킬 타이머 정리는 Unit_Info.GetDamage와 각 스킬
+		-- 컴포넌트의 IsDead 폴링이 이미 처리하므로 여기서 중복하지 않는다.
+		self.ReviveAt = now + self.ReviveDelay
+		self._T.nextHqCheck = 0
+		self._T.hqMissingLogged = false
+		self:SetBodyVisible(false)
+		-- 주인에게 알림(2026-10-07 — 예전엔 기록만 남기고 화면엔 아무것도 안 떠서, 영웅을 선택해야 정보창에서 남은 시간을 볼 수 있었다).
+		if self.OwnerUserId ~= "" then _UIToast_:ShowMessage("영웅이 쓰러졌습니다. " .. tostring(math.floor(self.ReviveDelay)) .. "초 뒤 본진에서 다시 태어납니다", self.OwnerUserId) end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void SetBodyVisible(boolean visible)
+		-- 사망 중에는 아바타/초상화 스프라이트/트리거(피격 판정)를 끈다. Enable은 컴포넌트 공통 동기화 속성이라 클라이언트에도 반영된다.
+		local avatar = self.Entity.AvatarRendererComponent
+		if isvalid(avatar) then avatar.Enable = visible end
+		local sprite = self.Entity.SpriteRendererComponent
+		if isvalid(sprite) then sprite.Enable = visible end
+		local trigger = self.Entity.TriggerComponent
+		if isvalid(trigger) then trigger.Enable = visible end
+	end
+
+	@ExecSpace("ServerOnly")
+	method Entity FindOwnHQ()
+		-- LobbyController.SpawnPlayerHQ가 맵 직속 자식으로 "HQ_<UserId>" 이름으로 스폰한 본진. 파괴됐으면 nil.
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return nil end
+		local hq = map:GetChildByName("HQ_" .. self.OwnerUserId)
+		if not isvalid(hq) then return nil end
+		---@type Structure_Info
+		local sinfo = hq:GetComponent("script.Structure_Info")
+		if sinfo == nil or sinfo.IsDestroyed then return nil end
+		return hq
+	end
+
+	@ExecSpace("ServerOnly")
+	method void Revive(Unit_Info info, Entity hq)
+		-- 본진 박스(Trigger) 아래 1.5칸(LobbyController.SpawnHeroUnit의 첫 스폰 위치와 동일)에 되살린다.
+		local hp = hq.TransformComponent.WorldPosition
+		local bottom = 1.0
+		local trigger = hq.TriggerComponent
+		if trigger ~= nil then
+			local sy = math.abs(hq.TransformComponent.Scale.y)
+			bottom = math.abs(trigger.BoxSize.y * sy) / 2 - trigger.ColliderOffset.y * sy
+		end
+		local dest = Vector2(hp.x, hp.y - bottom - 1.5)
+		
+		-- 순간이동: UnitMoveComponent.SetWorldPos는 현재 위치→목적지 구간 전체를 벽 검사해 적진에서 죽은 영웅이 중간 벽에 걸린다.
+		-- 그래서 SetWorldPos와 같은 방식(Kinematicbody는 부모 기준 로컬 좌표로 SetPosition)으로 직접 놓고 CurrentPos를 맞춘다.
+		local kb = self.Entity.KinematicbodyComponent
+		if isvalid(kb) and kb.Enable then
+			local px = 0
+			local py = 0
+			local parent = self.Entity.Parent
+			if isvalid(parent) and isvalid(parent.TransformComponent) then
+				local pp = parent.TransformComponent.WorldPosition
+				px = pp.x
+				py = pp.y
+			end
+			kb:SetPosition(Vector2(dest.x - px, dest.y - py))
+		else
+			local transform = self.Entity.TransformComponent
+			transform.WorldPosition = Vector3(dest.x, dest.y, transform.WorldPosition.z)
+		end
+		---@type UnitMoveComponent
+		local move = self.Entity:GetComponent("script.UnitMoveComponent")
+		if move ~= nil then
+			move.CurrentPos = dest
+			move:Stop()
+		end
+		
+		-- 체력/생존 상태 복구 + 몸 보이기
+		info.Hp = info.MaxHp
+		info.IsDead = false
+		info.target = nil
+		info.PriorityHealTarget = nil
+		info._T.stunState = nil
+		info._T.forcedMoveUntil = nil
+		info._T.immuneUntil = nil
+		self:SetBodyVisible(true)
+		self.ReviveAt = 0
+		
+		-- 스킬 잠금/예약/쿨타임 초기화(T는 유지). 스킬 상태 테이블은 HeroSkillComponent가 소유하므로 키만 지운다.
+		local adapter = self.Entity:GetComponent("script.HeroUnitSkill")
+		if adapter ~= nil then
+			adapter._T.castLockUntil = 0
+			adapter._T.movementLockUntil = 0
+			adapter._T.mobileChannel = false
+			adapter._T.accepting = false
+			adapter._T.queuedMove = nil
+			adapter._T.queuedStrikerCast = nil
+		end
+		local core = self.Entity:GetComponent("script.HeroSkillComponent")
+		if core ~= nil then
+			core._T.rtsLockUntil = 0
+			local cooldowns = core._T.cooldownEndAt
+			if cooldowns ~= nil then
+				for key, _ in pairs(cooldowns) do
+					-- "<영웅>:T"만 남기고 Q/W/E/R(연계 공유 키 "9:ECHAIN" 등 포함)을 모두 비운다.
+					if string.match(key, "^%d+:T$") == nil then cooldowns[key] = nil end
+				end
+			end
+		end
+		local status = self.Entity:GetComponent("script.HeroSkillStatusComponent")
+		if status ~= nil then status.stunnedUntil = 0 end
+		
+		if self.OwnerUserId ~= "" then _UIToast_:ShowMessage("영웅이 본진에서 다시 태어났습니다", self.OwnerUserId) end
+	end
+
+end
